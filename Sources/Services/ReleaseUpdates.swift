@@ -159,7 +159,7 @@ final class MacUpdates: ObservableObject {
         let app = AppState.shared, fm = FileManager.default
         guard app.coordinator.state == .idle else { throw UpdateError.busy }
         let destination = Bundle.main.bundleURL.resolvingSymlinksInPath()
-        guard fm.isWritableFile(atPath: destination.deletingLastPathComponent().path) else { message = "Move pFlow into Applications before using in-app updates."; return }
+        guard fm.isWritableFile(atPath: destination.deletingLastPathComponent().path) else { message = "Move pFlow to a writable Applications folder before using in-app updates."; return }
         app.coordinator.updateInProgress = true; defer { app.coordinator.updateInProgress = false }
         let job = try fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("pFlow Updates/\(UUID().uuidString)")
         try fm.createDirectory(at: job, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -177,7 +177,13 @@ final class MacUpdates: ObservableObject {
             try MacUpdateInstaller.run("/usr/bin/hdiutil", ["detach", mount.path])
             let plan = MacUpdatePlan(source: source, destination: destination, version: offer.version, pid: getpid(), started: NSRunningApplication.current.launchDate!.timeIntervalSince1970)
             let file = job.appendingPathComponent("plan.json"); try JSONEncoder().encode(plan).write(to: file, options: .atomic)
-            let process = Process(); process.executableURL = Bundle.main.executableURL; process.arguments = ["--apply-update", file.path]; try process.run(); helper = process
+            let helperApp = job.appendingPathComponent("helper.app"); try fm.copyItem(at: Bundle.main.bundleURL, to: helperApp)
+            let infoFile = helperApp.appendingPathComponent("Contents/Info.plist")
+            var info = try PropertyListSerialization.propertyList(from: Data(contentsOf: infoFile), format: nil) as! [String: Any]
+            info["CFBundleIdentifier"] = "com.pesh.Yap.UpdateHelper"
+            try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: infoFile)
+            try MacUpdateInstaller.run("/usr/bin/codesign", ["--force", "--sign", "-", helperApp.path])
+            let process = Process(); process.executableURL = helperApp.appendingPathComponent("Contents/MacOS/Yap"); process.arguments = ["--apply-update", file.path]; try process.run(); helper = process
             let deadline = Date().addingTimeInterval(60)
             while !fm.fileExists(atPath: job.appendingPathComponent("ready").path) { guard process.isRunning, Date() < deadline else { throw UpdateError.failed }; try await Task.sleep(for: .milliseconds(100)) }
             try Task.checkCancellation(); NSApplication.shared.terminate(nil)

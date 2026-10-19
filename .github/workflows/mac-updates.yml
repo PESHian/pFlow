@@ -20,7 +20,7 @@ jobs:
           set -euo pipefail
           command -v xcodegen >/dev/null || brew install xcodegen
           xcodegen generate
-          xcodebuild -project Yap.xcodeproj -scheme Yap -configuration Release -destination 'platform=macOS' -derivedDataPath build -only-testing:YapTests/ReleaseUpdatesTests CODE_SIGN_IDENTITY=- test > build-updates.log 2>&1 || { tail -60 build-updates.log; exit 1; }
+          xcodebuild -project Yap.xcodeproj -scheme Yap -configuration Release -destination 'platform=macOS' -derivedDataPath build -only-testing:YapTests/ReleaseUpdatesTests CODE_SIGN_IDENTITY=- ENABLE_TESTABILITY=YES test > build-updates.log 2>&1 || { tail -60 build-updates.log; exit 1; }
           tail -20 build-updates.log
           app=build/Build/Products/Release/Yap.app
           codesign --verify --deep --strict "$app"

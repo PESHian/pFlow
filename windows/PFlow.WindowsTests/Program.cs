@@ -37,7 +37,7 @@ internal static partial class Program
         if (!GetUserObjectInformation(handle, 2, name, 512, out _)) throw new Exception("Could not verify private test desktop.");
         return name.ToString();
     }
-    static int LaunchPrivate()
+    static int LaunchPrivate(string extra = "")
     {
         string name = "pFlowFixture-" + Guid.NewGuid().ToString("N");
         string report = Path.Combine(Path.GetTempPath(), name + ".txt");
@@ -48,7 +48,7 @@ internal static partial class Program
             desktop = CreateDesktop("fixture", IntPtr.Zero, IntPtr.Zero, 0, 0x1FF, IntPtr.Zero);
             if (desktop == IntPtr.Zero) throw new Exception("Could not create private desktop: " + Marshal.GetLastWin32Error());
             string executable = Environment.ProcessPath!;
-            var command = new StringBuilder("\"" + executable + "\" --worker \"" + report + "\" " + name);
+            var command = new StringBuilder("\"" + executable + "\" --worker \"" + report + "\" " + name + " " + extra);
             var startup = new StartupInfo { Size = Marshal.SizeOf<StartupInfo>(), Desktop = name + "\\fixture" };
             if (!CreateProcess(executable, command, IntPtr.Zero, IntPtr.Zero, false, 0x08000000, IntPtr.Zero, null, ref startup, out var process)) throw new Exception("Private test launch failed: " + Marshal.GetLastWin32Error());
             try {
@@ -66,11 +66,13 @@ internal static partial class Program
     {
         if (args.Length > 0 && args[0] == "--architecture-speech") return ArchitectureSpeech(args[1], args[2]).GetAwaiter().GetResult();
         if (args.Length > 0 && args[0] == "--model") return ModelChecks(args[1], args.Contains("--cleanup-only"));
-        if (args.Length == 0) { try { return LaunchPrivate(); } catch (Exception error) { Console.Error.WriteLine(error); return 1; } }
+        if (args.Length == 0 || args[0] == "--updates-only") { try { return LaunchPrivate(args.Length > 0 ? "--updates-only" : ""); } catch (Exception error) { Console.Error.WriteLine(error); return 1; } }
         using var reportWriter = new StreamWriter(args[1]) { AutoFlush = true }; Console.SetOut(reportWriter); Console.SetError(reportWriter);
         try {
             Check("isolated window station", ObjectName(GetProcessWindowStation()) == args[2]);
             Check("isolated desktop", ObjectName(GetThreadDesktop(GetCurrentThreadId())) == "fixture");
+            NativeUpdates();
+            if (args.Contains("--updates-only")) { Console.WriteLine($"{passed} native update checks passed."); return 0; }
             NativeHotkeys();
             Check("INPUT size matches Windows ABI", Marshal.SizeOf<Native.Input>() == (IntPtr.Size == 8 ? 40 : 28));
             Check("INPUT union alignment matches Windows ABI", Marshal.OffsetOf<Native.Input>(nameof(Native.Input.Data)).ToInt32() == (IntPtr.Size == 8 ? 8 : 4));

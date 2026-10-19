@@ -14,6 +14,7 @@ try {
     foreach($file in $files){if((Get-FileHash -LiteralPath (Join-Path $data.package $file.path) -Algorithm SHA256).Hash -ne $file.sha256){throw 'The staged update is damaged.'}}
     $old=Get-Process -Id $data.processId -ErrorAction Stop
     if($old.StartTime.ToUniversalTime().Ticks -ne $data.startedTicks -or [PFlowNativeSystemInfo]::ProcessPath($old.Id) -ne (Join-Path $expected 'pFlow.exe')){throw 'The running application changed.'}
+    $null=$old.Handle
     $models=Join-Path $expected 'models'
     if(Test-Path $models){Copy-Item -LiteralPath $models -Destination (Join-Path $data.package 'models') -Recurse}
     Set-Content -LiteralPath (Join-Path $job 'ready') -Value 'ready'
@@ -29,7 +30,7 @@ try {
     $new=Start-Process -FilePath (Join-Path $expected 'pFlow.exe') -PassThru
     if($new.WaitForExit(2000)){throw 'The updated application exited during startup.'}
     Set-Content -LiteralPath (Join-Path $job 'result') -Value 'installed'
-    Remove-Item -LiteralPath (Join-Path $job 'update.zip'),$data.package -Recurse -Force
+    Remove-Item -LiteralPath (Join-Path $job 'update.zip'),$data.package -Recurse -Force -ErrorAction SilentlyContinue
 } catch {
     if($installed -and $previous -and (!$new -or $new.HasExited)) {
         $active=Get-Process pFlow -ErrorAction SilentlyContinue | Where-Object {[PFlowNativeSystemInfo]::ProcessPath($_.Id) -eq (Join-Path $expected 'pFlow.exe')}

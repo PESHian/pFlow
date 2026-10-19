@@ -74,6 +74,7 @@ internal sealed class UpdateWindow : Window
         var body = new StackPanel { Margin = new Thickness(24) }; body.Children.Add(new TextBlock { Text = "pFlow " + CurrentVersion, FontSize = 22, FontWeight = FontWeights.SemiBold });
         message.Text = "Check GitHub for a newer release. Checks run only when you ask."; body.Children.Add(message); body.Children.Add(progress); body.Children.Add(action); Content = body;
         PeshTheme.Apply(this, preferences);
+        SetResourceReference(BackgroundProperty, "PeshBackground"); SetResourceReference(ForegroundProperty, "PeshText");
         Icon = System.Windows.Media.Imaging.BitmapFrame.Create(new Uri("pack://application:,,,/pFlow;component/Assets/Pesh.ico"));
         action.Click += async (_, _) => await Run();
         timer = new(TimeSpan.FromMilliseconds(250), System.Windows.Threading.DispatcherPriority.Background, (_, _) => action.IsEnabled = !working && (offer == null || canInstall()), Dispatcher);
