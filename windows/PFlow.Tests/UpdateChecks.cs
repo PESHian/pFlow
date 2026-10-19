@@ -22,7 +22,7 @@ internal static class UpdateChecks
                 string file = Path.Combine(root, "good.zip"); await client.Download(offer, file, new Progress<double>(), CancellationToken.None);
                 Check("complete download exact hash and bytes", File.ReadAllBytes(file).SequenceEqual(bytes));
             }
-            foreach (var data in new[] { "Changed update bytes!!"u8.ToArray(), bytes.Concat(new byte[] { 1 }).ToArray() }) {
+            foreach (var data in new[] { bytes.Select((value, index) => index == 0 ? (byte)(value ^ 1) : value).ToArray(), bytes.Concat(new byte[] { 1 }).ToArray() }) {
                 using var client = new UpdateClient(new Handler(_ => Ok(data))); bool refused = false;
                 try { await client.Download(offer, Path.Combine(root, Guid.NewGuid().ToString("N")), new Progress<double>(), CancellationToken.None); } catch (InvalidDataException) { refused = true; }
                 Check("damaged or oversized download refused", refused);

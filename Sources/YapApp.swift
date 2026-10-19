@@ -87,10 +87,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        AppState.shared.coordinator.state == .idle ? .terminateNow : .terminateCancel
-    }
-
     /// Yap is a background dictation tool — closing a window must not quit it.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false

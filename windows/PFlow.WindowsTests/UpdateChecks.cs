@@ -9,6 +9,7 @@ using System.Windows.Threading;
 
 internal static partial class Program
 {
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern void GetNativeSystemInfo(IntPtr buffer);
     static void NativeUpdates()
     {
         _ = Application.Current ?? new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
@@ -38,7 +39,9 @@ internal static partial class Program
             try { settings.Show(); settings.UpdateLayout(); Drain(); var button = Descendants<Button>(settings).Single(item => item.Content as string == "Check for updates"); button.BringIntoView(); Invoke(button); Until(() => opened == 1); Check("Settings opens updater without starting capture", opened == 1 && !hook.Enabled); }
             finally { settings.Close(); }
         } finally { Directory.Delete(root, true); }
-        string expected = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString().ToLowerInvariant();
+        IntPtr native = System.Runtime.InteropServices.Marshal.AllocHGlobal(64); string expected;
+        try { GetNativeSystemInfo(native); expected = System.Runtime.InteropServices.Marshal.ReadInt16(native) switch { 0 => "x86", 9 => "x64", 12 => "arm64", _ => "unsupported" }; }
+        finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(native); }
         Check("update choice follows OS architecture including emulation", UpdateWindow.Target == "windows-" + expected);
     }
 }
