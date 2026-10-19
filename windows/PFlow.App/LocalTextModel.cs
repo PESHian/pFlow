@@ -15,7 +15,9 @@ internal sealed class LocalTextModel
     string DownloadPath => Path.Combine(root, "Qwen3-4B-Q4_K_M.gguf");
     public string ModelPath => File.Exists(DownloadPath) ? DownloadPath : Path.Combine(assets, "models", "Qwen3-4B-Q4_K_M.gguf");
     string Executable => Path.Combine(assets, "text-engine", "llama-completion.exe");
-    public bool FilesPresent => File.Exists(ModelPath) && File.Exists(Executable);
+    public static bool IsSupported => Environment.Is64BitProcess;
+    public const string UnsupportedReason = "AI cleanup and report formatting need 64-bit Windows. Dictation, basic cleanup, and full narrative templates are available on 32-bit Windows.";
+    public bool FilesPresent => IsSupported && File.Exists(ModelPath) && File.Exists(Executable);
     internal string? LastIssue { get; private set; }
     public LocalTextModel(string root, string? assetsRoot = null) { this.root = root; assets = assetsRoot ?? AppContext.BaseDirectory; }
     async Task Verify(string path, CancellationToken cancel)
@@ -26,6 +28,7 @@ internal sealed class LocalTextModel
     }
     public async Task Download(IProgress<double> progress, CancellationToken cancel)
     {
+        if (!IsSupported) throw new NotSupportedException(UnsupportedReason);
         await gate.WaitAsync(cancel); string temp = DownloadPath + "." + Guid.NewGuid() + ".download";
         try {
             using var client = new HttpClient { Timeout = TimeSpan.FromHours(2) };
@@ -43,6 +46,7 @@ internal sealed class LocalTextModel
     }
     async Task<JsonDocument> Generate(string system, string input, object schema, string directory, CancellationToken cancel)
     {
+        if (!IsSupported) throw new NotSupportedException(UnsupportedReason);
         await gate.WaitAsync(cancel);
         string prefix = Path.Combine(directory, "text-" + Guid.NewGuid());
         try {

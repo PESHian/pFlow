@@ -101,11 +101,13 @@ internal sealed partial class SettingsWindow : Window
         Check(p, "Group long narrations into paragraphs", store.Preferences.Paragraphs, x => store.Preferences.Paragraphs = x);
         Check(p, "Clean up dictation (English)", store.Preferences.Cleanup, x => store.Preferences.Cleanup = x);
         p = Section(root, "Local intelligence");
+        if (LocalTextModel.IsSupported) {
         Check(p, "Use the local text model for reports and optional AI cleanup", store.Preferences.UseLocalAI, x => store.Preferences.UseLocalAI = x);
         Check(p, "AI cleanup (slower, English)", store.Preferences.UseAICleanup, x => store.Preferences.UseAICleanup = x);
         p.Children.Add(Text("English cleanup removes filler words immediately. Other languages keep their recognized words. AI cleanup is optional, English only, and can take up to eight seconds. Blocks with numbers, quotes, contractions, or symbols keep their original words. Reports use your sentences."));
         p.Children.Add(Text(textModel.FilesPresent ? "Local text model installed. Processing stays on this PC." : "Local AI is unavailable until its model is installed. Plain dictation still works."));
         p.Children.Add(Button("Download or repair text model (2.5 GB)", DownloadTextModel));
+        } else p.Children.Add(Text(LocalTextModel.UnsupportedReason));
         p = Section(root, "Speech recognition");
         p.Children.Add(Text("Language"));
         var languages = new Dictionary<string, string> { ["en"] = "English", ["es"] = "Spanish", ["fr"] = "French", ["de"] = "German", ["it"] = "Italian", ["pt"] = "Portuguese", ["zh"] = "Chinese", ["ja"] = "Japanese", ["ko"] = "Korean", ["hi"] = "Hindi", ["ar"] = "Arabic" };

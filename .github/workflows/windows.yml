@@ -1,0 +1,47 @@
+name: Windows architectures
+on:
+  push:
+    branches: [main, feat/windows-universal]
+    paths: ['windows/**', '.github/workflows/windows.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: x64, runner: windows-2025}
+          - {arch: x86, runner: windows-2025}
+          - {arch: arm64, runner: windows-11-arm}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.402'
+      - name: Build and check native architecture
+        shell: pwsh
+        run: ./windows/scripts/ci-windows.ps1 -Architecture '${{ matrix.arch }}'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: payload-${{ matrix.arch }}
+          path: windows/dist/win-${{ matrix.arch }}/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: matrix.arch == 'x64'
+        with:
+          name: speech-model
+          path: windows/dist/shared/
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

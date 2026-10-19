@@ -64,12 +64,35 @@ internal static class Program
     }
     [STAThread] static int Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--architecture-speech") return ArchitectureSpeech(args[1], args[2]).GetAwaiter().GetResult();
         if (args.Length > 0 && args[0] == "--model") return ModelChecks(args[1], args.Contains("--cleanup-only"));
         if (args.Length == 0) { try { return LaunchPrivate(); } catch (Exception error) { Console.Error.WriteLine(error); return 1; } }
         using var reportWriter = new StreamWriter(args[1]) { AutoFlush = true }; Console.SetOut(reportWriter); Console.SetError(reportWriter);
         try {
             Check("isolated window station", ObjectName(GetProcessWindowStation()) == args[2]);
             Check("isolated desktop", ObjectName(GetThreadDesktop(GetCurrentThreadId())) == "fixture");
+            Check("INPUT size matches Windows ABI", Marshal.SizeOf<Native.Input>() == (IntPtr.Size == 8 ? 40 : 28));
+            Check("INPUT union alignment matches Windows ABI", Marshal.OffsetOf<Native.Input>(nameof(Native.Input.Data)).ToInt32() == (IntPtr.Size == 8 ? 8 : 4));
+            Check("keyboard structure matches Windows ABI", Marshal.SizeOf<Native.KeyboardInput>() == (IntPtr.Size == 8 ? 24 : 16));
+            Check("keyboard hook structure matches Windows ABI", Marshal.SizeOf<Native.HookKey>() == (IntPtr.Size == 8 ? 24 : 20));
+            Check("wave header matches Windows ABI", Marshal.SizeOf(typeof(WaveRecorder).GetNestedType("Header", System.Reflection.BindingFlags.NonPublic)!) == (IntPtr.Size == 8 ? 48 : 32));
+            string architectureFixture = Path.Combine(Path.GetTempPath(), "pflow-architecture-" + Guid.NewGuid().ToString("N"));
+            var capsule = new Capsule(new StateStore(architectureFixture));
+            try {
+                var handle = new WindowInteropHelper(capsule).EnsureHandle();
+                var style = Native.GetWindowLongPtr(handle, -20);
+                Check("capsule native window style works on this architecture", (style.ToInt64() & 0x08000080) == 0x08000080);
+                Native.SetWindowLongPtr(handle, -20, style);
+                Check("native window style round-trip", Native.GetWindowLongPtr(handle, -20) == style);
+            } finally { capsule.Close(); if (Directory.Exists(architectureFixture)) Directory.Delete(architectureFixture, true); }
+            Check("local AI capability matches process width", LocalTextModel.IsSupported == Environment.Is64BitProcess);
+            if (!Environment.Is64BitProcess) {
+                var unsupported = new LocalTextModel(Path.GetTempPath());
+                bool refused = false;
+                try { unsupported.Download(new Progress<double>(), CancellationToken.None).GetAwaiter().GetResult(); }
+                catch (NotSupportedException error) { refused = error.Message == LocalTextModel.UnsupportedReason; }
+                Check("32-bit AI download refused before network or disk use", refused && !unsupported.FilesPresent);
+            }
             using var window = new HwndSource(new HwndSourceParameters("pFlow private clipboard fixture") { Width = 10, Height = 10 });
             Clipboard.SetText("Fictional private clipboard 123 👮");
             using (var lease = new ClipboardLease(window.Handle, true)) {
@@ -149,6 +172,29 @@ internal static class Program
             }
             Console.WriteLine($"{passed} native private-clipboard checks passed."); return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); foreach (System.Collections.DictionaryEntry data in error.Data) Console.Error.WriteLine($"Fixture detail: {data.Key}={data.Value}"); return 1; }
+    }
+    static async Task<int> ArchitectureSpeech(string assets, string audio)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "pflow-speech-architecture-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try {
+            await using var whisper = new Whisper(directory, assets);
+            using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+            await whisper.Prewarm();
+            int? worker = whisper.WorkerId;
+            string first = await whisper.Transcribe(audio, "en", [], deadline.Token);
+            string words = string.Join(" ", first.ToLowerInvariant().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+            Check("native CPU transcription retains public JFK words", words.Contains("ask not what your country can do for you") && words.Contains("ask what you can do for your country"));
+            string second = await whisper.Transcribe(audio, "en", [], deadline.Token);
+            Check("resident worker works repeatedly on this architecture", second == first && worker != null && whisper.WorkerId == worker && whisper.LastMetrics.Reused);
+            bool locked = false;
+            try { using var change = new FileStream(whisper.ModelPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite); }
+            catch (IOException) { locked = true; }
+            Check("model stays protected while resident", locked);
+            Console.WriteLine($"{passed} architecture speech checks passed ({RuntimeInformation.ProcessArchitecture}).");
+            return 0;
+        } catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        finally { Directory.Delete(directory, true); }
     }
     static int ModelChecks(string assets, bool cleanupOnly)
     {

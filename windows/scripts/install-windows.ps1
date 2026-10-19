@@ -1,5 +1,7 @@
-param([Parameter(Mandatory=$true)][string]$Source)
+param([Parameter(Mandatory=$true)][string]$Source, [string]$SharedModelDirectory)
 $ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\WindowsArchitecture.ps1"
+Assert-PFlowArchitecture $Source
 $destination = Join-Path $env:LOCALAPPDATA 'Programs\pFlow'
 $running = Get-Process pFlow -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq "$destination\pFlow.exe" }
 if ($running) { throw 'Quit pFlow before updating it. Your settings and History will be kept.' }
@@ -7,7 +9,15 @@ if (!(Test-Path "$Source\pFlow.exe") -or !(Test-Path "$Source\engine\whisper-cli
 $staging = "$destination.new"
 if (Test-Path $staging) { throw 'An earlier installation is unfinished. Keep that folder and check it before installing again.' }
 New-Item -ItemType Directory -Force $staging | Out-Null
-Copy-Item "$Source\*" $staging -Recurse -Force
+Get-ChildItem -LiteralPath $Source -Force | Copy-Item -Destination $staging -Recurse -Force
+if ($SharedModelDirectory) {
+    $model = Join-Path $SharedModelDirectory 'ggml-small.bin'
+    if ((Get-Item -LiteralPath $model).Length -ne 487601967 -or (Get-FileHash -LiteralPath $model -Algorithm SHA256).Hash -ne '1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b') {
+        throw 'The speech model is incomplete or damaged. Your installed app was not changed.'
+    }
+    New-Item -ItemType Directory -Force "$staging\models" | Out-Null
+    Copy-Item -LiteralPath $model -Destination "$staging\models\ggml-small.bin"
+}
 if (Test-Path $destination) { Move-Item $destination "$destination.previous-$(Get-Date -Format yyyyMMddHHmmss)" }
 Move-Item $staging $destination
 $shell = New-Object -ComObject WScript.Shell

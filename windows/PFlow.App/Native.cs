@@ -45,8 +45,12 @@ internal static class Native
     [DllImport("gdi32.dll")] internal static extern bool DeleteObject(IntPtr data);
     [DllImport("gdi32.dll", CharSet = CharSet.Unicode)] internal static extern IntPtr CopyEnhMetaFile(IntPtr data, string? path);
     [DllImport("gdi32.dll")] internal static extern bool DeleteEnhMetaFile(IntPtr data);
-    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] internal static extern IntPtr GetWindowLongPtr(IntPtr hwnd, int index);
-    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] internal static extern IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] static extern IntPtr GetWindowLong64(IntPtr hwnd, int index);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] static extern IntPtr SetWindowLong64(IntPtr hwnd, int index, IntPtr value);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] static extern int GetWindowLong32(IntPtr hwnd, int index);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongW")] static extern int SetWindowLong32(IntPtr hwnd, int index, int value);
+    internal static IntPtr GetWindowLongPtr(IntPtr hwnd, int index) => IntPtr.Size == 8 ? GetWindowLong64(hwnd, index) : new IntPtr(GetWindowLong32(hwnd, index));
+    internal static IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value) => IntPtr.Size == 8 ? SetWindowLong64(hwnd, index, value) : new IntPtr(SetWindowLong32(hwnd, index, value.ToInt32()));
     internal static Input Key(ushort vk, bool up = false) => new() { Type = 1, Data = new() { Keyboard = new() { Vk = vk, Flags = up ? KEYEVENTF_KEYUP : 0 } } };
     internal static Input[] UnicodeText(string text)
     {

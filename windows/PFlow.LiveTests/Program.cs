@@ -18,6 +18,7 @@ internal static partial class Program
     [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr window, uint flags);
     [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr window);
     static string root = "";
+    static string PackageAssets => Path.Combine(root, "source", "windows", "dist", "win-" + RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant());
     static int passed;
     static bool edgeOnly;
     static bool micOnly;
@@ -608,7 +609,7 @@ internal static partial class Program
     }
     static void IconChecks()
     {
-            string executable = Path.Combine(root, "source", "windows", "dist", "win-arm64", "pFlow.exe");
+            string executable = Path.Combine(PackageAssets, "pFlow.exe");
             var icons = new IntPtr[1];
             Check("published EXE embeds an app icon", ExtractIconEx(executable, 0, icons, null, 1) == 1 && icons[0] != IntPtr.Zero);
             try {
@@ -645,7 +646,7 @@ internal static partial class Program
     static async Task WarmLatency()
     {
         string directory = Path.Combine(root, "warm-latency-fictional-" + Guid.NewGuid()); Directory.CreateDirectory(directory);
-        string assets = Path.Combine(root, "source", "windows", "dist", "win-arm64");
+        string assets = PackageAssets;
         await using var whisper = new Whisper(directory, assets);
         try {
             var watch = Stopwatch.StartNew(); await whisper.Prewarm(); int? id = whisper.WorkerId;
@@ -695,7 +696,7 @@ internal static partial class Program
     static async Task WorkerSafety()
     {
         string directory = Path.Combine(root, "worker-fictional-测-🟣-" + Guid.NewGuid()); Directory.CreateDirectory(directory);
-        string assets = Path.Combine(root, "source", "windows", "dist", "win-arm64");
+        string assets = PackageAssets;
         string model = Path.Combine(directory, "ggml-small.bin"), audio = Path.Combine(directory, "narración-🟣.wav");
         try {
             File.Copy(Path.Combine(assets, "models", "ggml-small.bin"), model); File.Copy(Path.Combine(root, "short-fictional.wav"), audio);
@@ -714,7 +715,7 @@ internal static partial class Program
     static async Task ExtendedLatency()
     {
         string directory = Path.Combine(root, "extended-latency-fictional-" + Guid.NewGuid()); Directory.CreateDirectory(directory);
-        string assets = Path.Combine(root, "source", "windows", "dist", "win-arm64");
+        string assets = PackageAssets;
         await using var whisper = new Whisper(directory, assets);
         try {
             await whisper.Prewarm();
@@ -770,7 +771,7 @@ internal static partial class Program
         var notepad = await WindowWith(name); var edit = await Editor(notepad); await Focus(notepad, edit); End(edit);
         using var owner = new HwndSource(new HwndSourceParameters("pFlow fictional processing owner") { Width = 10, Height = 10 });
         var store = new PFlow.Core.StateStore(directory); store.Preferences.Language = "en"; store.Preferences.CopyDictationToClipboard = false;
-        string assets = insertionLatencyOnly ? Path.Combine(root, "source", "windows", "dist", "win-arm64") : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "pFlow");
+        string assets = insertionLatencyOnly ? PackageAssets : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "pFlow");
         await using var whisper = new Whisper(directory, assets); var model = new LocalTextModel(directory, assets);
         File.Copy(Path.Combine(root, "short-fictional.wav"), Path.Combine(directory, "speech.wav"));
         try {
