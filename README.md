@@ -44,7 +44,7 @@ Quit pFlow before updating. Turn Mac dictation off before testing Windows record
 
 ## Privacy
 
-Audio and transcripts are processed on your device. Model downloads contact their hosting services; transcription does not use cloud inference. Mac AI behavior depends on the selected Apple Intelligence capability; Windows uses local models. History and settings are kept in your user account, outside the app. Delete history entries when they are no longer needed.
+Whisper transcribes audio on your device. Mac AI defaults to on-device processing. Source builds with Apple’s required entitlement can opt into Apple Private Cloud Compute, which sends text and formatting instructions to Apple; the supplied Mac testing download has no cloud entitlement. Windows AI runs locally. Model downloads contact their hosting services. History and settings stay in your user account, outside the app. Delete history entries when they are no longer needed.
 
 This public repository contains application source, artwork, licenses, and fictional test fixtures. It does not include user settings, saved dictations, personal recordings, credentials, private development history, or device access files. The original private development repository has been retained separately.
 
@@ -52,7 +52,7 @@ This public repository contains application source, artwork, licenses, and ficti
 
 Mac: install Xcode with the macOS 27 SDK and [XcodeGen](https://github.com/yonaskolb/XcodeGen), run `xcodegen generate`, then build the Yap scheme from `Yap.xcodeproj`. `scripts/build-whisper.sh` prepares the pinned local engine. `release.sh` supports Developer ID signing/notarization when you supply your own credentials.
 
-Windows: install .NET 10 SDK, CMake, and Visual Studio C++ tools for your architecture, then run `windows/scripts/build-windows.ps1`. See [Windows details](windows/README.md). Release builds omit debug symbols and map native source paths before distribution. Each architecture needs its own build and verification.
+Windows: install .NET 10 SDK, CMake, and Visual Studio C++ tools for your architecture, then run `windows/scripts/build-windows.ps1`. See [Windows details](windows/README.md). The published Windows binaries omit debug symbols and use Clang to map native source paths. Builds using other native compilers need their own path checks before distribution. Each architecture needs its own build and verification.
 
 ## Tested limits
 
