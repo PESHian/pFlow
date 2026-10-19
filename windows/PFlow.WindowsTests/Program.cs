@@ -8,7 +8,7 @@ using PFlow.Windows;
 using PFlow.Core;
 using System.Text;
 
-internal static class Program
+internal static partial class Program
 {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr CreateWindowStation(string name, uint flags, uint access, IntPtr security);
     [DllImport("user32.dll")] static extern bool SetProcessWindowStation(IntPtr station);
@@ -71,6 +71,7 @@ internal static class Program
         try {
             Check("isolated window station", ObjectName(GetProcessWindowStation()) == args[2]);
             Check("isolated desktop", ObjectName(GetThreadDesktop(GetCurrentThreadId())) == "fixture");
+            NativeHotkeys();
             Check("INPUT size matches Windows ABI", Marshal.SizeOf<Native.Input>() == (IntPtr.Size == 8 ? 40 : 28));
             Check("INPUT union alignment matches Windows ABI", Marshal.OffsetOf<Native.Input>(nameof(Native.Input.Data)).ToInt32() == (IntPtr.Size == 8 ? 8 : 4));
             Check("keyboard structure matches Windows ABI", Marshal.SizeOf<Native.KeyboardInput>() == (IntPtr.Size == 8 ? 24 : 16));

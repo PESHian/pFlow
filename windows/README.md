@@ -2,7 +2,7 @@
 
 Native WPF application for x64 (Intel/AMD), ARM64, and x86 Windows. Download the universal ZIP, Extract All, double-click Install.cmd, and open pFlow by Pesh from Start. The installer chooses the native OS architecture even from an emulated or 32-bit shell. It requires Windows 10 1607+ or Windows 11; Microsoft supports .NET 10 on the listed Windows 10 LTSC/Enterprise editions. Older Windows/ARM32 is unsupported. The Mac source and notices remain intact above this directory.
 
-Hold Right Windows to record; release to process and insert. Double-tap within 300 ms for continuous recording. Tap again to stop. Escape cancels. Right Windows shortcuts cancel recording and pass through. Left Windows remains available for ordinary shortcuts.
+Choose Right Ctrl, F8–F12, or Right Windows in Settings → Shortcut → Activation key. The choice is saved and takes effect immediately. Hold the chosen key to record; release to process and insert. Double-tap within 300 ms for continuous recording. Tap again to stop. Escape cancels. Shortcuts with the chosen key cancel recording and pass through. An already-held modifier keeps the shortcut available without starting dictation. Left Windows remains available for ordinary shortcuts.
 
 The app runs in the tray. Right-click the capsule or tray to open Settings. The capsule shows only a waveform while recording and a moving line while processing, then hides. It keeps its placement, Wave/Lines, and dark/light/system themes. Use Show recording control in the tray menu to reveal it for a manual click. Settings and plain-text History stay in `%LOCALAPPDATA%\pFlow`. Recording files are removed after processing or cancellation. History contains sensitive dictation; delete entries when no longer needed.
 

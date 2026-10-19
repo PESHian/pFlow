@@ -6,6 +6,11 @@ on:
         description: 'Architectures to build as a JSON array'
         default: '["x64","x86","arm64"]'
         required: true
+      scope:
+        description: 'Full native build, or managed hotkey update using verified released engines'
+        type: choice
+        options: [full, hotkeys]
+        default: full
 permissions:
   contents: read
 jobs:
@@ -30,7 +35,13 @@ jobs:
         shell: pwsh
         env:
           TARGET_ARCHITECTURE: ${{ matrix.arch }}
-        run: ./windows/scripts/ci-windows.ps1 -Architecture $env:TARGET_ARCHITECTURE
+          BUILD_SCOPE: ${{ inputs.scope }}
+        run: |
+          if ($env:BUILD_SCOPE -eq 'hotkeys') {
+            ./windows/scripts/ci-hotkeys.ps1 -Architecture $env:TARGET_ARCHITECTURE
+          } else {
+            ./windows/scripts/ci-windows.ps1 -Architecture $env:TARGET_ARCHITECTURE
+          }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: payload-${{ matrix.arch }}
@@ -39,7 +50,7 @@ jobs:
           retention-days: 7
           compression-level: 1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: matrix.arch == 'x64'
+        if: matrix.arch == 'x64' && inputs.scope != 'hotkeys'
         with:
           name: speech-model
           path: windows/dist/shared/

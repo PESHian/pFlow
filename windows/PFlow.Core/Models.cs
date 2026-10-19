@@ -49,6 +49,7 @@ public sealed class DictationTemplate
 public sealed class Preferences
 {
     public bool Enabled { get; set; } = true;
+    public string ActivationKey { get; set; } = ActivationKeys.DefaultId;
     public bool CopyDictationToClipboard { get; set; }
     public bool Sounds { get; set; } = true;
     public bool Paragraphs { get; set; } = true;
@@ -72,6 +73,7 @@ public sealed class Preferences
     public Guid? ActiveTemplateId { get; set; }
     public void Validate()
     {
+        ActivationKey = ActivationKeys.Resolve(ActivationKey).Id;
         if (Theme is not ("dark" or "light" or "system")) Theme = "dark";
         if (Palette is not ("pesh" or "aurora" or "solar" or "custom")) Palette = "pesh";
         if (Waveform is not ("wave" or "lines")) Waveform = "wave";

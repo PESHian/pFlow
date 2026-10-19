@@ -90,10 +90,26 @@ internal sealed partial class SettingsWindow : Window
         Navigate(root, "Usage statistics", "Daily words, speaking pace, and activity by app.", Statistics, false);
         Navigate(root, "View history", "Browse and copy past transcripts.", History);
         Navigate(root, "Dictionary", "Teach pFlow names and words it often gets wrong.", Dictionary);
-        p = Section(root, "Shortcut"); p.Children.Add(Text("Hold Right Windows to dictate. Release to insert. You can also click the waveform to start and stop. Drag it to move; right-click it to center it at the bottom. Double-tap within 300 ms for continuous recording; tap again to finish. Escape cancels. Left Windows works normally."));
-        var mapping = Text("Press a Windows key to check what this VM receives."); mapping.FontSize = 12; mapping.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted");
+        p = Section(root, "Shortcut"); p.Children.Add(Text("Activation key"));
+        var activation = new ComboBox { ItemsSource = ActivationKeys.Choices, DisplayMemberPath = "Name", SelectedValuePath = "Id", SelectedValue = store.Preferences.ActivationKey, Margin = new Thickness(0, 0, 0, 8) };
+        System.Windows.Automation.AutomationProperties.SetName(activation, "Activation key"); p.Children.Add(activation);
+        var shortcutHelp = Text(ShortcutHelp()); p.Children.Add(shortcutHelp);
+        var shortcutNotice = Text("No Right Windows key? Choose Right Ctrl or an F key. Use the chosen key alone for dictation; combinations keep their normal shortcuts."); p.Children.Add(shortcutNotice);
+        string ShortcutHelp() => $"Hold {ActivationKeys.Resolve(store.Preferences.ActivationKey).Name} to dictate. Release to insert. Double-tap within 300 ms for continuous recording; tap again to finish. Escape cancels. Left Windows works normally. You can also click the waveform to start and stop; drag it to move.";
+        activation.SelectionChanged += (_, _) => {
+            if (activation.SelectedValue is not string id || id == store.Preferences.ActivationKey) return;
+            string previous = store.Preferences.ActivationKey;
+            if (busy() || !keyboard.CanRebind) { activation.SelectedValue = previous; shortcutNotice.Text = "Finish or cancel dictation and release its key before changing the shortcut."; return; }
+            try {
+                keyboard.SelectActivationKey(id); store.Preferences.ActivationKey = id;
+                try { store.SavePreferences(); }
+                catch { store.Preferences.ActivationKey = previous; keyboard.SelectActivationKey(previous); throw; }
+                shortcutHelp.Text = ShortcutHelp(); shortcutNotice.Text = $"Activation key saved: {ActivationKeys.Resolve(id).Name}.";
+            } catch (Exception error) { activation.SelectedValue = previous; shortcutNotice.Text = error.Message; }
+        };
+        var mapping = Text("Press an activation-key option to check what this keyboard sends."); mapping.FontSize = 12; mapping.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted");
         keyboard.PhysicalKey += Mapping; Closed += (_, _) => keyboard.PhysicalKey -= Mapping;
-        void Mapping(uint vk, uint scan) => mapping.Text = $"Last physical key: {(vk == 0x5C ? "Right Windows" : "Left Windows")}, scan code 0x{scan:X}. Check both keys with the Mac app idle.";
+        void Mapping(uint vk, uint scan) => mapping.Text = $"Last detected: {(vk == 0x5B ? "Left Windows" : ActivationKeys.Choices.First(choice => choice.VirtualKey == vk).Name)}. Keep Mac dictation off when checking VM keys.";
         p.Children.Add(mapping);
         p = Section(root, "Dictation");
         Check(p, "Copy dictation to clipboard after insertion", store.Preferences.CopyDictationToClipboard, x => store.Preferences.CopyDictationToClipboard = x);

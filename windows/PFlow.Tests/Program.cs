@@ -2,6 +2,8 @@ using PFlow.Core;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
+HotkeyChecks.Run();
+if (args.Contains("--hotkeys-only")) return;
 int passed = 0;
 void Check(string name, bool condition) { if (!condition) throw new Exception("FAIL: " + name); passed++; Console.WriteLine("PASS: " + name); }
 string Words(string value) => string.Join(" ", Regex.Split(value.Trim(), @"\s+"));

@@ -7,13 +7,16 @@ import re
 import shutil
 import struct
 import zipfile
+import xml.etree.ElementTree as ET
 
 parser = argparse.ArgumentParser()
 parser.add_argument('artifacts', type=Path)
 parser.add_argument('output', type=Path)
 args = parser.parse_args()
 scripts = Path(__file__).resolve().parent
-stage = args.output / 'pFlow-Windows-Universal-0.1.9-testing'
+version = ET.parse(scripts.parent / 'PFlow.App/PFlow.App.csproj').findtext('.//Version')
+assert version and re.fullmatch(r'\d+\.\d+\.\d+', version)
+stage = args.output / f'pFlow-Windows-Universal-{version}-testing'
 stage.mkdir(parents=True, exist_ok=False)
 machines = {'x64': 0x8664, 'x86': 0x14c, 'arm64': 0xaa64}
 system_dlls = set('kernel32.dll advapi32.dll user32.dll ws2_32.dll bcrypt.dll ntdll.dll msvcrt.dll ucrtbase.dll shell32.dll ole32.dll oleaut32.dll shlwapi.dll version.dll crypt32.dll psapi.dll'.split())

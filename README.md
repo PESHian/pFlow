@@ -11,7 +11,7 @@ These are testing builds. macOS and Windows may show an unsigned or unnotarized 
 | Platform | Download | Requirements |
 | --- | --- | --- |
 | Mac | pFlow-Mac-0.3.4-testing.dmg | Apple Silicon, macOS 27 or later |
-| Windows | pFlow-Windows-Universal-0.1.9-testing.zip | Windows x64 (Intel/AMD), ARM64, or x86; Windows 10 1607+ / Windows 11 |
+| Windows | pFlow-Windows-Universal-0.1.10-testing.zip | Windows x64 (Intel/AMD), ARM64, or x86; Windows 10 1607+ / Windows 11 |
 
 ### Mac
 
@@ -21,7 +21,7 @@ The first use may need a checksum-verified Whisper model download. Apple Intelli
 
 ### Windows
 
-Extract the entire universal ZIP and double-click **Install.cmd**. It detects your native Windows architecture, checks the selected files, and installs the matching build for your user account. Open **pFlow by Pesh** from Start. It runs in the tray; open Settings from its tray menu. Hold **Right Windows** to record, then release. Double-tap within about 300 ms for continuous dictation; tap to stop. Left Windows stays available for shortcuts. A VM may map Right Command to Right Windows.
+Extract the entire universal ZIP and double-click **Install.cmd**. It detects your native Windows architecture, checks the selected files, and installs the matching build for your user account. Open **pFlow by Pesh** from Start. It runs in the tray; open Settings from its tray menu. In **Settings → Shortcut → Activation key**, choose **Right Ctrl**, **F8–F12**, or **Right Windows**. Hold your chosen key to record, then release. Double-tap within about 300 ms for continuous dictation; tap to stop. Left Windows stays available for shortcuts. The choice is saved; existing installations keep Right Windows until changed.
 
 The Windows download includes the Whisper speech model and .NET runtime. AI cleanup and report formatting use an optional 2.5 GB Qwen text model: choose **Download or repair text model** in Settings if you want those features. Its size and SHA-256 are checked before use. This optional text model requires 64-bit Windows; 32-bit Windows keeps dictation, basic cleanup, dictionary, and full-narrative templates. Basic dictation works without it. After setup, model inference runs offline.
 

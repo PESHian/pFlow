@@ -4,43 +4,46 @@ internal sealed class KeyboardHook : IDisposable
 {
     readonly Native.HookProc callback;
     readonly Action<TriggerAction> action;
-    readonly Trigger trigger = new();
+    readonly ActivationRouter router;
+    readonly Action<Native.Input[]> replay;
+    readonly Func<uint, bool> held;
     IntPtr hook;
-    public bool Enabled { get; set; } = true;
+    public bool Enabled { get => router.Enabled; set => Post(router.SetEnabled(value)); }
+    public string ActivationKey => router.Selected.Id;
+    public bool CanRebind => router.CanRebind;
+    public void SelectActivationKey(string id) => router.Select(id);
     public event Action<uint, uint>? PhysicalKey;
-    public KeyboardHook(Action<TriggerAction> action)
+    public KeyboardHook(Action<TriggerAction> action, string? activationKey = ActivationKeys.DefaultId,
+        Action<Native.Input[]>? replay = null, Func<uint, bool>? held = null)
     {
-        this.action = action; callback = OnKey;
+        this.action = action; callback = OnKey; router = new(activationKey);
+        this.replay = replay ?? Native.Send; this.held = held ?? (key => Native.GetAsyncKeyState((int)key) < 0);
         hook = Native.SetWindowsHookEx(13, callback, Native.GetModuleHandle(null), 0);
-        if (hook == IntPtr.Zero) throw new InvalidOperationException("Windows could not start the Right Windows key listener.");
+        if (hook == IntPtr.Zero) throw new InvalidOperationException("Windows could not start the dictation key listener.");
     }
     void Post(TriggerAction value) { if (value != TriggerAction.None) Application.Current.Dispatcher.BeginInvoke(() => action(value)); }
     IntPtr OnKey(int code, IntPtr wp, IntPtr lp)
     {
         if (code < 0) return Native.CallNextHookEx(hook, code, wp, lp);
         var key = Marshal.PtrToStructure<Native.HookKey>(lp);
-        if ((key.Flags & 0x10) != 0) return Native.CallNextHookEx(hook, code, wp, lp);
         bool down = wp.ToInt64() is 0x100 or 0x104;
-        if (down && key.Vk is 0x5B or 0x5C) Application.Current.Dispatcher.BeginInvoke(() => PhysicalKey?.Invoke(key.Vk, key.Scan));
-        if (!Enabled) return Native.CallNextHookEx(hook, code, wp, lp);
-        if (key.Vk == 0x1B && down) Post(TriggerAction.Cancel);
-        if (key.Vk == 0x5C) {
-            if (down && !trigger.Down && new[] { 0x10, 0x11, 0x12, 0x5B }.Any(x => Native.GetAsyncKeyState(x) < 0))
-                return Native.CallNextHookEx(hook, code, wp, lp);
-            if (!down && !trigger.Down) return Native.CallNextHookEx(hook, code, wp, lp);
-            bool chord = trigger.Chord;
-            Post(down ? trigger.Press(Environment.TickCount64) : trigger.Release(Environment.TickCount64));
-            if (chord) return Native.CallNextHookEx(hook, code, wp, lp);
-            return (IntPtr)1;
-        }
-        if (down && trigger.Down && !trigger.Chord) {
-            Post(trigger.OtherKey());
-            // Replay the suppressed modifier before the real shortcut key reaches Windows.
-            try { Native.Send(Native.Key(0x5C)); }
-            catch (InvalidOperationException) { Post(TriggerAction.Cancel); }
-        }
+        if (ProcessKey(key, down, Environment.TickCount64)) return (IntPtr)1;
         return Native.CallNextHookEx(hook, code, wp, lp);
     }
-    public void Reset() => trigger.Reset();
+    internal bool ProcessKey(Native.HookKey key, bool down, long time)
+    {
+        bool injected = (key.Flags & 0x10) != 0;
+        uint code = key.Vk == 0x11 ? ((key.Flags & 1) != 0 ? 0xA3u : 0xA2u) : key.Vk;
+        if (!injected && down && (code == 0x5B || ActivationKeys.Choices.Any(choice => choice.VirtualKey == code)))
+            Application.Current.Dispatcher.BeginInvoke(() => PhysicalKey?.Invoke(code, key.Scan));
+        var route = router.Process(code, down, injected, time, held);
+        if (route.Replay is { } selected) {
+            // Deliver the suppressed down before Windows sees the real shortcut key.
+            try { replay([Native.Key((ushort)selected.VirtualKey, extended: selected.Extended)]); }
+            catch (InvalidOperationException) { router.ReplayFailed(); Post(TriggerAction.Cancel); return true; }
+        }
+        Post(route.Action); return route.Consume;
+    }
+    public void Reset() => router.Reset();
     public void Dispose() { if (hook != IntPtr.Zero) Native.UnhookWindowsHookEx(hook); hook = IntPtr.Zero; }
 }

@@ -44,7 +44,7 @@ internal sealed class Program : Application
             capsule = new Capsule(store); capsule.OpenSettings += OpenSettings; capsule.Cancel += Cancel; capsule.ToggleRecording += ToggleRecording; capsule.OpenHistory += OpenHistory;
             capsule.AudioLevel = () => recorder?.Level ?? 0;
             _ = new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Background, (_, _) => ClipboardLease.RestorePending(), Dispatcher);
-            keyboard = new KeyboardHook(OnTrigger) { Enabled = store.Preferences.Enabled };
+            keyboard = new KeyboardHook(OnTrigger, store.Preferences.ActivationKey) { Enabled = store.Preferences.Enabled };
             var menu = new Forms.ContextMenuStrip();
             menu.Items.Add("Show recording control", null, (_, _) => Dispatcher.Invoke(capsule.Reveal));
             menu.Items.Add("Settings", null, (_, _) => Dispatcher.Invoke(OpenSettings));

@@ -33,6 +33,7 @@ foreach ($name in @('microsoft.netcore.app.runtime','microsoft.windowsdesktop.ap
         Copy-Item $_.FullName "$dist\Licenses\$name-$($_.Name)"
     }
 }
-"pFlow 0.1.9; $rid; source $env:GITHUB_SHA; .NET 10.0.13; native CPU baseline" | Set-Content "$dist\BUILD.txt" -Encoding ASCII
+$version = ([xml](Get-Content "$root\PFlow.App\PFlow.App.csproj")).Project.PropertyGroup.Version
+"pFlow $version; $rid; source $env:GITHUB_SHA; .NET 10.0.13; native CPU baseline" | Set-Content "$dist\BUILD.txt" -Encoding ASCII
 if (Get-ChildItem $dist -Filter '*.pdb' -Recurse) { throw 'Debug symbols must not be distributed.' }
 Write-Output "PASS: $rid native ABI, private clipboard, saved-audio CPU transcription and resident reuse."

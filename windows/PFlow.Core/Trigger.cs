@@ -1,7 +1,7 @@
 namespace PFlow.Core;
 
 public enum TriggerAction { None, Start, Stop, Continuous, Cancel }
-// Right Windows is the only trigger. A quick pair of taps is continuous mode.
+// A quick pair of taps of the chosen activation key enters continuous mode.
 public sealed class Trigger
 {
     public bool Down { get; private set; }

@@ -2,7 +2,7 @@ pFlow by Pesh: Windows and Mac installation
 
 WINDOWS: x64 (Intel/AMD), ARM64, or x86 (32-bit)
 
-Use pFlow-Windows-Universal-0.1.9-testing.zip. It contains all three builds.
+Use pFlow-Windows-Universal-0.1.10-testing.zip. It contains all three builds.
 Windows 11 and Windows 10 version 1607 or later are required. Older Windows
 cannot run the included .NET 10 runtime. Microsoft's supported Windows 10
 editions are LTSC/Enterprise; Windows 10/older hardware is not fully tested here.
@@ -15,9 +15,11 @@ editions are LTSC/Enterprise; Windows 10/older hardware is not fully tested here
    No administrator password, .NET installation, or architecture choice is needed.
 5. Open pFlow by Pesh from Start. Its speaking-pig icon appears in the tray
    (possibly under the up-arrow). Open Settings there and choose your language.
+   Under Shortcut > Activation key, choose Right Ctrl, F8-F12, or Right Windows.
+   Right Windows remains the default until changed; no Right Windows key is needed.
 6. Allow desktop microphone access in Windows Settings > Privacy & security >
    Microphone. On Windows 10, this is Settings > Privacy > Microphone.
-7. Open Notepad. Hold Right Windows, speak, and release to insert. Double-tap
+7. Open Notepad. Hold your chosen key, speak, and release to insert. Double-tap
    for continuous recording; tap to stop. Escape cancels. Left Windows stays free.
 
 Whisper, its verified speech model, and the .NET runtime are included. Recording

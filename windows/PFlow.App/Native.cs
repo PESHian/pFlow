@@ -2,7 +2,7 @@ namespace PFlow.Windows;
 
 internal static class Native
 {
-    internal const uint KEYEVENTF_KEYUP = 2, KEYEVENTF_UNICODE = 4;
+    internal const uint KEYEVENTF_EXTENDEDKEY = 1, KEYEVENTF_KEYUP = 2, KEYEVENTF_UNICODE = 4;
     [StructLayout(LayoutKind.Sequential)] internal struct Input { public uint Type; public InputUnion Data; }
     [StructLayout(LayoutKind.Explicit)] internal struct InputUnion {
         [FieldOffset(0)] public KeyboardInput Keyboard;
@@ -51,7 +51,7 @@ internal static class Native
     [DllImport("user32.dll", EntryPoint = "SetWindowLongW")] static extern int SetWindowLong32(IntPtr hwnd, int index, int value);
     internal static IntPtr GetWindowLongPtr(IntPtr hwnd, int index) => IntPtr.Size == 8 ? GetWindowLong64(hwnd, index) : new IntPtr(GetWindowLong32(hwnd, index));
     internal static IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value) => IntPtr.Size == 8 ? SetWindowLong64(hwnd, index, value) : new IntPtr(SetWindowLong32(hwnd, index, value.ToInt32()));
-    internal static Input Key(ushort vk, bool up = false) => new() { Type = 1, Data = new() { Keyboard = new() { Vk = vk, Flags = up ? KEYEVENTF_KEYUP : 0 } } };
+    internal static Input Key(ushort vk, bool up = false, bool extended = false) => new() { Type = 1, Data = new() { Keyboard = new() { Vk = vk, Flags = (up ? KEYEVENTF_KEYUP : 0) | (extended ? KEYEVENTF_EXTENDEDKEY : 0) } } };
     internal static Input[] UnicodeText(string text)
     {
         // VK_PACKET produces WM_CHAR: Windows multiline controls expect CR for a line break.

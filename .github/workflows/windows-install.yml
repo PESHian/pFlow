@@ -9,6 +9,10 @@ on:
         description: 'Release containing the universal ZIP (draft or published)'
         required: true
         default: pflow-desktop-2026.10.19
+      version:
+        description: 'Windows app version in the ZIP filename'
+        required: true
+        default: '0.1.10'
       sha256:
         description: 'Expected universal ZIP SHA-256'
         required: true
@@ -30,6 +34,7 @@ jobs:
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
+      APP_VERSION: ${{ inputs.version || '0.1.10' }}
       RELEASE_TAG: ${{ inputs.release || 'pflow-desktop-2026.10.19' }}
       EXPECTED_SHA: ${{ inputs.sha256 || '366061b5cb0fffe1ac224c7f31f435cb70fc32e3655d188c252c011b09128cce' }}
     steps:
@@ -46,9 +51,10 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           $download=Join-Path $env:RUNNER_TEMP 'pflow-download'
-          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern 'pFlow-Windows-Universal-0.1.9-testing.zip' --dir $download
+          $asset="pFlow-Windows-Universal-$env:APP_VERSION-testing.zip"
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern $asset --dir $download
           if($LASTEXITCODE){throw 'Could not obtain the release candidate.'}
-          $zip=Join-Path $download 'pFlow-Windows-Universal-0.1.9-testing.zip'
+          $zip=Join-Path $download $asset
           if((Get-FileHash $zip -Algorithm SHA256).Hash -ne $env:EXPECTED_SHA){throw 'The release ZIP checksum does not match.'}
           Expand-Archive $zip (Join-Path $env:RUNNER_TEMP 'pflow-package')
       - name: Install, update and reject damaged packages
