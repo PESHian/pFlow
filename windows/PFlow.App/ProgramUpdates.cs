@@ -19,10 +19,15 @@ internal sealed partial class Program
         if (!CanUpdate) throw new InvalidOperationException("Finish dictation and text insertion before updating.");
         string installed = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "pFlow");
         if (!string.Equals(Path.GetFullPath(Environment.ProcessPath!), Path.Combine(installed, "pFlow.exe"), StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("Install pFlow with Install.cmd once before using in-app updates.");
+        string job = Path.Combine(store.DirectoryPath, "Updates", Guid.NewGuid().ToString("N"));
+        await InstallUpdateInJob(offer, progress, cancel, installed, job);
+    }
+    internal async Task InstallUpdateInJob(UpdateOffer offer, IProgress<double> progress, CancellationToken cancel, string installed, string job)
+    {
         updateApplying = true; keyboard.Enabled = false;
-        string job = Path.Combine(store.DirectoryPath, "Updates", Guid.NewGuid().ToString("N")); Directory.CreateDirectory(job);
         Process? helper = null;
         try {
+            Directory.CreateDirectory(job);
             using var client = new UpdateClient(); string archive = Path.Combine(job, "update.zip");
             await client.Download(offer, archive, progress, cancel);
             string package = Path.Combine(job, "package"); await Task.Run(() => ReleaseUpdates.Extract(archive, package), cancel); cancel.ThrowIfCancellationRequested();
@@ -42,7 +47,7 @@ internal sealed partial class Program
             cancel.ThrowIfCancellationRequested();
             Quit(); // Existing shutdown drains the worker and leaves clipboard restoration intact.
         } catch {
-            File.WriteAllText(Path.Combine(job, "cancel"), "cancel");
+            try { if (Directory.Exists(job)) File.WriteAllText(Path.Combine(job, "cancel"), "cancel"); } catch (IOException) { } catch (UnauthorizedAccessException) { }
             if (helper == null || helper.HasExited) { try { Directory.Delete(job, true); } catch (IOException) { } }
             throw;
         } finally {

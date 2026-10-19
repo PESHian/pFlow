@@ -16,6 +16,7 @@ struct MacUpdateProcessTests {
                 let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as! String
                 let path = Bundle.main.object(forInfoDictionaryKey: "PFLOWFixtureRoot") as! String
                 let root = URL(fileURLWithPath: path)
+                if version == "0.3.5", root.lastPathComponent == "startup-failure" { exit(3) }
                 try! String(getpid()).write(to: root.appendingPathComponent("started-" + version), atomically: true, encoding: .utf8)
                 _ = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { _ in
                     let stop = root.appendingPathComponent("stop-" + version)
@@ -45,7 +46,7 @@ struct MacUpdateProcessTests {
             #expect(predicate())
             if !predicate() { throw UpdateError.failed }
         }
-        for scenario in ["success", "cancel", "corrupt"] {
+        for scenario in ["success", "cancel", "corrupt", "startup-failure"] {
             let directory = root.appendingPathComponent(scenario), destination = directory.appendingPathComponent("installed.app")
             let job = directory.appendingPathComponent("job"), stage = directory.appendingPathComponent(".pflow-update-\(UUID().uuidString)")
             try fm.createDirectory(at: job, withIntermediateDirectories: true)
@@ -82,7 +83,11 @@ struct MacUpdateProcessTests {
                     #expect(try fm.contentsOfDirectory(atPath: directory.path).contains(where: { $0.hasPrefix("pFlow.previous-") }))
                 } else {
                     #expect(helper.terminationStatus != 0)
-                    #expect(kill(pid,0) == 0)
+                    if scenario == "startup-failure" {
+                        try await wait { (try? String(contentsOf: started, encoding: .utf8)) != String(pid) }
+                        let restored = try #require(Int32(String(contentsOf: started, encoding: .utf8)))
+                        #expect(kill(restored,0) == 0)
+                    } else { #expect(kill(pid,0) == 0) }
                     #expect(Bundle(url: destination)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == "0.3.4")
                 }
                 #expect(try String(contentsOf: history, encoding: .utf8) == "Private fictional history.")

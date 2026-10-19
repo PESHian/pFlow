@@ -88,6 +88,21 @@ enum MacUpdateInstaller {
         try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path])
         try run("/usr/bin/lipo", ["-verify_arch", "arm64", app.appendingPathComponent("Contents/MacOS/Yap").path])
     }
+    static func launchAndVerify(_ app: URL) throws {
+        try run("/usr/bin/open", ["-n", app.path])
+        let deadline = Date().addingTimeInterval(10)
+        var launched: NSRunningApplication?
+        while launched == nil, Date() < deadline {
+            launched = NSRunningApplication.runningApplications(withBundleIdentifier: "com.pesh.Yap").first { $0.processIdentifier != getpid() && $0.bundleURL?.resolvingSymlinksInPath() == app.resolvingSymlinksInPath() }
+            if launched == nil { Thread.sleep(forTimeInterval: 0.1) }
+        }
+        guard let launched else { throw UpdateError.failed }
+        let stable = Date().addingTimeInterval(2)
+        while Date() < stable {
+            guard kill(launched.processIdentifier, 0) == 0 else { throw UpdateError.failed }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+    }
     // The previous application is retained, including when launch fails.
     static func replace(source: URL, destination: URL, launch: () throws -> Void) throws {
         let fm = FileManager.default
@@ -119,7 +134,7 @@ enum MacUpdateInstaller {
             }
             guard !fm.fileExists(atPath: job.appendingPathComponent("cancel").path), !NSRunningApplication.runningApplications(withBundleIdentifier: "com.pesh.Yap").contains(where: { $0.processIdentifier != getpid() && $0.bundleURL?.resolvingSymlinksInPath() == plan.destination }) else { throw UpdateError.busy }
             restart = plan.destination
-            try replace(source: plan.source, destination: plan.destination) { try run("/usr/bin/open", ["-n", plan.destination.path]) }
+            try replace(source: plan.source, destination: plan.destination) { try launchAndVerify(plan.destination) }
             try Data("installed".utf8).write(to: job.appendingPathComponent("result"), options: .atomic)
             try? fm.removeItem(at: plan.source.deletingLastPathComponent())
             return 0

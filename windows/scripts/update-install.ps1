@@ -11,7 +11,7 @@ try {
     $v=[Diagnostics.FileVersionInfo]::GetVersionInfo((Join-Path $data.package 'pFlow.exe'))
     if("$($v.FileMajorPart).$($v.FileMinorPart).$($v.FileBuildPart)" -ne $data.version){throw 'The new application version does not match.'}
     $files=Get-Content -LiteralPath (Join-Path $data.package 'package-hashes.json') -Raw | ConvertFrom-Json
-    foreach($file in $files){if((Get-FileHash -LiteralPath (Join-Path $data.package $file.path) -Algorithm SHA256).Hash -ne $file.sha256){throw 'The staged update is damaged.'}}
+    foreach($file in $files){if((Get-PFlowFileSha256 (Join-Path $data.package $file.path)) -ne $file.sha256){throw 'The staged update is damaged.'}}
     $old=Get-Process -Id $data.processId -ErrorAction Stop
     if($old.StartTime.ToUniversalTime().Ticks -ne $data.startedTicks -or [PFlowNativeSystemInfo]::ProcessPath($old.Id) -ne (Join-Path $expected 'pFlow.exe')){throw 'The running application changed.'}
     $null=$old.Handle

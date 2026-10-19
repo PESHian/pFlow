@@ -2,6 +2,8 @@ param([Parameter(Mandatory=$true)][ValidateSet('arm64','x64','x86')][string]$Arc
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot -Parent
 $rid="win-$Architecture"
+. "$PSScriptRoot\WindowsArchitecture.ps1"
+if($Architecture -ne (Get-PFlowArchitecture)){Write-Output "NOT RUN: native $Architecture update process fixture requires native $Architecture Windows; package and emulated UI checks still run.";return}
 $fixture=Join-Path $env:RUNNER_TEMP ('pflow update fictional '+[Guid]::NewGuid().ToString('N'))
 $originalLocal=$env:LOCALAPPDATA;$originalRoaming=$env:APPDATA
 $passed=0

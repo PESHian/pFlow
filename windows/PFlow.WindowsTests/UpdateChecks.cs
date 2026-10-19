@@ -12,7 +12,7 @@ internal static partial class Program
     [System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern void GetNativeSystemInfo(IntPtr buffer);
     static void NativeUpdates()
     {
-        _ = Application.Current ?? new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        _ = Application.Current ?? new PFlow.Windows.Program { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         bool ready = false; int checks = 0, installs = 0;
         var offer = new UpdateOffer("0.1.11", "https://github.com/PESHian/pFlow/releases/download/fixture/pFlow-Windows-x64-0.1.11-update.zip", 23, new string('a',64));
         void Invoke(Button button) => ((IInvokeProvider)UIElementAutomationPeer.CreatePeerForElement(button).GetPattern(PatternInterface.Invoke)).Invoke();
@@ -35,6 +35,16 @@ internal static partial class Program
         try {
             var store = new StateStore(root); int opened = 0;
             using var hook = new KeyboardHook(_ => {}) { Enabled = false };
+            var application = (PFlow.Windows.Program)Application.Current;
+            const System.Reflection.BindingFlags fields = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            typeof(PFlow.Windows.Program).GetField("store", fields)!.SetValue(application, store);
+            typeof(PFlow.Windows.Program).GetField("keyboard", fields)!.SetValue(application, hook);
+            string blocked = Path.Combine(root, "Updates"); File.WriteAllText(blocked, "Fictional file blocks directory creation.");
+            bool refused = false;
+            try { application.InstallUpdateInJob(offer, new Progress<double>(), CancellationToken.None, root, Path.Combine(blocked,"job")).GetAwaiter().GetResult(); }
+            catch (IOException) { refused = true; }
+            Check("folder failure restores dictation and permits another update", refused && application.CanUpdate && hook.Enabled == store.Preferences.Enabled);
+            File.Delete(blocked); hook.Enabled = false;
             var settings = new SettingsWindow(store, new Whisper(root), new LocalTextModel(root), hook, () => {}, () => false, () => opened++);
             try { settings.Show(); settings.UpdateLayout(); Drain(); var button = Descendants<Button>(settings).Single(item => item.Content as string == "Check for updates"); button.BringIntoView(); Invoke(button); Until(() => opened == 1); Check("Settings opens updater without starting capture", opened == 1 && !hook.Enabled); }
             finally { settings.Close(); }

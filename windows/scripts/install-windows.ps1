@@ -13,7 +13,7 @@ try {
 Get-ChildItem -LiteralPath $Source -Force | Copy-Item -Destination $staging -Recurse -Force
 if ($SharedModelDirectory) {
     $model = Join-Path $SharedModelDirectory 'ggml-small.bin'
-    if ((Get-Item -LiteralPath $model).Length -ne 487601967 -or (Get-FileHash -LiteralPath $model -Algorithm SHA256).Hash -ne '1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b') {
+    if ((Get-Item -LiteralPath $model).Length -ne 487601967 -or (Get-PFlowFileSha256 $model) -ne '1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b') {
         throw 'The speech model is incomplete or damaged. Your installed app was not changed.'
     }
     New-Item -ItemType Directory -Force "$staging\models" | Out-Null
