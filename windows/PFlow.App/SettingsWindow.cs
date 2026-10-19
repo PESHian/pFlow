@@ -142,6 +142,9 @@ internal sealed partial class SettingsWindow : Window
                 shortcutNotice.Text = "Press one key on its own, then release it. Escape cancels."; timeout.Start();
             } catch (Exception error) { shortcutNotice.Text = error.Message; }
         }
+        // Start after the button's opening Enter/Space has been released.
+        learn.PreviewKeyDown += (_, e) => { if (e.Key is System.Windows.Input.Key.Enter or System.Windows.Input.Key.Space) e.Handled = true; };
+        learn.PreviewKeyUp += (_, e) => { if (e.Key is System.Windows.Input.Key.Enter or System.Windows.Input.Key.Space) { e.Handled = true; BeginSelection(); } };
         void Captured(KeyCapture owner, ActivationKey? key, string? issue) {
             if (!ReferenceEquals(owner,learning)) return;
             CancelSelection(issue ?? "Key detected.");

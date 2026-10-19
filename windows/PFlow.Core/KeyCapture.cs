@@ -3,9 +3,12 @@ namespace PFlow.Core;
 public readonly record struct CaptureRoute(bool Consume = false, ActivationKey? Key = null, string? Issue = null);
 
 // Own every suppressed down through its up, even after cancellation or window close.
-public sealed class KeyCapture(IEnumerable<uint>? initiallyHeld = null)
+public sealed class KeyCapture
 {
-    readonly HashSet<uint> initial = new(initiallyHeld ?? []);
+    public KeyCapture(IEnumerable<uint>? initiallyHeld = null)
+    {
+        if (initiallyHeld?.Any() == true) throw new InvalidOperationException("Release held keys, then choose Press a key again.");
+    }
     readonly HashSet<uint> owned = [];
     ActivationKey? candidate;
     long candidateTime;
@@ -16,17 +19,12 @@ public sealed class KeyCapture(IEnumerable<uint>? initiallyHeld = null)
     public CaptureRoute Process(uint key, uint scan, bool extended, bool down, bool injected, long time)
     {
         if (injected) return default;
-        if (Listening && initial.Count != 0 && down) {
-            Cancel(); return new(Issue: "Release held keys, then choose Press a key again.");
-        }
         uint token = scan == 0 ? key : 0x10000u | (scan & 255) | (extended ? 0x100u : 0);
-        if (initial.Contains(key)) { if (!down) initial.Remove(key); return default; }
         if (!Listening) {
             bool consume = owned.Contains(token);
             if (!down) owned.Remove(token);
             return new(consume);
         }
-        if (initial.Count != 0) return default;
         if (down) {
             if (!owned.Add(token)) return new(true);
             if (key == 0x1B) { Cancel(); return new(true, Issue: "Key selection canceled."); }

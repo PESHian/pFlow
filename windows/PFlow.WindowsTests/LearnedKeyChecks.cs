@@ -45,12 +45,16 @@ internal static partial class Program
             Check("injected AltGr companion still permits a real Right Alt hold",actions.SequenceEqual(new[]{TriggerAction.Start,TriggerAction.Stop}));
         }
         actions.Clear();string root=Path.Combine(Path.GetTempPath(),"pflow-learn-ui-fictional-"+Guid.NewGuid().ToString("N"));
-        using(var waiting=new KeyboardHook(actions.Add,"rightControl",_=>{},key=>key==0x0D)) {
+        bool heldEnter=true;
+        using(var waiting=new KeyboardHook(actions.Add,"rightControl",_=>{},key=>key==0x0D&&heldEnter)) {
             var results=new List<(ActivationKey?key,string?issue)>();waiting.KeyCaptured+=(_,key,issue)=>results.Add((key,issue));
-            waiting.BeginKeyCapture();
             bool Waiting(bool down,uint flags,uint stamp) {bool result=waiting.ProcessKey(new Native.HookKey{Vk=0x0D,Scan=0x1C,Flags=flags,Time=stamp},down,stamp);Drain();return result;}
-            Check("held-key interruption forwards numpad down and cancels with a notice",!Waiting(true,1,4500)&&!waiting.Capturing&&results.Count==1&&results[0].key==null&&results[0].issue!=null);
-            Check("same-VK interruption forwards both Enter releases and repeat",!Waiting(false,1,4600)&&!Waiting(true,0,4700)&&!Waiting(false,0,4800)&&results.Count==1&&actions.Count==0&&waiting.ActivationKey=="rightControl");
+            Waiting(true,0,4410);Waiting(true,1,4420);bool rejected=false;
+            try {waiting.BeginKeyCapture();} catch(InvalidOperationException error) {rejected=error.Message.StartsWith("Release held keys");}
+            Check("both Enter keys held refuse capture without changing the shortcut",rejected&&!waiting.Capturing&&waiting.CanRebind&&waiting.ActivationKey=="rightControl");
+            Check("refused capture forwards original releases and remaining repeat",!Waiting(false,1,4600)&&!Waiting(true,0,4700)&&!Waiting(false,0,4800)&&results.Count==0&&actions.Count==0);
+            heldEnter=false;waiting.BeginKeyCapture();Waiting(true,1,4810);Waiting(false,1,4820);
+            Check("released keys permit a fresh native selection",results.Count==1&&results[0].key?.VirtualKey==0x0D&&!waiting.Capturing);
         }
         try {
             var store=new StateStore(root);hook.SelectActivationKey(store.Preferences.ActivationKey);bool busy=false;
@@ -62,7 +66,15 @@ internal static partial class Program
             }
             ComboBox Picker()=>Descendants<ComboBox>(window).Single(x=>AutomationProperties.GetName(x)=="Activation key");
             try {
-                window.Show();window.UpdateLayout();Drain();Click("Press a key");
+                window.Show();window.UpdateLayout();Drain();
+                foreach(var opening in new[]{System.Windows.Input.Key.Enter,System.Windows.Input.Key.Space}) {
+                    var button=Descendants<Button>(window).Single(x=>x.Content as string=="Press a key");button.BringIntoView();button.Focus();Drain();
+                    var down=new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,PresentationSource.FromVisual(button),1,opening){RoutedEvent=System.Windows.Input.Keyboard.PreviewKeyDownEvent};button.RaiseEvent(down);
+                    Check("opening Enter or Space does not start capture on down",down.Handled&&!hook.Capturing);
+                    var up=new System.Windows.Input.KeyEventArgs(System.Windows.Input.Keyboard.PrimaryDevice,PresentationSource.FromVisual(button),2,opening){RoutedEvent=System.Windows.Input.Keyboard.PreviewKeyUpEvent};button.RaiseEvent(up);
+                    Check("opening Enter or Space starts capture on release",up.Handled&&hook.Capturing);Click("Cancel key selection");
+                }
+                Click("Press a key");
                 Check("native press-key control starts while dictation is disabled",hook.Capturing&&!hook.Enabled&&!Picker().IsEnabled);
                 Event(0x7C,0x64,true,5000);Check("Settings does not save a held candidate",store.Preferences.ActivationKey==ActivationKeys.DefaultId);
                 Event(0x7C,0x64,false,5100);
