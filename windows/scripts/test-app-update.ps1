@@ -36,7 +36,7 @@ try {
         Wait-File ($env:PFLOW_UPDATER_TEST_STARTED+'0.1.10')
         @{package=$package;destination=$installed;version='0.1.11';processId=$old.Id;startedTicks=$old.StartTime.ToUniversalTime().Ticks}|ConvertTo-Json|Set-Content "$job\plan.json" -Encoding UTF8
         $arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$job+'\update-install.ps1" -Plan "'+$job+'\plan.json"'
-        $helper=Start-Process "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList $arguments -PassThru
+        $helper=Start-Process "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList $arguments -PassThru -RedirectStandardError "$job\stderr.txt" -RedirectStandardOutput "$job\stdout.txt"
         try {
             if($scenario -eq 'corrupt') {
                 Check ($helper.WaitForExit(45000) -and $helper.ExitCode -ne 0 -and !$old.HasExited) 'damaged staged file keeps original process running'
@@ -62,6 +62,10 @@ try {
             }
             Check ((Get-FileHash "$env:LOCALAPPDATA\pFlow\history.json").Hash -eq $history) "$scenario keeps private fictional history"
             Check ([IO.File]::ReadAllText("$installed\models\fictional-model.txt") -eq 'Private fictional model marker.') "$scenario keeps existing model bytes"
+        } catch {
+            if(Test-Path "$job\error.txt"){Get-Content "$job\error.txt" -Tail 16}
+            if(Test-Path "$job\stderr.txt"){Get-Content "$job\stderr.txt" -Tail 12}
+            throw
         } finally {
             foreach($v in @('0.1.10','0.1.11')){Set-Content ($env:PFLOW_UPDATER_TEST_STOP+$v) 'stop'}
             $running=Get-Process pFlow -ErrorAction SilentlyContinue|Where-Object{try{$_.Path -eq "$installed\pFlow.exe"}catch{$false}}

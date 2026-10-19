@@ -32,6 +32,7 @@ try {
     Set-Content -LiteralPath (Join-Path $job 'result') -Value 'installed'
     Remove-Item -LiteralPath (Join-Path $job 'update.zip'),$data.package -Recurse -Force -ErrorAction SilentlyContinue
 } catch {
+    ($_ | Out-String) | Set-Content -LiteralPath (Join-Path $job 'error.txt') -Encoding UTF8
     if($installed -and $previous -and (!$new -or $new.HasExited)) {
         $active=Get-Process pFlow -ErrorAction SilentlyContinue | Where-Object {[PFlowNativeSystemInfo]::ProcessPath($_.Id) -eq (Join-Path $expected 'pFlow.exe')}
         if(!$active) {
