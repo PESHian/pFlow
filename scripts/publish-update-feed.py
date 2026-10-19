@@ -44,7 +44,17 @@ def main():
     if not re.fullmatch(r'[A-Za-z0-9._-]{1,100}',a.tag):raise ValueError('Invalid release tag')
     release=json.loads(command(['gh','api',f'repos/{REPO}/releases/tags/{a.tag}']))
     head=json.loads(command(['gh','api',f'repos/{REPO}/git/ref/heads/main']))['object']['sha'] if a.commit else None
-    previous=json.loads(base64.b64decode(json.loads(command(['gh','api',f'repos/{REPO}/contents/updates/feed.json?ref={head}']))['content'])) if a.commit else json.loads((ROOT/'updates/feed.json').read_bytes())
+    if a.commit:
+        previous_data=base64.b64decode(json.loads(command(['gh','api',f'repos/{REPO}/contents/updates/feed.json?ref={head}']))['content'])
+        previous_signature=base64.b64decode(json.loads(command(['gh','api',f'repos/{REPO}/contents/updates/feed.json.sig?ref={head}']))['content'])
+    else:
+        previous_data=(ROOT/'updates/feed.json').read_bytes();previous_signature=(ROOT/'updates/feed.json.sig').read_bytes()
+    if len(previous_data)>65536 or len(previous_signature)>4096:raise ValueError('Invalid existing feed')
+    with tempfile.TemporaryDirectory(prefix='pflow-verify-') as tmp:
+        sigfile=Path(tmp)/'signature';sigfile.write_bytes(base64.b64decode(previous_signature.strip(),validate=True))
+        command(['openssl','dgst','-sha256','-verify',str(ROOT/'updates/public-key.pem'),'-signature',str(sigfile)],previous_data)
+    previous=json.loads(previous_data)
+    if previous.get('schema')!=1:raise ValueError('Unsupported existing feed')
     feed,found=merge(release,previous)
     if not found:print('No newer update assets; existing feed kept.');return
     data=(json.dumps(feed,indent=2,sort_keys=True)+'\n').encode()
