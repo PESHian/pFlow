@@ -92,7 +92,7 @@ internal sealed partial class SettingsWindow : Window
         Navigate(root, "Dictionary", "Teach pFlow names and words it often gets wrong.", Dictionary);
         p = Section(root, "Shortcut"); p.Children.Add(Text("Activation key"));
         var activation = new ComboBox { ItemsSource = ActivationKeys.Choices, DisplayMemberPath = "Name", SelectedValuePath = "Id", SelectedValue = store.Preferences.ActivationKey, Margin = new Thickness(0, 0, 0, 8) };
-        var optionStyle = new Style(typeof(ComboBoxItem), (Style)activation.FindResource(typeof(ComboBoxItem)));
+        var optionStyle = new Style(typeof(ComboBoxItem), (Style)FindResource(typeof(ComboBoxItem)));
         optionStyle.Setters.Add(new Setter(System.Windows.Automation.AutomationProperties.NameProperty, new System.Windows.Data.Binding("Name")));
         activation.ItemContainerStyle = optionStyle;
         System.Windows.Automation.AutomationProperties.SetName(activation, "Activation key"); p.Children.Add(activation);
