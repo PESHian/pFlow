@@ -58,9 +58,13 @@ internal static partial class Program
             window.Show(); window.UpdateLayout(); Drain();
             ComboBox Picker(SettingsWindow view) => Descendants<ComboBox>(view).Single(control => AutomationProperties.GetName(control) == "Activation key");
             void Choose(ComboBox picker, string id) {
-                var parent = new ComboBoxAutomationPeer(picker);
-                var item = new ListBoxItemAutomationPeer(ActivationKeys.Resolve(id), parent);
-                ((ISelectionItemProvider)item.GetPattern(PatternInterface.SelectionItem)).Select(); Drain();
+                picker.BringIntoView();
+                var parent = (ComboBoxAutomationPeer)UIElementAutomationPeer.CreatePeerForElement(picker);
+                var expand = (IExpandCollapseProvider)parent.GetPattern(PatternInterface.ExpandCollapse);
+                expand.Expand(); picker.UpdateLayout(); Drain();
+                var item = parent.GetChildren().OfType<ListBoxItemAutomationPeer>().Single(peer => peer.GetName() == ActivationKeys.Resolve(id).Name);
+                ((ISelectionItemProvider)item.GetPattern(PatternInterface.SelectionItem)).Select();
+                expand.Collapse(); Drain();
             }
             var picker = Picker(window);
             Check("accessible picker offers useful keys without Right Windows", picker.Items.Cast<ActivationKey>().Any(key => key.Id == "rightControl") && picker.Items.Cast<ActivationKey>().Any(key => key.Id == "f9"));
