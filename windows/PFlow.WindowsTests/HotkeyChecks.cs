@@ -1,4 +1,5 @@
 using PFlow.Core;
+using TriggerAction = PFlow.Core.TriggerAction;
 using PFlow.Windows;
 using System.IO;
 using System.Windows;
@@ -58,7 +59,7 @@ internal static partial class Program
             ComboBox Picker(SettingsWindow view) => Descendants<ComboBox>(view).Single(control => AutomationProperties.GetName(control) == "Activation key");
             void Choose(ComboBox picker, string id) {
                 var parent = new ComboBoxAutomationPeer(picker);
-                var item = new ComboBoxItemAutomationPeer(ActivationKeys.Resolve(id), parent);
+                var item = new ListBoxItemAutomationPeer(ActivationKeys.Resolve(id), parent);
                 ((ISelectionItemProvider)item.GetPattern(PatternInterface.SelectionItem)).Select(); Drain();
             }
             var picker = Picker(window);

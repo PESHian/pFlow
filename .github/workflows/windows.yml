@@ -11,6 +11,10 @@ on:
         type: choice
         options: [full, hotkeys]
         default: full
+      skip_core:
+        description: 'Carry a recorded pass only when core code and checks are unchanged'
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -36,9 +40,10 @@ jobs:
         env:
           TARGET_ARCHITECTURE: ${{ matrix.arch }}
           BUILD_SCOPE: ${{ inputs.scope }}
+          SKIP_CORE_CHECKS: ${{ inputs.skip_core }}
         run: |
           if ($env:BUILD_SCOPE -eq 'hotkeys') {
-            ./windows/scripts/ci-hotkeys.ps1 -Architecture $env:TARGET_ARCHITECTURE
+            ./windows/scripts/ci-hotkeys.ps1 -Architecture $env:TARGET_ARCHITECTURE -SkipCoreChecks:($env:SKIP_CORE_CHECKS -eq 'true')
           } else {
             ./windows/scripts/ci-windows.ps1 -Architecture $env:TARGET_ARCHITECTURE
           }

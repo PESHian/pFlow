@@ -1,6 +1,6 @@
 # Rebuild managed code only. Speech/text engines are byte-for-byte from the
 # architecture-tested public baseline; no model or engine work is repeated.
-param([Parameter(Mandatory=$true)][ValidateSet('arm64','x64','x86')][string]$Architecture)
+param([Parameter(Mandatory=$true)][ValidateSet('arm64','x64','x86')][string]$Architecture, [switch]$SkipCoreChecks)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $root = Split-Path $PSScriptRoot -Parent
@@ -30,8 +30,10 @@ dotnet publish "$root\PFlow.App" -c Release -r $rid --self-contained true -p:Run
 if ($LASTEXITCODE) { throw 'Windows app build failed.' }
 Copy-Item "$PSScriptRoot\install-windows.ps1","$PSScriptRoot\WindowsArchitecture.ps1" $dist
 Assert-PFlowArchitecture $dist $Architecture
-dotnet run --project "$root\PFlow.Tests" -c Release -- --hotkeys-only
-if ($LASTEXITCODE) { throw 'Activation routing/preferences checks failed.' }
+if (!$SkipCoreChecks) {
+    dotnet run --project "$root\PFlow.Tests" -c Release -- --hotkeys-only
+    if ($LASTEXITCODE) { throw 'Activation routing/preferences checks failed.' }
+}
 $checks = "$root\dist\checks-$Architecture"
 dotnet publish "$root\PFlow.WindowsTests" -c Release -r $rid --self-contained true -p:RuntimeFrameworkVersion=10.0.13 -o $checks
 if ($LASTEXITCODE) { throw 'Windows integration check build failed.' }
