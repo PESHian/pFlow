@@ -10,6 +10,7 @@ final class RecordingCoordinator {
     }
 
     private(set) var state: State = .idle
+    var updateInProgress = false
     private(set) var lastOutcome: InjectionOutcome?
 
     private let session: DictationSessioning
@@ -42,7 +43,7 @@ final class RecordingCoordinator {
     }
 
     func begin() {
-        guard state == .idle else { return }
+        guard state == .idle, !updateInProgress else { return }
         injector.captureTarget()
         applicationName = injector.targetApplicationName
         applicationBundleID = injector.targetApplicationBundleID

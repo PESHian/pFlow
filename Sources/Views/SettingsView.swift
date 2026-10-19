@@ -27,6 +27,7 @@ struct SettingsView: View {
                 if !app.permissions.allGranted {
                     permissionsBanner
                 }
+                Button("Check for updates…") { MacUpdates.shared.show() }
                 aboutSection
             }
             .padding(Theme.s5)

@@ -1,0 +1,42 @@
+name: Mac updater
+on:
+  push:
+    branches: [feat/in-app-updates]
+    paths: ['Sources/**', 'Tests/ReleaseUpdatesTests.swift', 'project.yml', 'updates/test-vectors.json', '.github/workflows/mac-updates.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build and test native updater
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v xcodegen >/dev/null || brew install xcodegen
+          xcodegen generate
+          xcodebuild -project Yap.xcodeproj -scheme Yap -configuration Release -destination 'platform=macOS' -derivedDataPath build -only-testing:YapTests/ReleaseUpdatesTests CODE_SIGN_IDENTITY=- test > build-updates.log 2>&1 || { tail -60 build-updates.log; exit 1; }
+          tail -20 build-updates.log
+          app=build/Build/Products/Release/Yap.app
+          codesign --verify --deep --strict "$app"
+          "$app/Contents/MacOS/Yap" --check-setup
+          bash release.sh --testing "$app"
+          mv dist/pFlow-0.3.5-testing.dmg dist/pFlow-Mac-0.3.5-testing.dmg
+          (cd dist && shasum -a 256 pFlow-Mac-0.3.5-testing.dmg > pFlow-Mac-0.3.5-testing.dmg.sha256)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: mac-updates-logs
+          path: build-updates.log
+          retention-days: 7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mac-release
+          path: dist/pFlow-Mac-0.3.5-testing.dmg*
+          if-no-files-found: error
+          retention-days: 7

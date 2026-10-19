@@ -11,15 +11,16 @@ internal sealed partial class SettingsWindow : Window
     readonly KeyboardHook keyboard;
     readonly Action appearance;
     readonly Func<bool> busy;
+    readonly Action? checkUpdates;
     CancellationTokenSource? download;
     readonly ContentControl page = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
     UIElement home = null!;
     readonly Dictionary<string, UIElement> navigationPages = [];
     readonly TextBlock notice = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 1) };
-    public SettingsWindow(StateStore store, Whisper whisper, LocalTextModel textModel, KeyboardHook keyboard, Action appearance, Func<bool> busy)
+    public SettingsWindow(StateStore store, Whisper whisper, LocalTextModel textModel, KeyboardHook keyboard, Action appearance, Func<bool> busy, Action? checkUpdates = null)
     {
         this.store = store; this.whisper = whisper; this.keyboard = keyboard; this.appearance = appearance; this.busy = busy;
-        this.textModel = textModel;
+        this.textModel = textModel; this.checkUpdates = checkUpdates;
         Title = "pFlow by Pesh"; WindowStartupLocation = WindowStartupLocation.CenterScreen;
         var area = SystemParameters.WorkArea; double availableWidth = Math.Max(240, area.Width - 32), availableHeight = Math.Max(240, area.Height - 32);
         Width = Math.Min(460, availableWidth); Height = Math.Min(740, availableHeight); MinWidth = Math.Min(420, availableWidth); MinHeight = Math.Min(420, availableHeight);
@@ -141,6 +142,9 @@ internal sealed partial class SettingsWindow : Window
         p = Section(root, "General");
         using (var run = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run"))
             Check(p, "Launch pFlow when I sign in", run?.GetValue("pFlow by Pesh") != null, SetStartup);
+        p = Section(root, "Updates"); p.Children.Add(Text("pFlow " + UpdateWindow.CurrentVersion));
+        p.Children.Add(Button("Check for updates", () => this.checkUpdates?.Invoke()));
+        p.Children.Add(Text("Checks GitHub only when you ask. Settings and History are kept during updates."));
         p = Section(root, "Privacy"); p.Children.Add(Text("Recordings are deleted after processing. Settings and History stay in your Windows user folder. Model downloads need the internet; recording and transcription do not. No cloud model or account is used."));
         return root;
     }

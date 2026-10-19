@@ -4,7 +4,7 @@ using Forms = System.Windows.Forms;
 
 namespace PFlow.Windows;
 
-internal sealed class Program : Application
+internal sealed partial class Program : Application
 {
     StateStore store = null!;
     Whisper whisper = null!;
@@ -48,6 +48,7 @@ internal sealed class Program : Application
             var menu = new Forms.ContextMenuStrip();
             menu.Items.Add("Show recording control", null, (_, _) => Dispatcher.Invoke(capsule.Reveal));
             menu.Items.Add("Settings", null, (_, _) => Dispatcher.Invoke(OpenSettings));
+            menu.Items.Add("Check for updates", null, (_, _) => Dispatcher.Invoke(OpenUpdates));
             menu.Items.Add("History", null, (_, _) => Dispatcher.Invoke(OpenHistory));
             var enabled = new Forms.ToolStripMenuItem("Dictation enabled") { Checked = store.Preferences.Enabled, CheckOnClick = true };
             enabled.CheckedChanged += (_, _) => { store.Preferences.Enabled = keyboard.Enabled = enabled.Checked; store.SavePreferences(); if (!enabled.Checked) Cancel(); };
@@ -90,7 +91,7 @@ internal sealed class Program : Application
     }
     void OnTrigger(TriggerAction action)
     {
-        if (quitting) return;
+        if (quitting || updateApplying) return;
         if (action == TriggerAction.Cancel) { Cancel(); return; }
         if (action is TriggerAction.Start or TriggerAction.Continuous) {
             stopDelay?.Cancel();
@@ -168,7 +169,7 @@ internal sealed class Program : Application
     void OpenSettings()
     {
         if (settings != null) { settings.Activate(); return; }
-        settings = new SettingsWindow(store, whisper, textModel, keyboard, () => capsule.ApplyTheme(), () => operations.Busy);
+        settings = new SettingsWindow(store, whisper, textModel, keyboard, () => capsule.ApplyTheme(), () => operations.Busy || updateApplying, OpenUpdates);
         settings.Closed += (_, _) => settings = null; settings.Show();
     }
     void OpenHistory() { OpenSettings(); settings?.OpenHistoryPage(); }

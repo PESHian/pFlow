@@ -2,6 +2,8 @@ using PFlow.Core;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
+UpdateChecks.Run();
+if (args.Contains("--updates-only")) return;
 HotkeyChecks.Run();
 if (args.Contains("--hotkeys-only")) return;
 int passed = 0;

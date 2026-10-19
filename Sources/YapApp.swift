@@ -7,6 +7,9 @@ import AppKit
 enum YapMain {
     @MainActor
     static func main() {
+        if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--apply-update" {
+            exit(MacUpdateInstaller.apply(URL(fileURLWithPath: CommandLine.arguments[2])))
+        }
         if CommandLine.arguments.contains("--check-setup") {
             let permissions = PermissionsManager()
             permissions.refresh()
@@ -55,6 +58,7 @@ struct YapApp: App {
                 Button("Edit Templates…") { app.openMain(page: .templates) }
             }
             Divider()
+            Button("Check for updates…") { MacUpdates.shared.show() }
             Button("About pFlow") { app.openAbout() }
             Button("Quit pFlow") { NSApplication.shared.terminate(nil) }
         } label: {
@@ -81,6 +85,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         AppState.shared.presentMainWindow()
         return true
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        AppState.shared.coordinator.state == .idle ? .terminateNow : .terminateCancel
     }
 
     /// Yap is a background dictation tool — closing a window must not quit it.
