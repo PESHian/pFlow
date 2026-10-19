@@ -2,7 +2,7 @@ pFlow by Pesh: Windows and Mac installation
 
 WINDOWS: x64 (Intel/AMD), ARM64, or x86 (32-bit)
 
-Use pFlow-Windows-Universal-0.1.10-testing.zip. It contains all three builds.
+Use pFlow-Windows-Universal-0.1.11-testing.zip. It contains all three builds.
 Windows 11 and Windows 10 version 1607 or later are required. Older Windows
 cannot run the included .NET 10 runtime. Microsoft's supported Windows 10
 editions are LTSC/Enterprise; Windows 10/older hardware is not fully tested here.
@@ -35,7 +35,7 @@ copied out of the package without its accompanying files.
 MAC: Apple Silicon, macOS 27 or later
 
 1. Quit pFlow before updating.
-2. Download pFlow-Mac-0.3.4-testing.dmg from the same GitHub releases page.
+2. Download pFlow-Mac-0.3.5-testing.dmg from the same GitHub releases page.
 3. Open the DMG and drag pFlow by Pesh into Applications. Open pFlow there.
 4. This testing build is not notarized. If blocked, follow Apple's Open Anyway
    steps after checking the download: https://support.apple.com/en-us/102445
@@ -49,3 +49,10 @@ Windows VM; Right Command may map to Right Windows in the VM.
 
 These are testing releases. Read the release notes for the exact machines and
 behaviors tested. Architecture support does not promise identical speed on all PCs.
+
+FUTURE UPDATES
+
+In either app, choose Check for updates from its tray/menu bar or Settings,
+then Install and restart. The first updater build needs the normal installation
+above once. Earlier builds do not contain this feature. Published GitHub binary
+releases supply updates; source commits alone do not. Checks are on request.

@@ -22,3 +22,7 @@ Yap.xcodeproj/
 
 # Release artifacts
 dist/
+
+# Local Python caches
+__pycache__/
+*.py[cod]

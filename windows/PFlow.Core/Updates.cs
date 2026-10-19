@@ -63,7 +63,7 @@ public static class ReleaseUpdates
 public sealed class UpdateClient : IDisposable
 {
     readonly HttpClient http;
-    public UpdateClient() { http = new HttpClient(new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false, ConnectTimeout = TimeSpan.FromSeconds(20) }) { Timeout = TimeSpan.FromMinutes(30) }; http.DefaultRequestHeaders.UserAgent.ParseAdd("pFlow-update/1"); http.DefaultRequestHeaders.CacheControl = new() { NoCache = true }; }
+    public UpdateClient(HttpMessageHandler? handler = null) { http = new HttpClient(handler ?? new SocketsHttpHandler { AllowAutoRedirect = false, UseCookies = false, ConnectTimeout = TimeSpan.FromSeconds(20) }) { Timeout = TimeSpan.FromMinutes(30) }; http.DefaultRequestHeaders.UserAgent.ParseAdd("pFlow-update/1"); http.DefaultRequestHeaders.CacheControl = new() { NoCache = true }; }
     async Task<HttpResponseMessage> Get(Uri url, CancellationToken cancel)
     {
         for (int n = 0; n < 5; n++) {

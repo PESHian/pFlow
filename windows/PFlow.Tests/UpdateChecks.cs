@@ -5,6 +5,41 @@ using System.Text.Json;
 
 internal static class UpdateChecks
 {
+    sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancel) { cancel.ThrowIfCancellationRequested(); return Task.FromResult(respond(request)); }
+    }
+    public static async Task Network()
+    {
+        int passed = 0;
+        void Check(string name, bool value) { if (!value) throw new Exception("FAIL: " + name); passed++; Console.WriteLine("PASS: " + name); }
+        string root = Path.Combine(Path.GetTempPath(), "pflow-update-network-fictional-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+        byte[] bytes = "Fictional update bytes."u8.ToArray();
+        var offer = new UpdateOffer("0.1.11", "https://github.com/PESHian/pFlow/releases/download/fixture/pFlow-Windows-x64-0.1.11-update.zip", bytes.Length, Convert.ToHexStringLower(SHA256.HashData(bytes)));
+        HttpResponseMessage Ok(byte[] data) => new(System.Net.HttpStatusCode.OK) { Content = new ByteArrayContent(data) };
+        try {
+            using (var client = new UpdateClient(new Handler(request => { Check("download sends no authentication or personal headers", request.Headers.Authorization == null && request.Headers.UserAgent.ToString() == "pFlow-update/1"); return Ok(bytes); }))) {
+                string file = Path.Combine(root, "good.zip"); await client.Download(offer, file, new Progress<double>(), CancellationToken.None);
+                Check("complete download exact hash and bytes", File.ReadAllBytes(file).SequenceEqual(bytes));
+            }
+            foreach (var data in new[] { "Changed update bytes!!"u8.ToArray(), bytes.Concat(new byte[] { 1 }).ToArray() }) {
+                using var client = new UpdateClient(new Handler(_ => Ok(data))); bool refused = false;
+                try { await client.Download(offer, Path.Combine(root, Guid.NewGuid().ToString("N")), new Progress<double>(), CancellationToken.None); } catch (InvalidDataException) { refused = true; }
+                Check("damaged or oversized download refused", refused);
+            }
+            int requests = 0;
+            using (var client = new UpdateClient(new Handler(_ => { requests++; var response = new HttpResponseMessage(System.Net.HttpStatusCode.Redirect); response.Headers.Location = new Uri("https://attacker.example/never-fetch"); return response; }))) {
+                bool refused = false; try { await client.Download(offer, Path.Combine(root, "redirect.zip"), new Progress<double>(), CancellationToken.None); } catch (InvalidDataException) { refused = true; }
+                Check("foreign redirect never requested", refused && requests == 1);
+            }
+            using (var client = new UpdateClient(new Handler(_ => Ok(bytes)))) {
+                using var cancel = new CancellationTokenSource(); cancel.Cancel(); bool canceled = false;
+                try { await client.Download(offer, Path.Combine(root, "canceled.zip"), new Progress<double>(), cancel.Token); } catch (OperationCanceledException) { canceled = true; }
+                Check("canceled download never creates executable output", canceled && !File.Exists(Path.Combine(root, "canceled.zip")));
+            }
+        } finally { Directory.Delete(root, true); }
+        Console.WriteLine($"{passed} update network checks passed.");
+    }
     public static void Run()
     {
         int passed = 0;

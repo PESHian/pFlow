@@ -40,6 +40,7 @@ dotnet publish "$root\PFlow.WindowsTests" -c Release -r $rid --self-contained tr
 if ($LASTEXITCODE) { throw 'Windows integration check build failed.' }
 if ($UpdatesOnly) { & "$checks\PFlow.WindowsTests.exe" --updates-only } else { & "$checks\PFlow.WindowsTests.exe" }
 if ($LASTEXITCODE) { throw 'Private native hotkey/settings/clipboard checks failed.' }
+if ($UpdatesOnly) { & "$PSScriptRoot\test-app-update.ps1" -Architecture $Architecture }
 $version = ([xml](Get-Content "$root\PFlow.App\PFlow.App.csproj")).Project.PropertyGroup.Version
 "pFlow $version; $rid; source $env:GITHUB_SHA; .NET 10.0.13; verified 0.1.9 CPU engines reused" | Set-Content "$dist\BUILD.txt" -Encoding ASCII
 if (Get-ChildItem $dist -Filter '*.pdb' -Recurse) { throw 'Debug symbols must not be distributed.' }

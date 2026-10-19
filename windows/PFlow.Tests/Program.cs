@@ -2,7 +2,9 @@ using PFlow.Core;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
+if (args.Contains("--updates-network-only")) { await UpdateChecks.Network(); return; }
 UpdateChecks.Run();
+if (!args.Contains("--hotkeys-only")) await UpdateChecks.Network();
 if (args.Contains("--updates-only")) return;
 HotkeyChecks.Run();
 if (args.Contains("--hotkeys-only")) return;

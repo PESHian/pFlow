@@ -1,7 +1,7 @@
 param([Parameter(Mandatory=$true)][string]$Plan)
 $ErrorActionPreference='Stop'
 $job=Split-Path -Parent $Plan
-$installed=$false; $previous=$null; $new=$null
+$installed=$false; $previous=$null; $new=$null; $old=$null
 try {
     $data=Get-Content -LiteralPath $Plan -Raw | ConvertFrom-Json
     $expected=Join-Path $env:LOCALAPPDATA 'Programs\pFlow'
@@ -39,6 +39,10 @@ try {
             Move-Item -LiteralPath $previous -Destination $expected
             Start-Process -FilePath (Join-Path $expected 'pFlow.exe')
         }
+    }
+    if($old -and $old.HasExited -and (Test-Path (Join-Path $expected 'pFlow.exe'))) {
+        $active=Get-Process pFlow -ErrorAction SilentlyContinue | Where-Object {[PFlowNativeSystemInfo]::ProcessPath($_.Id) -eq (Join-Path $expected 'pFlow.exe')}
+        if(!$active){Start-Process -FilePath (Join-Path $expected 'pFlow.exe')}
     }
     # The existing installer rolls back a failed folder replacement. Retain the
     # previous folder and this job on all failures; never kill a running process.

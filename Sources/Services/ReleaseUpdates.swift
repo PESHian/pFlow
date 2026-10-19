@@ -104,6 +104,7 @@ enum MacUpdateInstaller {
     }
     static func apply(_ file: URL) -> Int32 {
         let fm = FileManager.default, job = file.deletingLastPathComponent()
+        var restart: URL?
         do {
             let plan = try JSONDecoder().decode(MacUpdatePlan.self, from: Data(contentsOf: file))
             guard plan.source.lastPathComponent == "pFlow.app", plan.source.deletingLastPathComponent().lastPathComponent.hasPrefix(".pflow-update-"), plan.source.deletingLastPathComponent().deletingLastPathComponent() == plan.destination.deletingLastPathComponent(),
@@ -117,11 +118,13 @@ enum MacUpdateInstaller {
                 Thread.sleep(forTimeInterval: 0.1)
             }
             guard !fm.fileExists(atPath: job.appendingPathComponent("cancel").path), !NSRunningApplication.runningApplications(withBundleIdentifier: "com.pesh.Yap").contains(where: { $0.processIdentifier != getpid() && $0.bundleURL?.resolvingSymlinksInPath() == plan.destination }) else { throw UpdateError.busy }
+            restart = plan.destination
             try replace(source: plan.source, destination: plan.destination) { try run("/usr/bin/open", ["-n", plan.destination.path]) }
             try Data("installed".utf8).write(to: job.appendingPathComponent("result"), options: .atomic)
             try? fm.removeItem(at: plan.source.deletingLastPathComponent())
             return 0
         } catch {
+            if let destination = restart, !NSRunningApplication.runningApplications(withBundleIdentifier: "com.pesh.Yap").contains(where: { $0.processIdentifier != getpid() && $0.bundleURL?.resolvingSymlinksInPath() == destination }) { try? run("/usr/bin/open", ["-n", destination.path]) }
             try? Data("Update failed. The previous application was kept.".utf8).write(to: job.appendingPathComponent("result"), options: .atomic)
             return 1
         }

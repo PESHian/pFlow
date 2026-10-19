@@ -1,0 +1,40 @@
+name: Publish signed update feed
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Published release tag'
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: pflow-update-feed
+  cancel-in-progress: false
+jobs:
+  feed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Sign and publish released binary metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PFLOW_UPDATE_SIGNING_KEY: ${{ secrets.PFLOW_UPDATE_SIGNING_KEY }}
+          RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, subprocess, tempfile
+          secret=os.environ.pop('PFLOW_UPDATE_SIGNING_KEY','')
+          if not secret: raise SystemExit('Configure the private PFLOW_UPDATE_SIGNING_KEY repository secret before publishing updates.')
+          fd,name=tempfile.mkstemp(prefix='pflow-signing-',dir=os.environ['RUNNER_TEMP'])
+          try:
+              with os.fdopen(fd,'w') as file: file.write(secret)
+              os.chmod(name,0o600)
+              subprocess.run(['python3','scripts/publish-update-feed.py',os.environ['RELEASE_TAG'],'--key',name,'--commit'],check=True)
+          finally: pathlib.Path(name).unlink(missing_ok=True)
+          PY

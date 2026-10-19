@@ -10,8 +10,8 @@ These are testing builds. macOS and Windows may show an unsigned or unnotarized 
 
 | Platform | Download | Requirements |
 | --- | --- | --- |
-| Mac | pFlow-Mac-0.3.4-testing.dmg | Apple Silicon, macOS 27 or later |
-| Windows | pFlow-Windows-Universal-0.1.10-testing.zip | Windows x64 (Intel/AMD), ARM64, or x86; Windows 10 1607+ / Windows 11 |
+| Mac | pFlow-Mac-0.3.5-testing.dmg | Apple Silicon, macOS 27 or later |
+| Windows | pFlow-Windows-Universal-0.1.11-testing.zip | Windows x64 (Intel/AMD), ARM64, or x86; Windows 10 1607+ / Windows 11 |
 
 ### Mac
 
@@ -28,6 +28,10 @@ The Windows download includes the Whisper speech model and .NET runtime. AI clea
 No administrator password, separate .NET installation, or architecture choice is needed. Do not run an EXE copied out of its payload folder. See [full installation instructions](windows/INSTALLATION.txt). Windows 10 builds require version 1607 or later; Microsoft supports .NET 10 on its listed LTSC/Enterprise editions. Windows 7, 8, Windows RT/ARM32, and older releases are unsupported.
 
 Quit pFlow before updating. Turn Mac dictation off before testing Windows recording in a VM on the same Mac.
+
+## Updates
+
+Choose **Check for updates** in the tray/menu bar or Settings, then **Install and restart**. pFlow checks a signed release list and verifies the download before replacing the app. Settings, history, and models stay on your device. Checks run only when requested. Install this updater release once using the steps above; earlier builds cannot update themselves. Published GitHub binary releases become available in the app; source commits alone do not.
 
 ## Features
 

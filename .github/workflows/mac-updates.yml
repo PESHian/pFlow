@@ -2,7 +2,7 @@ name: Mac updater
 on:
   push:
     branches: [feat/in-app-updates]
-    paths: ['Sources/**', 'Tests/ReleaseUpdatesTests.swift', 'project.yml', 'updates/test-vectors.json', '.github/workflows/mac-updates.yml']
+    paths: ['Sources/**', 'Tests/*Update*Tests.swift', 'project.yml', 'updates/test-vectors.json', '.github/workflows/mac-updates.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -20,7 +20,7 @@ jobs:
           set -euo pipefail
           command -v xcodegen >/dev/null || brew install xcodegen
           xcodegen generate
-          xcodebuild -project Yap.xcodeproj -scheme Yap -configuration Release -destination 'platform=macOS' -derivedDataPath build -only-testing:YapTests/ReleaseUpdatesTests CODE_SIGN_IDENTITY=- ENABLE_TESTABILITY=YES test > build-updates.log 2>&1 || { tail -60 build-updates.log; exit 1; }
+          xcodebuild -project Yap.xcodeproj -scheme Yap -configuration Release -destination 'platform=macOS' -derivedDataPath build -only-testing:YapTests/ReleaseUpdatesTests -only-testing:YapTests/MacUpdateProcessTests CODE_SIGN_IDENTITY=- ENABLE_TESTABILITY=YES test > build-updates.log 2>&1 || { tail -60 build-updates.log; exit 1; }
           tail -20 build-updates.log
           app=build/Build/Products/Release/Yap.app
           codesign --verify --deep --strict "$app"
