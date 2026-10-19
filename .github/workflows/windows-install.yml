@@ -1,14 +1,10 @@
 name: Windows universal installation
 on:
-  push:
-    branches: [feat/windows-universal]
-    paths: ['.github/workflows/windows-install.yml']
   workflow_dispatch:
     inputs:
       release:
         description: 'Release containing the universal ZIP (draft or published)'
         required: true
-        default: pflow-desktop-2026.10.19
       version:
         description: 'Windows app version in the ZIP filename'
         required: true
@@ -16,7 +12,6 @@ on:
       sha256:
         description: 'Expected universal ZIP SHA-256'
         required: true
-        default: 366061b5cb0fffe1ac224c7f31f435cb70fc32e3655d188c252c011b09128cce
 permissions:
   contents: read
 jobs:
@@ -35,8 +30,8 @@ jobs:
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       DOTNET_NOLOGO: '1'
       APP_VERSION: ${{ inputs.version || '0.1.10' }}
-      RELEASE_TAG: ${{ inputs.release || 'pflow-desktop-2026.10.19' }}
-      EXPECTED_SHA: ${{ inputs.sha256 || '366061b5cb0fffe1ac224c7f31f435cb70fc32e3655d188c252c011b09128cce' }}
+      RELEASE_TAG: ${{ inputs.release }}
+      EXPECTED_SHA: ${{ inputs.sha256 }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
