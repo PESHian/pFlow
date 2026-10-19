@@ -45,6 +45,13 @@ internal static partial class Program
             Check("injected AltGr companion still permits a real Right Alt hold",actions.SequenceEqual(new[]{TriggerAction.Start,TriggerAction.Stop}));
         }
         actions.Clear();string root=Path.Combine(Path.GetTempPath(),"pflow-learn-ui-fictional-"+Guid.NewGuid().ToString("N"));
+        using(var waiting=new KeyboardHook(actions.Add,"rightControl",_=>{},key=>key==0x0D)) {
+            var results=new List<(ActivationKey?key,string?issue)>();waiting.KeyCaptured+=(_,key,issue)=>results.Add((key,issue));
+            waiting.BeginKeyCapture();
+            bool Waiting(bool down,uint flags,uint stamp) {bool result=waiting.ProcessKey(new Native.HookKey{Vk=0x0D,Scan=0x1C,Flags=flags,Time=stamp},down,stamp);Drain();return result;}
+            Check("held-key interruption forwards numpad down and cancels with a notice",!Waiting(true,1,4500)&&!waiting.Capturing&&results.Count==1&&results[0].key==null&&results[0].issue!=null);
+            Check("same-VK interruption forwards both Enter releases and repeat",!Waiting(false,1,4600)&&!Waiting(true,0,4700)&&!Waiting(false,0,4800)&&results.Count==1&&actions.Count==0&&waiting.ActivationKey=="rightControl");
+        }
         try {
             var store=new StateStore(root);hook.SelectActivationKey(store.Preferences.ActivationKey);bool busy=false;
             SettingsWindow Make(StateStore data)=>new(data,new Whisper(root),new LocalTextModel(root),hook,()=>{},()=>busy);

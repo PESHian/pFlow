@@ -37,12 +37,26 @@ internal static class KeyCaptureChecks
             var held=new KeyCapture([0xA2]);
             Check("keys already held keep their original up",held.Process(0xA2,0x1D,false,false,false,1000)==default);
             var waiting=new KeyCapture([0xA2]);
-            Check("key pressed while waiting keeps its original down",waiting.Process(0x41,0x1E,false,true,false,1000)==default);
+            var interrupted=waiting.Process(0x41,0x1E,false,true,false,1000);
+            Check("key pressed while waiting cancels without consuming its down",!interrupted.Consume&&interrupted.Issue!=null&&waiting.Drained);
             waiting.Process(0xA2,0x1D,false,false,false,1100);
             Check("forwarded held key repeat is not learned",waiting.Process(0x41,0x1E,false,true,false,1200)==default);
-            Check("forwarded held key keeps its release",waiting.Process(0x41,0x1E,false,false,false,1300)==default && waiting.Listening);
-            waiting.Process(0x41,0x1E,false,true,false,1400);
-            Check("fresh press after all forwarded releases can be learned",waiting.Process(0x41,0x1E,false,false,false,1500).Key?.VirtualKey==0x41);
+            Check("forwarded held key keeps its release",waiting.Process(0x41,0x1E,false,false,false,1300)==default);
+            var fresh=new KeyCapture();fresh.Process(0x41,0x1E,false,true,false,1400);
+            Check("fresh selection after all forwarded releases can be learned",fresh.Process(0x41,0x1E,false,false,false,1500).Key?.VirtualKey==0x41);
+            foreach(bool numpadFirst in new[]{true,false}) {
+                var shared=new KeyCapture([0x0D]);
+                Check("same-VK second physical key cancels without taking its down",shared.Process(0x0D,0x1C,true,true,false,1600) is {Consume:false,Issue:not null});
+                shared.Process(0x0D,0x1C,numpadFirst,false,false,1700);
+                Check("both Enter release orders keep the remaining repeat and up",shared.Process(0x0D,0x1C,!numpadFirst,true,false,1800)==default && shared.Process(0x0D,0x1C,!numpadFirst,false,false,1900)==default && shared.Drained);
+            }
+            var repeating=new KeyCapture([0xA2]);
+            Check("initial held repeat cancels without consuming",repeating.Process(0xA2,0x1D,false,true,false,2000) is {Consume:false,Issue:not null});
+            Check("initial repeat cancellation reports once and keeps original up",repeating.Process(0xA2,0x1D,false,true,false,2100)==default&&repeating.Process(0xA2,0x1D,false,false,false,2200)==default);
+            foreach(uint opening in new uint[]{0x0D,0x20}) {
+                var opened=new KeyCapture([opening]);opened.Process(opening,0,false,false,false,2300);opened.Process(0x41,0x1E,false,true,false,2400);
+                Check("opening Enter or Space release permits a fresh selection",opened.Process(0x41,0x1E,false,false,false,2500).Key?.VirtualKey==0x41);
+            }
             var cancel=new KeyCapture();cancel.Process(0x41,0x1E,false,true,false,1000);cancel.Cancel();
             Check("cancel still owns repeats",cancel.Process(0x41,0x1E,false,true,false,1100).Consume);
             Check("cancel preserves other typing",cancel.Process(0x42,0x30,false,true,false,1200)==default);
