@@ -2,7 +2,7 @@ pFlow by Pesh: Windows and Mac installation
 
 WINDOWS: x64 (Intel/AMD), ARM64, or x86 (32-bit)
 
-Use pFlow-Windows-Universal-0.1.11-testing.zip. It contains all three builds.
+Use pFlow-Windows-Universal-0.1.12-testing.zip. It contains all three builds.
 Windows 11 and Windows 10 version 1607 or later are required. Older Windows
 cannot run the included .NET 10 runtime. Microsoft's supported Windows 10
 editions are LTSC/Enterprise; Windows 10/older hardware is not fully tested here.
@@ -49,6 +49,13 @@ Windows VM; Right Command may map to Right Windows in the VM.
 
 These are testing releases. Read the release notes for the exact machines and
 behaviors tested. Architecture support does not promise identical speed on all PCs.
+
+SETTINGS AND PROCESSING TIME
+
+On/off controls show their state in words and with a moving thumb. Settings
+shows the last dictation time, split into Speech, AI cleanup, Report, and
+Insertion when those stages ran. The timing record has no dictated words.
+AI cleanup remains optional and keeps your saved choice.
 
 FUTURE UPDATES
 

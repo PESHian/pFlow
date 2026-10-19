@@ -1,6 +1,6 @@
 # Rebuild managed code only. Speech/text engines are byte-for-byte from the
 # architecture-tested public baseline; no model or engine work is repeated.
-param([Parameter(Mandatory=$true)][ValidateSet('arm64','x64','x86')][string]$Architecture, [switch]$SkipCoreChecks, [switch]$UpdatesOnly)
+param([Parameter(Mandatory=$true)][ValidateSet('arm64','x64','x86')][string]$Architecture, [switch]$SkipCoreChecks, [switch]$UpdatesOnly, [switch]$ControlsOnly)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $root = Split-Path $PSScriptRoot -Parent
@@ -38,7 +38,7 @@ if (!$SkipCoreChecks) {
 $checks = "$root\dist\checks-$Architecture"
 dotnet publish "$root\PFlow.WindowsTests" -c Release -r $rid --self-contained true -p:RuntimeFrameworkVersion=10.0.13 -o $checks
 if ($LASTEXITCODE) { throw 'Windows integration check build failed.' }
-if ($UpdatesOnly) { & "$checks\PFlow.WindowsTests.exe" --updates-only } else { & "$checks\PFlow.WindowsTests.exe" }
+if ($ControlsOnly) { & "$checks\PFlow.WindowsTests.exe" --controls-only } elseif ($UpdatesOnly) { & "$checks\PFlow.WindowsTests.exe" --updates-only } else { & "$checks\PFlow.WindowsTests.exe" }
 if ($LASTEXITCODE) { throw 'Private native hotkey/settings/clipboard checks failed.' }
 if ($UpdatesOnly) { & "$PSScriptRoot\test-app-update.ps1" -Architecture $Architecture }
 $version = ([xml](Get-Content "$root\PFlow.App\PFlow.App.csproj")).Project.PropertyGroup.Version

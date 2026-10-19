@@ -31,7 +31,7 @@ internal static class PeshTheme
             ["PeshBackground"] = light ? "F6F2F9" : "08070D", ["PeshText"] = light ? "20182A" : "DEDCE3",
             ["PeshMuted"] = light ? "685B74" : "A39EAD", ["PeshCard"] = light ? "C7FFFFFF" : "D91A1526",
             ["PeshInput"] = light ? "FCFAFE" : "120F1B", ["PeshBorder"] = light ? "D8CEDF" : "332D40",
-            ["PeshTile"] = light ? "EDE8F2" : "1A1526", ["PeshSegment"] = light ? "E3DCEB" : "2B2634", ["PeshAccentInk"] = AccentInk(preferences.Accent),
+            ["PeshToggleOff"] = light ? "E3DCEB" : "55475F", ["PeshTile"] = light ? "EDE8F2" : "1A1526", ["PeshSegment"] = light ? "E3DCEB" : "2B2634", ["PeshAccentInk"] = AccentInk(preferences.Accent),
             ["PeshHover"] = light ? "EFE7F7" : "2B203A", ["PeshSelection"] = light ? "EEDDFA" : "402E55", ["PeshAccent"] = preferences.Accent
         };
         foreach (var pair in values) window.Resources[pair.Key] = Brush(pair.Value);

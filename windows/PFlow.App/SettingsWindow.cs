@@ -13,6 +13,7 @@ internal sealed partial class SettingsWindow : Window
     readonly Func<bool> busy;
     readonly Action? checkUpdates;
     CancellationTokenSource? download;
+    readonly TextBlock processingTime = Text("Processing time appears here after your next dictation.");
     readonly ContentControl page = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
     UIElement home = null!;
     readonly Dictionary<string, UIElement> navigationPages = [];
@@ -31,7 +32,9 @@ internal sealed partial class SettingsWindow : Window
         var blend = new Border { IsHitTestVisible = false }; blend.SetResourceReference(Border.BackgroundProperty, "PeshGlowSecondary");
         canvas.Children.Add(glow); canvas.Children.Add(blend); canvas.Children.Add(page); Content = canvas;
         home = Scroll(General()); ShowHome(); ApplyTheme(); SourceInitialized += (_, _) => ApplyTheme();
-        Closed += (_, _) => download?.Cancel();
+        processingTime.Text = ProcessingTimes.Read(store.DirectoryPath);
+        var timingRefresh = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(1), System.Windows.Threading.DispatcherPriority.Background, (_, _) => { if (IsVisible && !busy()) processingTime.Text = ProcessingTimes.Read(store.DirectoryPath); }, Dispatcher);
+        Closed += (_, _) => { download?.Cancel(); timingRefresh.Stop(); };
     }
     static StackPanel Panel() => new() { Margin = new Thickness(20) };
     static TextBlock Text(string value) => new() { Text = value, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 5), LineHeight = 19 };
@@ -80,7 +83,8 @@ internal sealed partial class SettingsWindow : Window
     {
         var check = new CheckBox { Content = label, IsChecked = value, Margin = new Thickness(0, 1, 0, 1) };
         System.Windows.Automation.AutomationProperties.SetName(check, label);
-        check.Click += (_, _) => { change(check.IsChecked == true); Save(); }; panel.Children.Add(check);
+        void Changed(object sender, RoutedEventArgs e) { change(check.IsChecked == true); Save(); }
+        check.Checked += Changed; check.Unchecked += Changed; panel.Children.Add(check);
     }
     UIElement General()
     {
@@ -136,6 +140,7 @@ internal sealed partial class SettingsWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(language, "Speech language");
         language.SelectionChanged += (_, _) => { if (language.SelectedValue is string value) { store.Preferences.Language = value; store.SavePreferences(); } };
         p.Children.Add(language);
+        p.Children.Add(processingTime);
         p.Children.Add(Text($"Microphone devices: {WaveRecorder.waveInGetNumDevs()}. Windows microphone access must allow desktop apps."));
         p.Children.Add(Button("Download or repair Whisper model (488 MB)", Download));
         p.Children.Add(Button("Cancel download", () => download?.Cancel())); p.Children.Add(notice);

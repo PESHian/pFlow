@@ -11,7 +11,7 @@ These are testing builds. macOS and Windows may show an unsigned or unnotarized 
 | Platform | Download | Requirements |
 | --- | --- | --- |
 | Mac | pFlow-Mac-0.3.5-testing.dmg | Apple Silicon, macOS 27 or later |
-| Windows | pFlow-Windows-Universal-0.1.11-testing.zip | Windows x64 (Intel/AMD), ARM64, or x86; Windows 10 1607+ / Windows 11 |
+| Windows | pFlow-Windows-Universal-0.1.12-testing.zip | Windows x64 (Intel/AMD), ARM64, or x86; Windows 10 1607+ / Windows 11 |
 
 ### Mac
 
@@ -32,6 +32,8 @@ Quit pFlow before updating. Turn Mac dictation off before testing Windows record
 ## Updates
 
 Choose **Check for updates** in the tray/menu bar or Settings, then **Install and restart**. pFlow checks a signed release list and verifies the download before replacing the app. Settings, history, and models stay on your device. Checks run only when requested. Install this updater release once using the steps above; earlier builds cannot update themselves. Published GitHub binary releases become available in the app; source commits alone do not.
+
+Windows on/off controls show **On** or **Off** and a contrasting thumb. Settings shows the latest dictation time split into speech, AI cleanup, report formatting, and insertion when those stages ran. This readout contains no dictated words. AI cleanup remains optional; this release does not claim a processing speed improvement.
 
 ## Features
 

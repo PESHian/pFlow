@@ -66,15 +66,19 @@
       <Border x:Name="row" Padding="0,8" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" CornerRadius="8">
         <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
           <ContentPresenter Margin="0,0,16,0" VerticalAlignment="Center"><ContentPresenter.ContentTemplate><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap"/></DataTemplate></ContentPresenter.ContentTemplate></ContentPresenter>
-          <Border x:Name="track" Grid.Column="1" Width="34" Height="20" CornerRadius="10" Background="{DynamicResource PeshBorder}" VerticalAlignment="Center">
-            <Ellipse x:Name="thumb" Width="14" Height="14" HorizontalAlignment="Left" Margin="3" Fill="{DynamicResource PeshMuted}"/>
-          </Border>
+          <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+            <TextBlock x:Name="state" Text="Off" Width="28" Margin="0,0,8,0" VerticalAlignment="Center" Foreground="{DynamicResource PeshText}" FontWeight="SemiBold"/>
+            <Border x:Name="track" Width="40" Height="24" CornerRadius="12" Background="{DynamicResource PeshToggleOff}" BorderBrush="{DynamicResource PeshMuted}" BorderThickness="1">
+              <Ellipse x:Name="thumb" Width="16" Height="16" HorizontalAlignment="Left" Margin="3" Fill="{DynamicResource PeshText}"/>
+            </Border>
+          </StackPanel>
         </Grid>
       </Border>
       <ControlTemplate.Triggers>
-        <Trigger Property="IsChecked" Value="True"><Setter TargetName="track" Property="Background" Value="{DynamicResource PeshAccent}"/><Setter TargetName="thumb" Property="HorizontalAlignment" Value="Right"/><Setter TargetName="thumb" Property="Fill" Value="#211326"/></Trigger>
-        <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="row" Property="BorderBrush" Value="{DynamicResource PeshAccent}"/></Trigger>
-        <Trigger Property="IsEnabled" Value="False"><Setter TargetName="row" Property="Opacity" Value="0.45"/></Trigger>
+        <Trigger Property="IsChecked" Value="True"><Setter TargetName="track" Property="Background" Value="{DynamicResource PeshAccent}"/><Setter TargetName="thumb" Property="HorizontalAlignment" Value="Right"/><Setter TargetName="thumb" Property="Fill" Value="{DynamicResource PeshAccentInk}"/><Setter TargetName="state" Property="Text" Value="On"/></Trigger>
+        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="track" Property="BorderBrush" Value="{DynamicResource PeshText}"/></Trigger>
+        <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="row" Property="BorderBrush" Value="{DynamicResource PeshText}"/></Trigger>
+        <Trigger Property="IsEnabled" Value="False"><Setter TargetName="row" Property="Opacity" Value="0.65"/></Trigger>
       </ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
   </Style>
