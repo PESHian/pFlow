@@ -60,6 +60,7 @@ AI cleanup remains optional and keeps your saved choice.
 FUTURE UPDATES
 
 In either app, choose Check for updates from its tray/menu bar or Settings,
-then Install and restart. The first updater build needs the normal installation
-above once. Earlier builds do not contain this feature. Published GitHub binary
-releases supply updates; source commits alone do not. Checks are on request.
+then Install and restart. If your app has no Check for updates button, install a
+current build once using the steps above. Windows 0.1.11 and Mac 0.3.5 or later
+include the updater. Published GitHub binary releases supply updates; source
+commits alone do not. Checks are on request.

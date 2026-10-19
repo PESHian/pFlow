@@ -31,7 +31,7 @@ Quit pFlow before updating. Turn Mac dictation off before testing Windows record
 
 ## Updates
 
-Choose **Check for updates** in the tray/menu bar or Settings, then **Install and restart**. pFlow checks a signed release list and verifies the download before replacing the app. Settings, history, and models stay on your device. Checks run only when requested. Install this updater release once using the steps above; earlier builds cannot update themselves. Published GitHub binary releases become available in the app; source commits alone do not.
+Choose **Check for updates** in the tray/menu bar or Settings, then **Install and restart**. pFlow checks a signed release list and verifies the download before replacing the app. Settings, history, and models stay on your device. Checks run only when requested. If your app has no Check for updates button, install a current build once using the steps above. Windows 0.1.11 and Mac 0.3.5 or later include the updater. Published GitHub binary releases become available in the app; source commits alone do not.
 
 Windows on/off controls show **On** or **Off** and a contrasting thumb. Settings shows the latest dictation time split into speech, AI cleanup, report formatting, and insertion when those stages ran. This readout contains no dictated words. AI cleanup remains optional; this release does not claim a processing speed improvement.
 
