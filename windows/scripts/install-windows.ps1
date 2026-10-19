@@ -3,12 +3,13 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\WindowsArchitecture.ps1"
 Assert-PFlowArchitecture $Source
 $destination = Join-Path $env:LOCALAPPDATA 'Programs\pFlow'
-$running = Get-Process pFlow -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq "$destination\pFlow.exe" }
+$running = Get-Process pFlow -ErrorAction SilentlyContinue | Where-Object { [PFlowNativeSystemInfo]::ProcessPath($_.Id) -eq "$destination\pFlow.exe" }
 if ($running) { throw 'Quit pFlow before updating it. Your settings and History will be kept.' }
 if (!(Test-Path "$Source\pFlow.exe") -or !(Test-Path "$Source\engine\whisper-cli.exe") -or !(Test-Path "$Source\engine\pflow-whisper.exe")) { throw 'The portable package is incomplete.' }
 $staging = "$destination.new"
 if (Test-Path $staging) { throw 'An earlier installation is unfinished. Keep that folder and check it before installing again.' }
 New-Item -ItemType Directory -Force $staging | Out-Null
+try {
 Get-ChildItem -LiteralPath $Source -Force | Copy-Item -Destination $staging -Recurse -Force
 if ($SharedModelDirectory) {
     $model = Join-Path $SharedModelDirectory 'ggml-small.bin'
@@ -18,10 +19,25 @@ if ($SharedModelDirectory) {
     New-Item -ItemType Directory -Force "$staging\models" | Out-Null
     Copy-Item -LiteralPath $model -Destination "$staging\models\ggml-small.bin"
 }
-if (Test-Path $destination) { Move-Item $destination "$destination.previous-$(Get-Date -Format yyyyMMddHHmmss)" }
-Move-Item $staging $destination
+} catch {
+    Remove-Item -LiteralPath $staging -Recurse -Force
+    throw
+}
+$previous = $null
+try {
+    if (Test-Path $destination) {
+        $previous = "$destination.previous-$([Guid]::NewGuid().ToString('N'))"
+        Move-Item -LiteralPath $destination -Destination $previous
+    }
+    Move-Item -LiteralPath $staging -Destination $destination
+} catch {
+    if ($previous -and !(Test-Path $destination)) { Move-Item -LiteralPath $previous -Destination $destination }
+    throw
+}
 $shell = New-Object -ComObject WScript.Shell
-$link = $shell.CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\pFlow by Pesh.lnk")
+$startMenu = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
+New-Item -ItemType Directory -Force $startMenu | Out-Null
+$link = $shell.CreateShortcut("$startMenu\pFlow by Pesh.lnk")
 $link.IconLocation = "$destination\pFlow.exe,0"; $link.TargetPath = "$destination\pFlow.exe"; $link.WorkingDirectory = $destination; $link.Save()
 Write-Output "Installed $destination\pFlow.exe"
 

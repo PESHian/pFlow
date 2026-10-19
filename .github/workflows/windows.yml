@@ -4,6 +4,11 @@ on:
     branches: [main, feat/windows-universal]
     paths: ['windows/**', '.github/workflows/windows.yml']
   workflow_dispatch:
+    inputs:
+      architectures:
+        description: 'Architectures to build as a JSON array'
+        default: '["x64","x86","arm64"]'
+        required: true
 permissions:
   contents: read
 jobs:
@@ -11,11 +16,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - {arch: x64, runner: windows-2025}
-          - {arch: x86, runner: windows-2025}
-          - {arch: arm64, runner: windows-11-arm}
-    runs-on: ${{ matrix.runner }}
+        arch: ${{ fromJSON(inputs.architectures || '["arm64"]') }}
+    runs-on: ${{ matrix.arch == 'arm64' && 'windows-11-arm' || 'windows-2025' }}
     timeout-minutes: 35
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: '1'

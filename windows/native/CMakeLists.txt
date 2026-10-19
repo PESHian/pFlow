@@ -13,7 +13,10 @@ set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 set(GGML_BACKEND_DL OFF CACHE BOOL "" FORCE)
 # Keep developer home directories out of distributed native assertion strings.
-if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang" AND CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+  add_compile_options("/clang:-ffile-prefix-map=${CMAKE_SOURCE_DIR}=/_/pflow/native"
+    "/clang:-ffile-prefix-map=${PFLOW_WHISPER_SOURCE}=/_/vendor/whisper.cpp")
+elseif(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options("-ffile-prefix-map=${CMAKE_SOURCE_DIR}=/_/pflow/native"
     "-ffile-prefix-map=${PFLOW_WHISPER_SOURCE}=/_/vendor/whisper.cpp")
 endif()

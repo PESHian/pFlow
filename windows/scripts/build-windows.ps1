@@ -14,7 +14,8 @@ if (!$UseBundledEngine) {
     if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne 'ff1a9053feb509ff9d7729703355541ae9690073a6b1c40eb692c962e0dc1720') { throw 'Whisper source checksum mismatch.' }
     if (!(Test-Path "$cache\whisper.cpp-1.9.5")) { tar -xf $archive -C $cache; if ($LASTEXITCODE) { throw 'Could not extract Whisper.' } }
     $platform = @{arm64='ARM64';x64='x64';x86='Win32'}[$arch]
-    cmake -S "$root\native" -DPFLOW_WHISPER_SOURCE="$cache\whisper.cpp-1.9.5" -B "$cache\worker-$arch" -A $platform -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DGGML_BACKEND_DL=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_CURL=OFF -DGGML_SSE42=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_BMI2=OFF -DGGML_FMA=OFF -DGGML_F16C=OFF
+    $compiler = if ($arch -eq 'arm64') { @('-T','ClangCL','-DGGML_CPU_ARM_ARCH=armv8-a') } else { @() }
+    cmake -S "$root\native" -DPFLOW_WHISPER_SOURCE="$cache\whisper.cpp-1.9.5" -B "$cache\worker-$arch" -A $platform @compiler -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_OPENMP=OFF -DGGML_BACKEND_DL=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_CURL=OFF -DGGML_SSE42=OFF -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_BMI2=OFF -DGGML_FMA=OFF -DGGML_F16C=OFF
     if ($LASTEXITCODE) { throw 'Whisper configuration failed.' }
     cmake --build "$cache\worker-$arch" --config Release --target whisper-cli pflow-whisper -j 4
     if ($LASTEXITCODE) { throw 'Whisper build failed.' }

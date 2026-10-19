@@ -12,6 +12,7 @@ function Get-PFlowArchitecture {
         Add-Type @'
 using System;
 using System.Runtime.InteropServices;
+using System.Text;
 public static class PFlowNativeSystemInfo {
     [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct VersionInfo {
         public uint Size, Major, Minor, Build, Platform;
@@ -20,6 +21,15 @@ public static class PFlowNativeSystemInfo {
     [DllImport("kernel32.dll")] static extern void GetNativeSystemInfo(IntPtr buffer);
     [DllImport("kernel32.dll")] static extern IntPtr GetCurrentProcess();
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool IsWow64Process2(IntPtr process, out ushort processMachine, out ushort nativeMachine);
+    [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, int id);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode)] static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder path, ref int length);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+    public static string ProcessPath(int id) {
+        IntPtr handle=OpenProcess(0x1000,false,id);
+        if(handle==IntPtr.Zero)return null;
+        try { var path=new StringBuilder(32768);int length=path.Capacity;return QueryFullProcessImageName(handle,0,path,ref length)?path.ToString():null; }
+        finally { CloseHandle(handle); }
+    }
     [DllImport("ntdll.dll", CharSet=CharSet.Unicode)] static extern int RtlGetVersion(ref VersionInfo info);
     public static uint WindowsBuild() {
         var info=new VersionInfo {Size=(uint)Marshal.SizeOf(typeof(VersionInfo)),Description=""};
