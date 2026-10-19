@@ -61,10 +61,16 @@ internal static partial class Program
                 picker.BringIntoView();
                 var parent = (ComboBoxAutomationPeer)UIElementAutomationPeer.CreatePeerForElement(picker);
                 var expand = (IExpandCollapseProvider)parent.GetPattern(PatternInterface.ExpandCollapse);
-                expand.Expand(); picker.UpdateLayout(); Drain();
-                var item = parent.GetChildren().OfType<ListBoxItemAutomationPeer>().Single(peer => peer.GetName() == ActivationKeys.Resolve(id).Name);
-                ((ISelectionItemProvider)item.GetPattern(PatternInterface.SelectionItem)).Select();
-                expand.Collapse(); Drain();
+                expand.Expand();
+                try {
+                    picker.UpdateLayout(); Drain();
+                    var children = parent.GetChildren() ?? new List<AutomationPeer>();
+                    var item = children.OfType<ListBoxItemAutomationPeer>().SingleOrDefault(peer => peer.Item is ActivationKey key && key.Id == id);
+                    if (item == null) throw new InvalidOperationException($"No activation item {id}; children: " + string.Join(", ", children.Select(peer => $"{peer.GetType().Name}: {(peer as ItemAutomationPeer)?.Item}")));
+                    string expected = ActivationKeys.Resolve(id).Name, actual = item.GetName();
+                    if (actual != expected) throw new InvalidOperationException($"Activation item {id}: expected UIA name '{expected}', got '{actual}'");
+                    ((ISelectionItemProvider)item.GetPattern(PatternInterface.SelectionItem)).Select();
+                } finally { expand.Collapse(); Drain(); }
             }
             var picker = Picker(window);
             Check("accessible picker offers useful keys without Right Windows", picker.Items.Cast<ActivationKey>().Any(key => key.Id == "rightControl") && picker.Items.Cast<ActivationKey>().Any(key => key.Id == "f9"));
