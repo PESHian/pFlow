@@ -17,6 +17,10 @@ permissions:
   contents: read
 jobs:
   install:
+    # GitHub requires this permission to read an unpublished draft release.
+    # This job never publishes, edits, or deletes a release.
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
