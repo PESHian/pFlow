@@ -23,7 +23,7 @@ public sealed class KeyCapture(IEnumerable<uint>? initiallyHeld = null)
             if (!down) owned.Remove(token);
             return new(consume);
         }
-        if (initial.Count != 0) return default;
+        if (initial.Count != 0) { if (down) initial.Add(key); return default; }
         if (down) {
             if (!owned.Add(token)) return new(true);
             if (key == 0x1B) { Cancel(); return new(true, Issue: "Key selection canceled."); }

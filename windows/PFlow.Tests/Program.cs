@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 
 if (args.Contains("--updates-network-only")) { await UpdateChecks.Network(); return; }
+if (args.Contains("--capture-only")) { KeyCaptureChecks.Run(); return; }
 if (args.Contains("--learn-keys-only")) { HotkeyChecks.Run(); KeyCaptureChecks.Run(); return; }
 UpdateChecks.Run();
 if (!args.Contains("--hotkeys-only")) await UpdateChecks.Network();

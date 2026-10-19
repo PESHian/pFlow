@@ -50,7 +50,7 @@ internal static partial class Program
             SettingsWindow Make(StateStore data)=>new(data,new Whisper(root),new LocalTextModel(root),hook,()=>{},()=>busy);
             var window=Make(store);
             void Click(string name) {
-                var button=Descendants<Button>(window).Single(x=>x.Content as string==name);button.BringIntoView();
+                var button=Descendants<Button>(window).Single(x=>x.Content as string==name || AutomationProperties.GetName(x)==name);button.BringIntoView();
                 ((IInvokeProvider)UIElementAutomationPeer.CreatePeerForElement(button).GetPattern(PatternInterface.Invoke)).Invoke();Drain();
             }
             ComboBox Picker()=>Descendants<ComboBox>(window).Single(x=>AutomationProperties.GetName(x)=="Activation key");
@@ -64,6 +64,11 @@ internal static partial class Program
                 busy=true;Click("Press a key");Check("busy app refuses learning",!hook.Capturing&&store.Preferences.ActivationKey==custom);busy=false;
                 Click("Press a key");Event(0x1B,1,true,5200);Event(0x1B,1,false,5300);
                 Check("Escape restores the previous key and picker",!hook.Capturing&&Picker().IsEnabled&&new StateStore(root).Preferences.ActivationKey==custom);
+                Click("Press a key");Click("Dictionary");
+                Check("navigation cancels hidden key picker and preserves typed letters",!hook.Capturing&&!Event(0x41,0x1E,true,5310)&&!Event(0x41,0x1E,false,5320)&&new StateStore(root).Preferences.ActivationKey==custom);
+                Click("Back");Click("Press a key");Event(0x41,0x1E,true,5330);Click("Dictionary");
+                Check("cached navigation drains an owned release without saving",Event(0x41,0x1E,false,5340)&&!hook.Capturing&&new StateStore(root).Preferences.ActivationKey==custom);
+                Click("Back");
                 Directory.CreateDirectory(Path.Combine(root,"settings.json.new"));Click("Press a key");Event(0x5D,0x5D,true,5400,1);Event(0x5D,0x5D,false,5500,1);
                 Check("learned save failure restores saved and active key",hook.ActivationKey==custom&&Picker().SelectedValue as string==custom&&new StateStore(root).Preferences.ActivationKey==custom);
                 Directory.Delete(Path.Combine(root,"settings.json.new"));

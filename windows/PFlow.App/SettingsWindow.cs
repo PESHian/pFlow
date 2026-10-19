@@ -12,6 +12,7 @@ internal sealed partial class SettingsWindow : Window
     readonly Action appearance;
     readonly Func<bool> busy;
     readonly Action? checkUpdates;
+    Action? cancelKeySelection;
     CancellationTokenSource? download;
     readonly TextBlock processingTime = Text("Processing time appears here after your next dictation.");
     readonly ContentControl page = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
@@ -41,9 +42,10 @@ internal sealed partial class SettingsWindow : Window
     static Button Button(string label, Action click) { var b = new Button { Content = label, Margin = new Thickness(0, 4, 0, 4), HorizontalAlignment = HorizontalAlignment.Left }; b.Click += (_, _) => click(); return b; }
     static ScrollViewer Scroll(UIElement content) => new() { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = content };
     internal void OpenHistoryPage() => ShowPage("View history", History, true);
-    void ShowHome() => page.Content = home;
+    void ShowHome() { cancelKeySelection?.Invoke(); page.Content = home; }
     void ShowPage(string title, Func<UIElement> create, bool cache)
     {
+        cancelKeySelection?.Invoke();
         if (cache && navigationPages.TryGetValue(title, out var saved)) { page.Content = saved; return; }
         var container = new DockPanel();
         var bar = new Grid { Margin = new Thickness(20, 12, 20, 0) };
@@ -132,6 +134,7 @@ internal sealed partial class SettingsWindow : Window
             learning = null; timeout.Stop(); keyboard.CancelKeyCapture(); activation.IsEnabled = true; learn.IsEnabled = true; cancelKey.Visibility = Visibility.Collapsed;
             shortcutNotice.Text = message;
         }
+        cancelKeySelection = () => CancelSelection();
         void BeginSelection() {
             if (busy() || !keyboard.CanRebind) { shortcutNotice.Text = "Finish or cancel dictation and release its key first."; return; }
             try {

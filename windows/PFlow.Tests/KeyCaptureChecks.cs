@@ -36,6 +36,13 @@ internal static class KeyCaptureChecks
             Check("main and numpad Enter stay distinct",enter.Id!=numEnter.Id && new ActivationRouter(numEnter.Id).Process(0x0D,true,false,1000,_=>false,0x1C,false)==default);
             var held=new KeyCapture([0xA2]);
             Check("keys already held keep their original up",held.Process(0xA2,0x1D,false,false,false,1000)==default);
+            var waiting=new KeyCapture([0xA2]);
+            Check("key pressed while waiting keeps its original down",waiting.Process(0x41,0x1E,false,true,false,1000)==default);
+            waiting.Process(0xA2,0x1D,false,false,false,1100);
+            Check("forwarded held key repeat is not learned",waiting.Process(0x41,0x1E,false,true,false,1200)==default);
+            Check("forwarded held key keeps its release",waiting.Process(0x41,0x1E,false,false,false,1300)==default && waiting.Listening);
+            waiting.Process(0x41,0x1E,false,true,false,1400);
+            Check("fresh press after all forwarded releases can be learned",waiting.Process(0x41,0x1E,false,false,false,1500).Key?.VirtualKey==0x41);
             var cancel=new KeyCapture();cancel.Process(0x41,0x1E,false,true,false,1000);cancel.Cancel();
             Check("cancel still owns repeats",cancel.Process(0x41,0x1E,false,true,false,1100).Consume);
             Check("cancel preserves other typing",cancel.Process(0x42,0x30,false,true,false,1200)==default);
