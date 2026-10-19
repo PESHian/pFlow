@@ -23,7 +23,8 @@ editions are LTSC/Enterprise; Windows 10/older hardware is not fully tested here
 6. Allow desktop microphone access in Windows Settings > Privacy & security >
    Microphone. On Windows 10, this is Settings > Privacy > Microphone.
 7. Open Notepad. Hold your chosen key, speak, and release to insert. Double-tap
-   for continuous recording; tap to stop. Escape cancels. Left Windows stays free.
+   for continuous recording; tap to stop. Escape cancels. Left Windows stays free
+   unless you choose it as your activation key.
 
 Whisper, its verified speech model, and the .NET runtime are included. Recording
 and transcription work offline. A separate optional 2.5 GB text model can be
