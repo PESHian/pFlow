@@ -1,1 +1,29 @@
-{"schema":1,"targets":{}}
+{
+  "schema": 1,
+  "targets": {
+    "mac-arm64": {
+      "bytes": 6251764,
+      "sha256": "761393a43971436bdb5ff3a84cae92550453aeed6a6980cd88bf73ce59783b19",
+      "url": "https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.19.2/pFlow-Mac-0.3.5-testing.dmg",
+      "version": "0.3.5"
+    },
+    "windows-arm64": {
+      "bytes": 92533691,
+      "sha256": "fe8d1afd24ce206c9fb79d56456539fa5f24412a06665ea25a05a5be5b8d96ba",
+      "url": "https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.19.2/pFlow-Windows-arm64-0.1.11-update.zip",
+      "version": "0.1.11"
+    },
+    "windows-x64": {
+      "bytes": 105157682,
+      "sha256": "7eaefe8127d954c6b58aca36c0e14940da73a4b293f99b18cca98b38c0960f83",
+      "url": "https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.19.2/pFlow-Windows-x64-0.1.11-update.zip",
+      "version": "0.1.11"
+    },
+    "windows-x86": {
+      "bytes": 76415351,
+      "sha256": "7a8bb1e1fdf041235476150f7757881b88100d71634a6b350e308002490167cd",
+      "url": "https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.19.2/pFlow-Windows-x86-0.1.11-update.zip",
+      "version": "0.1.11"
+    }
+  }
+}
