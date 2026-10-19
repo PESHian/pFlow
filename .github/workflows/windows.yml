@@ -9,7 +9,7 @@ on:
       scope:
         description: 'Full native build, or managed hotkey update using verified released engines'
         type: choice
-        options: [full, hotkeys, updates, controls]
+        options: [full, hotkeys, updates, controls, learn-keys]
         default: full
       skip_core:
         description: 'Carry a recorded pass only when core code and checks are unchanged'
@@ -42,8 +42,8 @@ jobs:
           BUILD_SCOPE: ${{ inputs.scope }}
           SKIP_CORE_CHECKS: ${{ inputs.skip_core }}
         run: |
-          if ($env:BUILD_SCOPE -in @('hotkeys','updates','controls')) {
-            ./windows/scripts/ci-hotkeys.ps1 -Architecture $env:TARGET_ARCHITECTURE -SkipCoreChecks:($env:SKIP_CORE_CHECKS -eq 'true') -UpdatesOnly:($env:BUILD_SCOPE -eq 'updates') -ControlsOnly:($env:BUILD_SCOPE -eq 'controls')
+          if ($env:BUILD_SCOPE -in @('hotkeys','updates','controls','learn-keys')) {
+            ./windows/scripts/ci-hotkeys.ps1 -Architecture $env:TARGET_ARCHITECTURE -SkipCoreChecks:($env:SKIP_CORE_CHECKS -eq 'true') -UpdatesOnly:($env:BUILD_SCOPE -eq 'updates') -ControlsOnly:($env:BUILD_SCOPE -eq 'controls') -LearnKeysOnly:($env:BUILD_SCOPE -eq 'learn-keys')
           } else {
             ./windows/scripts/ci-windows.ps1 -Architecture $env:TARGET_ARCHITECTURE
           }

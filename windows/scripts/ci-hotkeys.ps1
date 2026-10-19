@@ -1,6 +1,6 @@
 # Rebuild managed code only. Speech/text engines are byte-for-byte from the
 # architecture-tested public baseline; no model or engine work is repeated.
-param([Parameter(Mandatory=$true)][ValidateSet('arm64','x64','x86')][string]$Architecture, [switch]$SkipCoreChecks, [switch]$UpdatesOnly, [switch]$ControlsOnly)
+param([Parameter(Mandatory=$true)][ValidateSet('arm64','x64','x86')][string]$Architecture, [switch]$SkipCoreChecks, [switch]$UpdatesOnly, [switch]$ControlsOnly, [switch]$LearnKeysOnly)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $root = Split-Path $PSScriptRoot -Parent
@@ -31,14 +31,14 @@ if ($LASTEXITCODE) { throw 'Windows app build failed.' }
 Copy-Item "$PSScriptRoot\install-windows.ps1","$PSScriptRoot\WindowsArchitecture.ps1" $dist
 Assert-PFlowArchitecture $dist $Architecture
 if (!$SkipCoreChecks) {
-    $coreMode = if ($UpdatesOnly) { '--updates-only' } else { '--hotkeys-only' }
+    $coreMode = if ($LearnKeysOnly) { '--learn-keys-only' } elseif ($UpdatesOnly) { '--updates-only' } else { '--hotkeys-only' }
     dotnet run --project "$root\PFlow.Tests" -c Release -- $coreMode
     if ($LASTEXITCODE) { throw 'Activation routing/preferences checks failed.' }
 }
 $checks = "$root\dist\checks-$Architecture"
 dotnet publish "$root\PFlow.WindowsTests" -c Release -r $rid --self-contained true -p:RuntimeFrameworkVersion=10.0.13 -o $checks
 if ($LASTEXITCODE) { throw 'Windows integration check build failed.' }
-if ($ControlsOnly) { & "$checks\PFlow.WindowsTests.exe" --controls-only } elseif ($UpdatesOnly) { & "$checks\PFlow.WindowsTests.exe" --updates-only } else { & "$checks\PFlow.WindowsTests.exe" }
+if ($LearnKeysOnly) { & "$checks\PFlow.WindowsTests.exe" --learn-keys-only } elseif ($ControlsOnly) { & "$checks\PFlow.WindowsTests.exe" --controls-only } elseif ($UpdatesOnly) { & "$checks\PFlow.WindowsTests.exe" --updates-only } else { & "$checks\PFlow.WindowsTests.exe" }
 if ($LASTEXITCODE) { throw 'Private native hotkey/settings/clipboard checks failed.' }
 if ($UpdatesOnly) { & "$PSScriptRoot\test-app-update.ps1" -Architecture $Architecture }
 $version = ([xml](Get-Content "$root\PFlow.App\PFlow.App.csproj")).Project.PropertyGroup.Version

@@ -3,10 +3,12 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 
 if (args.Contains("--updates-network-only")) { await UpdateChecks.Network(); return; }
+if (args.Contains("--learn-keys-only")) { HotkeyChecks.Run(); KeyCaptureChecks.Run(); return; }
 UpdateChecks.Run();
 if (!args.Contains("--hotkeys-only")) await UpdateChecks.Network();
 if (args.Contains("--updates-only")) return;
 HotkeyChecks.Run();
+KeyCaptureChecks.Run();
 if (args.Contains("--hotkeys-only")) return;
 int passed = 0;
 void Check(string name, bool condition) { if (!condition) throw new Exception("FAIL: " + name); passed++; Console.WriteLine("PASS: " + name); }

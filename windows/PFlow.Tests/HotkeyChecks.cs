@@ -14,7 +14,7 @@ internal static class HotkeyChecks
             File.WriteAllText(Path.Combine(root, "settings.json"), "{\"templateCatalogVersion\":1,\"language\":\"es\"}");
             var store = new StateStore(root);
             Check("existing settings keep Right Windows and language", store.Preferences.ActivationKey == ActivationKeys.DefaultId && store.Preferences.Language == "es");
-            foreach (string? invalid in new[] { null, "", "leftWindows", "rightAlt", "a" }) {
+            foreach (string? invalid in new[] { null, "", "leftWindows", "unknown", "a" }) {
                 var preferences = new Preferences { ActivationKey = invalid! }; preferences.Validate();
                 Check("unsupported activation choices use safe default", preferences.ActivationKey == ActivationKeys.DefaultId);
             }

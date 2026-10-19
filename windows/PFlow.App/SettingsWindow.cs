@@ -96,29 +96,65 @@ internal sealed partial class SettingsWindow : Window
         Navigate(root, "View history", "Browse and copy past transcripts.", History);
         Navigate(root, "Dictionary", "Teach pFlow names and words it often gets wrong.", Dictionary);
         p = Section(root, "Shortcut"); p.Children.Add(Text("Activation key"));
-        var activation = new ComboBox { ItemsSource = ActivationKeys.Choices, DisplayMemberPath = "Name", SelectedValuePath = "Id", SelectedValue = store.Preferences.ActivationKey, Margin = new Thickness(0, 0, 0, 8) };
+        var activation = new ComboBox { ItemsSource = KeyLabels.Options(store.Preferences.ActivationKey), DisplayMemberPath = "Name", SelectedValuePath = "Id", SelectedValue = store.Preferences.ActivationKey, Margin = new Thickness(0, 0, 0, 8) };
         var optionStyle = new Style(typeof(ComboBoxItem), (Style)FindResource(typeof(ComboBoxItem)));
         optionStyle.Setters.Add(new Setter(System.Windows.Automation.AutomationProperties.NameProperty, new System.Windows.Data.Binding("Name")));
         activation.ItemContainerStyle = optionStyle;
         System.Windows.Automation.AutomationProperties.SetName(activation, "Activation key"); p.Children.Add(activation);
+        KeyCapture? learning = null; bool updatingPicker = false;
         var shortcutHelp = Text(ShortcutHelp()); p.Children.Add(shortcutHelp);
-        var shortcutNotice = Text("No Right Windows key? Choose Right Ctrl or an F key. Use the chosen key alone for dictation; combinations keep their normal shortcuts."); p.Children.Add(shortcutNotice);
-        string ShortcutHelp() => $"Hold {ActivationKeys.Resolve(store.Preferences.ActivationKey).Name} to dictate. Release to insert. Double-tap within 300 ms for continuous recording; tap again to finish. Escape cancels. Left Windows works normally. You can also click the waveform to start and stop; drag it to move.";
-        activation.SelectionChanged += (_, _) => {
-            if (activation.SelectedValue is not string id || id == store.Preferences.ActivationKey) return;
+        var shortcutNotice = Text("Choose a common key above, or press a key to set your own. Used alone, your chosen key records instead of its usual action. Shortcuts still work."); p.Children.Add(shortcutNotice);
+        Button learn = null!, cancelKey = null!;
+        System.Windows.Threading.DispatcherTimer timeout = null!;
+        learn = Button("Press a key", BeginSelection); cancelKey = Button("Cancel key selection", () => CancelSelection()); cancelKey.Visibility = Visibility.Collapsed;
+        var keyButtons = new WrapPanel(); keyButtons.Children.Add(learn); keyButtons.Children.Add(cancelKey); p.Children.Add(keyButtons);
+        p.Children.Add(Text("Fn works only if your keyboard sends it as a keyboard key to Windows. Menu / App and App buttons may have different names; press yours to detect it. Escape cancels key selection and dictation."));
+        timeout = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(15),System.Windows.Threading.DispatcherPriority.Background,(_,_) => CancelSelection("No usable key was detected. Try another key. Some Fn buttons send no keyboard key to Windows."),Dispatcher); timeout.Stop();
+        string ShortcutHelp() => $"Hold {KeyLabels.Name(ActivationKeys.Resolve(store.Preferences.ActivationKey))} to dictate. Release to insert. Double-tap within 300 ms for continuous recording; tap again to finish. Escape cancels. You can also click the waveform to start and stop; drag it to move.";
+        void RefreshPicker() {
+            updatingPicker = true;
+            try { activation.ItemsSource = KeyLabels.Options(store.Preferences.ActivationKey); activation.SelectedValue = store.Preferences.ActivationKey; }
+            finally { updatingPicker = false; }
+            shortcutHelp.Text = ShortcutHelp();
+        }
+        void SaveKey(ActivationKey key) {
             string previous = store.Preferences.ActivationKey;
-            if (busy() || !keyboard.CanRebind) { activation.SelectedValue = previous; shortcutNotice.Text = "Finish or cancel dictation and release its key before changing the shortcut."; return; }
+            if (busy() || !keyboard.CanRebind) { RefreshPicker(); shortcutNotice.Text = "Finish or cancel dictation and release its key before changing the shortcut."; return; }
             try {
-                keyboard.SelectActivationKey(id); store.Preferences.ActivationKey = id;
+                keyboard.SelectActivationKey(key.Id); store.Preferences.ActivationKey = key.Id;
                 try { store.SavePreferences(); }
                 catch { store.Preferences.ActivationKey = previous; keyboard.SelectActivationKey(previous); throw; }
-                shortcutHelp.Text = ShortcutHelp(); shortcutNotice.Text = $"Activation key saved: {ActivationKeys.Resolve(id).Name}.";
-            } catch (Exception error) { activation.SelectedValue = previous; shortcutNotice.Text = error.Message; }
+                RefreshPicker(); shortcutNotice.Text = $"Activation key saved: {KeyLabels.Name(key)}.";
+            } catch (Exception error) { RefreshPicker(); shortcutNotice.Text = error.Message; }
+        }
+        void CancelSelection(string message = "Key selection canceled.") {
+            if (learning == null) return;
+            learning = null; timeout.Stop(); keyboard.CancelKeyCapture(); activation.IsEnabled = true; learn.IsEnabled = true; cancelKey.Visibility = Visibility.Collapsed;
+            shortcutNotice.Text = message;
+        }
+        void BeginSelection() {
+            if (busy() || !keyboard.CanRebind) { shortcutNotice.Text = "Finish or cancel dictation and release its key first."; return; }
+            try {
+                Activate(); learning = keyboard.BeginKeyCapture(); activation.IsEnabled = false; learn.IsEnabled = false; cancelKey.Visibility = Visibility.Visible;
+                shortcutNotice.Text = "Press one key on its own, then release it. Escape cancels."; timeout.Start();
+            } catch (Exception error) { shortcutNotice.Text = error.Message; }
+        }
+        void Captured(KeyCapture owner, ActivationKey? key, string? issue) {
+            if (!ReferenceEquals(owner,learning)) return;
+            CancelSelection(issue ?? "Key detected.");
+            if (key != null) SaveKey(key);
+        }
+        activation.SelectionChanged += (_, _) => {
+            if (!updatingPicker && activation.SelectedValue is string id && id != store.Preferences.ActivationKey) SaveKey(ActivationKeys.Resolve(id));
         };
-        var mapping = Text("Press an activation-key option to check what this keyboard sends."); mapping.FontSize = 12; mapping.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted");
-        keyboard.PhysicalKey += Mapping; Closed += (_, _) => keyboard.PhysicalKey -= Mapping;
-        void Mapping(uint vk, uint scan) => mapping.Text = $"Last detected: {(vk == 0x5B ? "Left Windows" : ActivationKeys.Choices.First(choice => choice.VirtualKey == vk).Name)}. Keep Mac dictation off when checking VM keys.";
-        p.Children.Add(mapping);
+        var mapping = Text("Press an activation key to check what this keyboard sends."); mapping.FontSize = 12; mapping.SetResourceReference(TextBlock.ForegroundProperty,"PeshMuted"); p.Children.Add(mapping);
+        void Mapping(uint vk, uint scan) {
+            var selected = ActivationKeys.Resolve(keyboard.ActivationKey);
+            mapping.Text = $"Last detected: {KeyLabels.Name(selected.Matches(vk,scan) ? selected : ActivationKeys.FromEvent(vk,scan))}. Keep Mac dictation off when checking VM keys.";
+        }
+        keyboard.PhysicalKey += Mapping; keyboard.KeyCaptured += Captured;
+        Deactivated += (_,_) => CancelSelection(); StateChanged += (_,_) => { if (WindowState == WindowState.Minimized) CancelSelection(); };
+        Closed += (_,_) => { CancelSelection(); timeout.Stop(); keyboard.PhysicalKey -= Mapping; keyboard.KeyCaptured -= Captured; };
         p = Section(root, "Dictation");
         Check(p, "Copy dictation to clipboard after insertion", store.Preferences.CopyDictationToClipboard, x => store.Preferences.CopyDictationToClipboard = x);
         Check(p, "Quiet start and stop sounds", store.Preferences.Sounds, x => store.Preferences.Sounds = x);

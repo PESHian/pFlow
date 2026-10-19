@@ -11,7 +11,7 @@ These are testing builds. macOS and Windows may show an unsigned or unnotarized 
 | Platform | Download | Requirements |
 | --- | --- | --- |
 | Mac | pFlow-Mac-0.3.5-testing.dmg | Apple Silicon, macOS 27 or later |
-| Windows | pFlow-Windows-Universal-0.1.12-testing.zip | Windows x64 (Intel/AMD), ARM64, or x86; Windows 10 1607+ / Windows 11 |
+| Windows | pFlow-Windows-Universal-0.1.13-testing.zip | Windows x64 (Intel/AMD), ARM64, or x86; Windows 10 1607+ / Windows 11 |
 
 ### Mac
 
@@ -21,7 +21,7 @@ The first use may need a checksum-verified Whisper model download. Apple Intelli
 
 ### Windows
 
-Extract the entire universal ZIP and double-click **Install.cmd**. It detects your native Windows architecture, checks the selected files, and installs the matching build for your user account. Open **pFlow by Pesh** from Start. It runs in the tray; open Settings from its tray menu. In **Settings → Shortcut → Activation key**, choose **Right Ctrl**, **F8–F12**, or **Right Windows**. Hold your chosen key to record, then release. Double-tap within about 300 ms for continuous dictation; tap to stop. Left Windows stays available for shortcuts. The choice is saved; existing installations keep Right Windows until changed.
+Extract the entire universal ZIP and double-click **Install.cmd**. It detects your native Windows architecture, checks the selected files, and installs the matching build for your user account. Open **pFlow by Pesh** from Start. It runs in the tray; open Settings from its tray menu. In **Settings → Shortcut**, choose **Press a key**, then press and release one key. Right Alt, either Ctrl, Menu/App, other F keys, and detectable vehicle buttons can be used. Common choices remain in the picker. Escape is reserved for cancellation. The chosen key records when used alone instead of its usual action; ordinary shortcut combinations remain available. Fn works only if the keyboard sends it as a usable keyboard event. Hold your chosen key to record, then release. Double-tap within about 300 ms for continuous dictation; tap to stop. Left Windows stays available unless you explicitly choose it. The choice is saved; existing installations keep Right Windows until changed.
 
 The Windows download includes the Whisper speech model and .NET runtime. AI cleanup and report formatting use an optional 2.5 GB Qwen text model: choose **Download or repair text model** in Settings if you want those features. Its size and SHA-256 are checked before use. This optional text model requires 64-bit Windows; 32-bit Windows keeps dictation, basic cleanup, dictionary, and full-narrative templates. Basic dictation works without it. After setup, model inference runs offline.
 

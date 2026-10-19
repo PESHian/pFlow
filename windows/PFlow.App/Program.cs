@@ -91,7 +91,7 @@ internal sealed partial class Program : Application
     }
     void OnTrigger(TriggerAction action)
     {
-        if (quitting || updateApplying) return;
+        if (quitting || updateApplying || keyboard.Capturing) return;
         if (action == TriggerAction.Cancel) { Cancel(); return; }
         if (action is TriggerAction.Start or TriggerAction.Continuous) {
             stopDelay?.Cancel();

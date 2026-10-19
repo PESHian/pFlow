@@ -37,3 +37,23 @@ Public Windows downloads include Whisper and omit the optional Qwen weights to f
 Architecture checks run on Windows x64 and ARM64 hosts. x86 runs as an actual 32-bit process under WOW64 on Windows x64; no native 32-bit OS test is claimed. Each build checks native structure sizes, capsule window styles, private fictional clipboard restoration, and saved-public-audio transcription through the resident worker. Installer checks cover native selection from 32-bit shells, checksums, updates, user data, wrong architectures, and damaged packages. Physical microphone/key and old-PC performance coverage remains limited.
 
 Choose Check for updates from the tray or Settings, then Install and restart. Updates use a signed release feed, checked downloads, your native Windows architecture, and the existing model files. Installation is blocked while dictation or clipboard restoration is active. First install this updater build with Install.cmd. See [release update publishing](../updates/README.md).
+
+### Learn an activation key
+
+In Settings > Shortcut choose **Press a key**, then press and release one key.
+This supports standard Windows keyboard events, including Right Alt, either
+Ctrl, Menu/App, app-launch buttons, F1–F24, and keys reported by a vehicle keypad.
+The chosen key's standalone action becomes dictation. Shortcut combinations
+remain available. Escape is reserved for cancellation. Key selection pauses
+activation, rejects a multi-key chord, and keeps the old key if canceled or if
+saving fails. It saves physical scan/extended identity for custom keys, rather
+than recording a stream of typed keys.
+
+Fn has no standard virtual-key code. This learner receives keyboard-hook events;
+it does not subscribe to the separate, OEM-dependent system-button interface.
+Some Fn buttons therefore cannot be learned. No manufacturer driver is installed.
+See [Microsoft's Fn hardware guidance](https://learn.microsoft.com/en-us/windows/apps/design/accessibility/system-button-narration).
+
+Physical Fn, vehicle App buttons, and AltGr behavior on each international
+keyboard need hardware testing. Synthetic/native sequence checks do not prove
+that a particular keyboard or OEM driver sends the same events.

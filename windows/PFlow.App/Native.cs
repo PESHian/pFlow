@@ -51,6 +51,9 @@ internal static class Native
     [DllImport("user32.dll", EntryPoint = "SetWindowLongW")] static extern int SetWindowLong32(IntPtr hwnd, int index, int value);
     internal static IntPtr GetWindowLongPtr(IntPtr hwnd, int index) => IntPtr.Size == 8 ? GetWindowLong64(hwnd, index) : new IntPtr(GetWindowLong32(hwnd, index));
     internal static IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value) => IntPtr.Size == 8 ? SetWindowLong64(hwnd, index, value) : new IntPtr(SetWindowLong32(hwnd, index, value.ToInt32()));
+    internal static Input ScanKey(ushort scan, bool extended) => new() { Type = 1, Data = new() { Keyboard = new() { Scan = scan, Flags = 8u | (extended ? KEYEVENTF_EXTENDEDKEY : 0) } } };
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern int GetKeyNameText(int lParam, System.Text.StringBuilder text, int size);
+    [DllImport("user32.dll")] internal static extern uint MapVirtualKey(uint code, uint mode);
     internal static Input Key(ushort vk, bool up = false, bool extended = false) => new() { Type = 1, Data = new() { Keyboard = new() { Vk = vk, Flags = (up ? KEYEVENTF_KEYUP : 0) | (extended ? KEYEVENTF_EXTENDEDKEY : 0) } } };
     internal static Input[] UnicodeText(string text)
     {
