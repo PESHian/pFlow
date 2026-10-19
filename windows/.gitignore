@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+engine/
+text-engine/
+dist/
+*.zip
+*.wav
+*.bin
+TestResults/

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF><UseWindowsForms>true</UseWindowsForms><EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>disable</ImplicitUsings><Nullable>enable</Nullable><AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>pFlow</AssemblyName><Version>0.1.8</Version><ApplicationIcon>Assets/Pesh.ico</ApplicationIcon><ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+  </PropertyGroup>
+  <ItemGroup><ProjectReference Include="../PFlow.Core/PFlow.Core.csproj" />
+    <Resource Include="Assets/PeshMark.png" /><Resource Include="Assets/Pesh.ico" />
+    <Content Include="Licenses/*"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+    <Content Include="../engine/$(RuntimeIdentifier)/*" Link="engine/%(Filename)%(Extension)"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+    <Content Include="../text-engine/$(RuntimeIdentifier)/*" Link="text-engine/%(Filename)%(Extension)"><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
+  </ItemGroup>
+</Project>

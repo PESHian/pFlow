@@ -1,0 +1,74 @@
+name: Yap
+options:
+  bundleIdPrefix: com.pesh
+  deploymentTarget:
+    macOS: "27.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    SWIFT_SERIALIZE_DEBUGGING_OPTIONS: NO
+    OTHER_SWIFT_FLAGS: '$(inherited) -file-prefix-map "$(SRCROOT)=/_/pflow" -debug-prefix-map "$(SRCROOT)=/_/pflow"'
+    MARKETING_VERSION: "0.3.4"
+    CURRENT_PROJECT_VERSION: "26"
+    DEAD_CODE_STRIPPING: YES
+    # Apple Silicon only. The on-device SpeechAnalyzer needs it, and the Intel
+    # fallback sent audio to Apple, which we won't do.
+    ARCHS: arm64
+    ONLY_ACTIVE_ARCH: NO
+
+packages:
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    from: "2.0.0"
+
+targets:
+  Yap:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources
+    dependencies:
+      - package: KeyboardShortcuts
+    postCompileScripts:
+      - name: Bundle local Whisper engine
+        script: 'bash "$SRCROOT/scripts/build-whisper.sh"'
+        basedOnDependencyAnalysis: false
+    settings:
+      base:
+        INFOPLIST_FILE: Sources/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.pesh.Yap
+        PRODUCT_NAME: Yap
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Yap-Bridging-Header.h
+        PFLOW_ENTITLEMENTS_FILE: Sources/Yap.entitlements
+        CODE_SIGN_ENTITLEMENTS: $(PFLOW_ENTITLEMENTS_FILE)
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_HARDENED_RUNTIME: NO
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+
+  YapTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Yap
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pesh.YapTests
+        GENERATE_INFOPLIST_FILE: YES
+
+schemes:
+  Yap:
+    build:
+      targets:
+        Yap: all
+        YapTests: [test]
+    test:
+      targets:
+        - YapTests

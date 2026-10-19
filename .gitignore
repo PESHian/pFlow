@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# XcodeGen-generated project (source of truth is project.yml)
+Yap.xcodeproj/
+
+# Secrets / signing
+*.p12
+*.mobileprovision
+
+# Release artifacts
+dist/

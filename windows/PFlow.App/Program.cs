@@ -1,0 +1,183 @@
+using System.Windows.Interop;
+using System.Windows.Threading;
+using Forms = System.Windows.Forms;
+
+namespace PFlow.Windows;
+
+internal sealed class Program : Application
+{
+    StateStore store = null!;
+    Whisper whisper = null!;
+    LocalTextModel textModel = null!;
+    Capsule capsule = null!;
+    KeyboardHook keyboard = null!;
+    Forms.NotifyIcon tray = null!;
+    System.Drawing.Icon? trayIcon;
+    SettingsWindow? settings;
+    WaveRecorder? recorder;
+    InsertionTarget? target;
+    CancellationTokenSource? session, stopDelay;
+    string? sessionDirectory;
+    Phase phase = Phase.Idle;
+    bool quitting;
+    readonly OperationGate operations = new();
+    long sessionId;
+    readonly Mutex single = new(true, "Local\\pFlow-by-Pesh-Windows", out _);
+    [STAThread] public static int Main(string[] args)
+    {
+        var app = new Program();
+        if (!app.single.WaitOne(0)) return 0;
+        app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+        app.DispatcherUnhandledException += (_, e) => { e.Handled = true; app.Failure(e.Exception); };
+        app.Startup += (_, _) => app.Start(args);
+        return app.Run();
+    }
+    void Start(string[] args)
+    {
+        try {
+            string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "pFlow");
+            store = new StateStore(directory); whisper = new Whisper(directory);
+            textModel = new LocalTextModel(directory);
+            _ = Task.Run(async () => { try { await whisper.Prewarm(); } catch { /* Recording retries and reports a load error when needed. */ } });
+            // Only our abandoned private recording folders are removed. History/settings remain.
+            foreach (var stale in Directory.EnumerateDirectories(directory, "recording-*")) Directory.Delete(stale, true);
+            capsule = new Capsule(store); capsule.OpenSettings += OpenSettings; capsule.Cancel += Cancel; capsule.ToggleRecording += ToggleRecording; capsule.OpenHistory += OpenHistory;
+            capsule.AudioLevel = () => recorder?.Level ?? 0;
+            _ = new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Background, (_, _) => ClipboardLease.RestorePending(), Dispatcher);
+            keyboard = new KeyboardHook(OnTrigger) { Enabled = store.Preferences.Enabled };
+            var menu = new Forms.ContextMenuStrip();
+            menu.Items.Add("Show recording control", null, (_, _) => Dispatcher.Invoke(capsule.Reveal));
+            menu.Items.Add("Settings", null, (_, _) => Dispatcher.Invoke(OpenSettings));
+            menu.Items.Add("History", null, (_, _) => Dispatcher.Invoke(OpenHistory));
+            var enabled = new Forms.ToolStripMenuItem("Dictation enabled") { Checked = store.Preferences.Enabled, CheckOnClick = true };
+            enabled.CheckedChanged += (_, _) => { store.Preferences.Enabled = keyboard.Enabled = enabled.Checked; store.SavePreferences(); if (!enabled.Checked) Cancel(); };
+            menu.Items.Add(enabled); menu.Items.Add("Cancel", null, (_, _) => Dispatcher.Invoke(Cancel));
+            menu.Items.Add("Quit", null, (_, _) => Dispatcher.Invoke(Quit));
+            trayIcon = PeshIcon();
+            tray = new Forms.NotifyIcon { Icon = trayIcon, Text = "pFlow by Pesh", Visible = true, ContextMenuStrip = menu };
+            tray.DoubleClick += (_, _) => Dispatcher.Invoke(OpenSettings);
+            if (args.Contains("--settings")) OpenSettings();
+        } catch (Exception error) { MessageBox.Show(error.Message, "pFlow could not start"); Quit(); }
+    }
+    static System.Drawing.Icon PeshIcon()
+    {
+        var resource = GetResourceStream(new Uri("pack://application:,,,/pFlow;component/Assets/PeshMark.png"));
+        using var stream = resource.Stream; using var bitmap = new System.Drawing.Bitmap(stream);
+        IntPtr handle = bitmap.GetHicon();
+        try { using var icon = System.Drawing.Icon.FromHandle(handle); return (System.Drawing.Icon)icon.Clone(); }
+        finally { DestroyIcon(handle); }
+    }
+    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr icon);
+    void ToggleRecording()
+    {
+        if (!store.Preferences.Enabled) { Notify("Turn on Dictation enabled in the tray menu first."); return; }
+        if (recorder != null) OnTrigger(TriggerAction.Stop);
+        else if (!operations.Busy) OnTrigger(TriggerAction.Continuous);
+    }
+    void Set(Phase value, string? detail = null) { phase = value; capsule?.Set(value, detail); }
+    void Cue(bool start)
+    {
+        if (!store.Preferences.Sounds) return;
+        // Quiet generated PCM cues; no system notification sound or network dependency.
+        using var memory = new MemoryStream(); using (var writer = new BinaryWriter(memory, System.Text.Encoding.ASCII, true)) {
+            const int rate = 16000, count = 1120;
+            writer.Write(System.Text.Encoding.ASCII.GetBytes("RIFF")); writer.Write(36 + count * 2); writer.Write(System.Text.Encoding.ASCII.GetBytes("WAVEfmt "));
+            writer.Write(16); writer.Write((short)1); writer.Write((short)1); writer.Write(rate); writer.Write(rate * 2); writer.Write((short)2); writer.Write((short)16);
+            writer.Write(System.Text.Encoding.ASCII.GetBytes("data")); writer.Write(count * 2);
+            for (int i = 0; i < count; i++) writer.Write((short)(Math.Sin(2 * Math.PI * (start ? 660 : 440) * i / rate) * 1000 * Math.Sin(Math.PI * i / count)));
+        }
+        memory.Position = 0; using var player = new System.Media.SoundPlayer(memory); player.PlaySync();
+    }
+    void OnTrigger(TriggerAction action)
+    {
+        if (quitting) return;
+        if (action == TriggerAction.Cancel) { Cancel(); return; }
+        if (action is TriggerAction.Start or TriggerAction.Continuous) {
+            stopDelay?.Cancel();
+            if (recorder != null) { Set(action == TriggerAction.Continuous ? Phase.Continuous : Phase.Recording); return; }
+            if (operations.Busy) { keyboard.Reset(); return; }
+            try {
+                if (!whisper.FilesPresent) throw new InvalidOperationException("Install the Whisper model in Settings first. The complete Windows package must include its engine.");
+                target = InsertionTarget.Capture();
+                sessionId = operations.Start();
+                session = new CancellationTokenSource(TimeSpan.FromHours(2));
+                sessionDirectory = Path.Combine(store.DirectoryPath, "recording-" + Guid.NewGuid()); Directory.CreateDirectory(sessionDirectory);
+                Cue(true); recorder = new WaveRecorder(Path.Combine(sessionDirectory, "audio.wav"));
+                Set(action == TriggerAction.Continuous ? Phase.Continuous : Phase.Recording);
+            } catch (Exception error) {
+                Cancel();
+                if (operations.Complete(sessionId)) {
+                    session?.Dispose(); session = null; sessionId = 0;
+                    if (sessionDirectory != null && Directory.Exists(sessionDirectory)) Directory.Delete(sessionDirectory, true);
+                    sessionDirectory = null;
+                }
+                Failure(error);
+            }
+        } else if (action == TriggerAction.Stop && recorder != null) DelayedFinish();
+    }
+    async void DelayedFinish()
+    {
+        stopDelay?.Cancel(); var delay = stopDelay = new CancellationTokenSource();
+        var elapsed = Stopwatch.StartNew();
+        try { await Task.Delay(310, delay.Token); await Finish(elapsed); }
+        catch (OperationCanceledException) { }
+        catch (Exception error) { Failure(error); }
+    }
+    async Task Finish(Stopwatch elapsed)
+    {
+        if (recorder == null || target == null || session == null) return;
+        var active = recorder; recorder = null; var originalTarget = target; var cancellation = session; string folder = sessionDirectory!; long owner = sessionId;
+        double seconds = 0; bool processing = false;
+        var timing = new Dictionary<string, double> { ["releaseDelayMs"] = elapsed.Elapsed.TotalMilliseconds };
+        try {
+            var stop = Stopwatch.StartNew(); string path = active.Path; seconds = active.Stop(); timing["microphoneStopMs"] = stop.Elapsed.TotalMilliseconds;
+            if (seconds < 0.3) { Set(Phase.Canceled); return; }
+            Cue(false);
+            processing = true; var pipeline = new DictationPipeline(store, whisper, textModel) { Timing = (name, ms) => timing[name] = ms };
+            var result = await pipeline.Run(path, seconds, originalTarget, folder, capsule.Handle, Set, cancellation.Token);
+            if (result.Notice != null) Notify(result.Notice);
+        } catch (OperationCanceledException) { Set(Phase.Canceled); }
+        catch (Exception error) { Failure(error); }
+        finally {
+            active.Dispose(); cancellation.Dispose(); if (ReferenceEquals(session, cancellation)) session = null;
+            if (Directory.Exists(folder)) Directory.Delete(folder, true);
+            if (operations.Complete(owner)) { sessionDirectory = null; sessionId = 0; keyboard.Reset(); }
+            timing["totalAfterReleaseMs"] = elapsed.Elapsed.TotalMilliseconds; timing["recordingSeconds"] = seconds;
+            if (processing) {
+                var speech = whisper.LastMetrics;
+                timing["warmModelReused"] = speech.Reused ? 1 : 0; timing["modelInitializationMs"] = speech.InitializationMs;
+                timing["nativeRecognitionMs"] = speech.RecognitionMs; timing["encoderMs"] = speech.EncodeMs; timing["decoderMs"] = speech.DecodeMs; timing["audioContextFrames"] = speech.AudioContext;
+            }
+            // One private, overwritten timing record. No words, audio, paths, or application names.
+            try { store.Write("last-processing-times.json", timing); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+    void Cancel()
+    {
+        stopDelay?.Cancel(); session?.Cancel();
+        if (recorder != null) {
+            recorder.Dispose(); recorder = null;
+            if (sessionDirectory != null && Directory.Exists(sessionDirectory)) Directory.Delete(sessionDirectory, true);
+            sessionDirectory = null; session?.Dispose(); session = null;
+            operations.Complete(sessionId); sessionId = 0;
+        }
+        keyboard?.Reset(); if (phase != Phase.Inserting) Set(Phase.Canceled);
+    }
+    void Failure(Exception error) { Set(Phase.Failed, error.Message); Notify(error.Message); }
+    void Notify(string text) { if (tray != null) { tray.BalloonTipTitle = "pFlow by Pesh"; tray.BalloonTipText = text; tray.ShowBalloonTip(6000); } }
+    void OpenSettings()
+    {
+        if (settings != null) { settings.Activate(); return; }
+        settings = new SettingsWindow(store, whisper, textModel, keyboard, () => capsule.ApplyTheme(), () => operations.Busy);
+        settings.Closed += (_, _) => settings = null; settings.Show();
+    }
+    void OpenHistory() { OpenSettings(); settings?.OpenHistoryPage(); }
+    async void Quit()
+    {
+        if (phase == Phase.Inserting || ClipboardLease.Pending.Count > 0) { Notify("pFlow is restoring your clipboard. Quit when insertion ends."); return; }
+        quitting = true; Cancel();
+        while (operations.Busy) await Task.Delay(25);
+        await whisper.DisposeAsync(); keyboard?.Dispose(); tray?.Dispose(); capsule?.Close(); Shutdown();
+    }
+    protected override void OnExit(ExitEventArgs e) { whisper?.Abort(); keyboard?.Dispose(); tray?.Dispose(); trayIcon?.Dispose(); single.Dispose(); base.OnExit(e); }
+}
