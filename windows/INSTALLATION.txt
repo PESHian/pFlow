@@ -1,0 +1,49 @@
+pFlow by Pesh: Windows and Mac installation
+
+WINDOWS: x64 (Intel/AMD), ARM64, or x86 (32-bit)
+
+Use pFlow-Windows-Universal-0.1.9-testing.zip. It contains all three builds.
+Windows 11 and Windows 10 version 1607 or later are required. Older Windows
+cannot run the included .NET 10 runtime. Microsoft's supported Windows 10
+editions are LTSC/Enterprise; Windows 10/older hardware is not fully tested here.
+
+1. Quit pFlow from its tray menu before updating.
+2. Download the universal ZIP from https://github.com/PESHian/pFlow/releases
+3. Right-click the ZIP and choose Extract All. Keep the whole folder together.
+4. Double-click Install.cmd. It detects your native Windows architecture,
+   checks the files, and installs the matching build for your user account.
+   No administrator password, .NET installation, or architecture choice is needed.
+5. Open pFlow by Pesh from Start. Its speaking-pig icon appears in the tray
+   (possibly under the up-arrow). Open Settings there and choose your language.
+6. Allow desktop microphone access in Windows Settings > Privacy & security >
+   Microphone. On Windows 10, this is Settings > Privacy > Microphone.
+7. Open Notepad. Hold Right Windows, speak, and release to insert. Double-tap
+   for continuous recording; tap to stop. Escape cancels. Left Windows stays free.
+
+Whisper, its verified speech model, and the .NET runtime are included. Recording
+and transcription work offline. A separate optional 2.5 GB text model can be
+downloaded in pFlow Settings on 64-bit Windows for AI cleanup and report sections.
+That optional AI feature is unavailable on 32-bit Windows; dictation, basic
+cleanup, dictionary, and full-narrative templates remain available.
+
+The app is unsigned. Updates preserve settings and History outside the app.
+The installer retains a previous application folder. Never run a single EXE
+copied out of the package without its accompanying files.
+
+MAC: Apple Silicon, macOS 27 or later
+
+1. Quit pFlow before updating.
+2. Download pFlow-Mac-0.3.4-testing.dmg from the same GitHub releases page.
+3. Open the DMG and drag pFlow by Pesh into Applications. Open pFlow there.
+4. This testing build is not notarized. If blocked, follow Apple's Open Anyway
+   steps after checking the download: https://support.apple.com/en-us/102445
+5. Grant Microphone, Accessibility, Automation, and Speech Recognition permissions
+   when requested. Download the verified Whisper model in pFlow Settings if needed.
+6. Open TextEdit. Hold Right Command, speak, and release to insert. Double-tap
+   for continuous recording; tap again to stop.
+
+Use only one recorder at a time. Turn Mac dictation off before recording in a
+Windows VM; Right Command may map to Right Windows in the VM.
+
+These are testing releases. Read the release notes for the exact machines and
+behaviors tested. Architecture support does not promise identical speed on all PCs.

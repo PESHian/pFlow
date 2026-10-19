@@ -11,7 +11,7 @@ These are testing builds. macOS and Windows may show an unsigned or unnotarized 
 | Platform | Download | Requirements |
 | --- | --- | --- |
 | Mac | pFlow-Mac-0.3.4-testing.dmg | Apple Silicon, macOS 27 or later |
-| Windows | pFlow-Windows-ARM64-0.1.8-testing.zip | Windows 11 ARM64; x64 source builds are available but an x64 release has not been tested |
+| Windows | pFlow-Windows-Universal-0.1.9-testing.zip | Windows x64 (Intel/AMD), ARM64, or x86; Windows 10 1607+ / Windows 11 |
 
 ### Mac
 
@@ -21,15 +21,11 @@ The first use may need a checksum-verified Whisper model download. Apple Intelli
 
 ### Windows
 
-Extract the entire ZIP to a folder you can write to and run **pFlow.exe**. It runs in the tray; open Settings from its tray menu. Hold **Right Windows** to record, then release. Double-tap within about 300 ms for continuous dictation; tap to stop. Left Windows stays available for shortcuts. A VM may map Right Command to Right Windows.
+Extract the entire universal ZIP and double-click **Install.cmd**. It detects your native Windows architecture, checks the selected files, and installs the matching build for your user account. Open **pFlow by Pesh** from Start. It runs in the tray; open Settings from its tray menu. Hold **Right Windows** to record, then release. Double-tap within about 300 ms for continuous dictation; tap to stop. Left Windows stays available for shortcuts. A VM may map Right Command to Right Windows.
 
-The Windows download includes the Whisper speech model and .NET runtime. AI cleanup and report formatting use an optional 2.5 GB Qwen text model: choose **Download or repair text model** in Settings if you want those features. Its size and SHA-256 are checked before use. Basic dictation works without it. After setup, model inference runs offline.
+The Windows download includes the Whisper speech model and .NET runtime. AI cleanup and report formatting use an optional 2.5 GB Qwen text model: choose **Download or repair text model** in Settings if you want those features. Its size and SHA-256 are checked before use. This optional text model requires 64-bit Windows; 32-bit Windows keeps dictation, basic cleanup, dictionary, and full-narrative templates. Basic dictation works without it. After setup, model inference runs offline.
 
-To install for your Windows user account, open PowerShell in the extracted folder and run:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install-windows.ps1 -Source .
-```
+No administrator password, separate .NET installation, or architecture choice is needed. Do not run an EXE copied out of its payload folder. See [full installation instructions](windows/INSTALLATION.txt). Windows 10 builds require version 1607 or later; Microsoft supports .NET 10 on its listed LTSC/Enterprise editions. Windows 7, 8, Windows RT/ARM32, and older releases are unsupported.
 
 Quit pFlow before updating. Turn Mac dictation off before testing Windows recording in a VM on the same Mac.
 
@@ -52,11 +48,11 @@ This public repository contains application source, artwork, licenses, and ficti
 
 Mac: install Xcode with the macOS 27 SDK and [XcodeGen](https://github.com/yonaskolb/XcodeGen), run `xcodegen generate`, then build the Yap scheme from `Yap.xcodeproj`. `scripts/build-whisper.sh` prepares the pinned local engine. `release.sh` supports Developer ID signing/notarization when you supply your own credentials.
 
-Windows: install .NET 10 SDK, CMake, and Visual Studio C++ tools for your architecture, then run `windows/scripts/build-windows.ps1`. See [Windows details](windows/README.md). The published Windows binaries omit debug symbols and use Clang to map native source paths. Builds using other native compilers need their own path checks before distribution. Each architecture needs its own build and verification.
+Windows: install .NET 10 SDK, CMake, and Visual Studio C++ tools for your architecture, then run `windows/scripts/build-windows.ps1`. See [Windows details](windows/README.md). Use `-Architecture x64`, `-Architecture arm64`, or `-Architecture x86`. ARM64 native compilation uses the Clang C++ toolset; the other builds use MSVC with a static speech runtime. The published Windows binaries omit debug symbols. Release builds are checked for personal build paths; source builds need the same checks before distribution. Each architecture needs its own build and verification.
 
 ## Tested limits
 
-The Windows ARM64 build has been exercised on a Windows 11 VM, including saved-audio recognition, Notepad insertion, settings, templates, themes, and statistics. Physical microphone/key behavior, Edge/Electron insertion, and actual login behavior have not all been verified. That VM presented only about 5–6 waveform frames per second; fluid animation there remains unresolved. Speeds vary with hardware, recording length, and optional AI formatting.
+Windows x64 and ARM64 builds have passed native Windows ABI, private clipboard restoration, and saved-audio transcription/reuse checks; x86 passed the same checks under Windows x64 WOW64. A native 32-bit Windows installation and old Windows 10/older CPU hardware remain unverified. Architecture support does not promise support for every historic Windows release or identical speed on all CPUs. The earlier Windows ARM64 build has been exercised on a Windows 11 VM, including saved-audio recognition, Notepad insertion, settings, templates, themes, and statistics. Physical microphone/key behavior, Edge/Electron insertion, and actual login behavior have not all been verified. That VM presented only about 5–6 waveform frames per second; fluid animation there remains unresolved. Speeds vary with hardware, recording length, and optional AI formatting.
 
 Mac and Windows use different AI formatting engines and are not claimed to have identical behavior. The Mac download is not notarized, and the Windows executable is not Authenticode signed.
 

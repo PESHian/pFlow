@@ -26,7 +26,7 @@ foreach($version in (Get-ChildItem "$vs\VC\Redist\MSVC" -Directory | Sort-Object
     if($crt){break}
 }
 if(!$crt){throw "The app-local C++ runtime for $arch is missing."}
-Get-ChildItem $crt.FullName -Filter '*.dll' -File | Copy-Item -Destination $destination -Force
+Get-ChildItem $crt.FullName -Filter '*.dll' -File | Where-Object { (Get-PFlowExecutableArchitecture $_.FullName) -eq $arch } | Copy-Item -Destination $destination -Force
 @'
 Microsoft Visual C++ runtime redistributable files
 Copyright Microsoft Corporation. All rights reserved.

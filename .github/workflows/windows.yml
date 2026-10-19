@@ -1,8 +1,5 @@
 name: Windows architectures
 on:
-  push:
-    branches: [main, feat/windows-universal]
-    paths: ['windows/**', '.github/workflows/windows.yml']
   workflow_dispatch:
     inputs:
       architectures:
@@ -16,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: ${{ fromJSON(inputs.architectures || '["arm64"]') }}
+        arch: ${{ fromJSON(inputs.architectures) }}
     runs-on: ${{ matrix.arch == 'arm64' && 'windows-11-arm' || 'windows-2025' }}
     timeout-minutes: 35
     env:
@@ -31,7 +28,9 @@ jobs:
           dotnet-version: '10.0.402'
       - name: Build and check native architecture
         shell: pwsh
-        run: ./windows/scripts/ci-windows.ps1 -Architecture '${{ matrix.arch }}'
+        env:
+          TARGET_ARCHITECTURE: ${{ matrix.arch }}
+        run: ./windows/scripts/ci-windows.ps1 -Architecture $env:TARGET_ARCHITECTURE
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: payload-${{ matrix.arch }}

@@ -1,0 +1,52 @@
+name: Windows universal installation
+on:
+  push:
+    branches: [feat/windows-universal]
+    paths: ['.github/workflows/windows-install.yml']
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Release containing the universal ZIP (draft or published)'
+        required: true
+        default: pflow-desktop-2026.10.19
+      sha256:
+        description: 'Expected universal ZIP SHA-256'
+        required: true
+        default: 366061b5cb0fffe1ac224c7f31f435cb70fc32e3655d188c252c011b09128cce
+permissions:
+  contents: read
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      RELEASE_TAG: ${{ inputs.release || 'pflow-desktop-2026.10.19' }}
+      EXPECTED_SHA: ${{ inputs.sha256 || '366061b5cb0fffe1ac224c7f31f435cb70fc32e3655d188c252c011b09128cce' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.402'
+      - name: Download and verify exact release ZIP
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $download=Join-Path $env:RUNNER_TEMP 'pflow-download'
+          gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern 'pFlow-Windows-Universal-0.1.9-testing.zip' --dir $download
+          if($LASTEXITCODE){throw 'Could not obtain the release candidate.'}
+          $zip=Join-Path $download 'pFlow-Windows-Universal-0.1.9-testing.zip'
+          if((Get-FileHash $zip -Algorithm SHA256).Hash -ne $env:EXPECTED_SHA){throw 'The release ZIP checksum does not match.'}
+          Expand-Archive $zip (Join-Path $env:RUNNER_TEMP 'pflow-package')
+      - name: Install, update and reject damaged packages
+        shell: powershell
+        run: ./windows/scripts/test-windows-install.ps1 -PackageRoot (Join-Path $env:RUNNER_TEMP 'pflow-package')
