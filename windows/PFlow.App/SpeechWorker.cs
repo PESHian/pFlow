@@ -5,6 +5,10 @@ namespace PFlow.Windows;
 
 internal readonly record struct SpeechMetrics(bool Reused, double InitializationMs, double RecognitionMs, double EncodeMs, double DecodeMs, int AudioContext);
 
+/// The worker process was lost or went quiet (start, model load or a pass without progress).
+/// Not a worker-reported error: a fresh worker may well succeed, so the caller retries once.
+internal sealed class SpeechWorkerLost(string message, Exception? inner = null) : IOException(message, inner);
+
 // Anonymous pipes belong to this app and its child. There is no HTTP server or socket.
 internal sealed class SpeechWorker : IDisposable
 {
@@ -22,27 +26,46 @@ internal sealed class SpeechWorker : IDisposable
     static async Task Drain(Stream errors) { try { await errors.CopyToAsync(Stream.Null); } catch (IOException) { } catch (ObjectDisposedException) { } }
     /// Processors the thread counts are sized for; the speed harness lowers it (with a matching affinity mask) to stand in for a small computer.
     internal static int LogicalProcessors { get; set; } = Environment.ProcessorCount;
+    /// Test hooks: a delay per 1 MB hashed (a slow disk), and starts to fail outright (a worker that dies at launch).
+    internal static Func<Task>? StartThrottle { get; set; }
+    internal static int FailNextStarts { get; set; }
+    /// Progress frames received while the last worker loaded its model.
+    internal int StartHeartbeats { get; private set; }
+    /// Starting has no fixed time limit: hashing the 487 MB model and loading it both report progress
+    /// (a chunk hashed, a frame from the worker), and only `StallLimit` without any progress ends it. A slow
+    /// disk or a virus scanner reading the file makes a start slow, not stuck.
     internal static async Task<SpeechWorker> Start(string executable, string model, CancellationToken cancel)
     {
+        if (FailNextStarts > 0) { FailNextStarts--; throw new SpeechWorkerLost(Stalled); }
         // Keep the checked file open without write/delete sharing for the worker's entire life.
         var lease = new FileStream(model, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
         SpeechWorker? worker = null;
+        using var stall = CancellationTokenSource.CreateLinkedTokenSource(cancel); stall.CancelAfter(StallLimit);
+        var token = stall.Token;
         try {
             if (lease.Length != Whisper.ModelBytes) throw new InvalidDataException("The Whisper model has the wrong size. Download it again in Settings.");
-            var digest = await SHA256.HashDataAsync(lease, cancel);
-            if (!Convert.ToHexString(digest).Equals(Whisper.ModelSha, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The Whisper model checksum did not match. Download it again in Settings.");
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            var chunk = new byte[1024 * 1024]; int count;
+            while ((count = await lease.ReadAsync(chunk, token)) > 0) {
+                hash.AppendData(chunk, 0, count); stall.CancelAfter(StallLimit);
+                if (StartThrottle != null) await StartThrottle();
+            }
+            if (!Convert.ToHexString(hash.GetHashAndReset()).Equals(Whisper.ModelSha, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The Whisper model checksum did not match. Download it again in Settings.");
             var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
-            worker = new(lease, Process.Start(info) ?? throw new IOException("The speech engine could not start."));
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancel); timeout.CancelAfter(TimeSpan.FromSeconds(30));
-            using var kill = timeout.Token.Register(worker.Abort);
+            worker = new(lease, Process.Start(info) ?? throw new SpeechWorkerLost("The speech engine could not start."));
+            using var kill = token.Register(worker.Abort);
             int finalThreads = SpeechThreads.Final(LogicalProcessors), liveThreads = SpeechThreads.Live(LogicalProcessors);
-            await worker.Send(writer => { writer.Write(LiveWorkerProtocol.Hello); writer.Write(finalThreads); writer.Write(liveThreads); WriteText(writer, model, 32768); }, timeout.Token);
-            uint kind = await worker.Number(timeout.Token);
-            if (kind == 3) throw new IOException(await worker.Text(timeout.Token));
+            await worker.Send(writer => { writer.Write(LiveWorkerProtocol.Hello); writer.Write(finalThreads); writer.Write(liveThreads); WriteText(writer, model, 32768); }, token);
+            uint kind;
+            while ((kind = await worker.Number(token)) == LiveWorkerProtocol.Progress) { worker.StartHeartbeats++; stall.CancelAfter(StallLimit); }
+            if (kind == 3) throw new IOException(await worker.Text(token));
             if (kind != 1) throw new IOException("The speech engine sent an invalid response.");
-            worker.LoadMs = await worker.Metric(timeout.Token);
-            if (await worker.Number(timeout.Token) != LiveWorkerProtocol.Version) throw new IOException("The speech engine is from another pFlow version. Install a complete pFlow package.");
-            timeout.Token.ThrowIfCancellationRequested(); return worker;
+            worker.LoadMs = await worker.Metric(token);
+            if (await worker.Number(token) != LiveWorkerProtocol.Version) throw new IOException("The speech engine is from another pFlow version. Install a complete pFlow package.");
+            token.ThrowIfCancellationRequested(); return worker;
+        } catch (Exception error) when (error is OperationCanceledException or IOException && token.IsCancellationRequested && !cancel.IsCancellationRequested) {
+            if (worker != null) worker.Dispose(); else lease.Dispose();
+            throw new SpeechWorkerLost(Stalled, error);
         } catch { if (worker != null) worker.Dispose(); else lease.Dispose(); throw; }
     }
     static void WriteText(BinaryWriter writer, string value, int maximum)
@@ -95,7 +118,10 @@ internal sealed class SpeechWorker : IDisposable
             int context = checked((int)await Number(token)); token.ThrowIfCancellationRequested();
             return (text, new(false, 0, recognition, encode, decode, context));
         } catch (Exception error) when (error is OperationCanceledException or IOException && token.IsCancellationRequested && !cancel.IsCancellationRequested) {
-            throw new IOException(Stalled, error);
+            throw new SpeechWorkerLost(Stalled, error);
+        } catch (Exception error) when (error is EndOfStreamException or IOException && error is not SpeechWorkerLost && !cancel.IsCancellationRequested && process.HasExited) {
+            // The worker died under the pass (crash, out of memory): not a worker-reported error, so a fresh worker gets one try.
+            throw new SpeechWorkerLost("The speech engine stopped unexpectedly. Try again.", error);
         }
     }
     /// One live window. A cancel asks the worker to stop this window and still

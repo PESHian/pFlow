@@ -15,6 +15,8 @@ internal sealed class Whisper : IAsyncDisposable
     SpeechWorker? worker;
     internal SpeechMetrics LastMetrics { get; private set; }
     internal int? WorkerId => worker?.Id;
+    internal int WorkerStartHeartbeats => worker?.StartHeartbeats ?? 0;
+    internal double WorkerLoadMs => worker?.LoadMs ?? 0;
     /// Progress frames the current worker sent during finished-text passes.
     internal int WorkerHeartbeats => worker?.Heartbeats ?? 0;
     string DownloadPath => System.IO.Path.Combine(root, "ggml-small.bin");
@@ -67,17 +69,29 @@ internal sealed class Whisper : IAsyncDisposable
         if (!File.Exists(Executable)) throw new FileNotFoundException("The Windows speech engine is missing. Install a complete pFlow package.");
         await modelLock.WaitAsync(cancel);
         try {
-            bool reused = worker != null && !worker.Exited; var watch = Stopwatch.StartNew();
-            LastMetrics = default; await EnsureWorker(cancel); double initialization = watch.Elapsed.TotalMilliseconds;
-            var terms = string.Join(", ", vocabulary.Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
-            var result = await worker!.Transcribe(audio, language, terms[..Math.Min(terms.Length, 2000)], cancel);
-            LastMetrics = result.Metrics with { Reused = reused, InitializationMs = initialization };
-            string text = result.Text.Trim();
-            if (string.IsNullOrWhiteSpace(text)) throw new IOException("No speech was found. Check the microphone and try again.");
-            return TextProcessing.JoinRecognitionLines(text);
+            // A worker that was lost (failed start, quiet model load, death under the pass) gets one fresh try:
+            // the finished text must come whenever recognition can complete. Worker-reported errors and the
+            // caller's own cancel are not retried.
+            for (int attempt = 1; ; attempt++) {
+                try { return await TranscribeOnce(audio, language, vocabulary, cancel); }
+                catch (SpeechWorkerLost) when (attempt == 1 && !cancel.IsCancellationRequested) { Retries++; ResetWorker(); }
+            }
         } catch when (cancel.IsCancellationRequested) { ResetWorker(); throw new OperationCanceledException(cancel); }
         catch { ResetWorker(); throw; }
         finally { modelLock.Release(); }
+    }
+    /// Finished-text passes that needed a second worker.
+    internal int Retries { get; private set; }
+    async Task<string> TranscribeOnce(string audio, string language, IEnumerable<string> vocabulary, CancellationToken cancel)
+    {
+        bool reused = worker != null && !worker.Exited; var watch = Stopwatch.StartNew();
+        LastMetrics = default; await EnsureWorker(cancel); double initialization = watch.Elapsed.TotalMilliseconds;
+        var terms = string.Join(", ", vocabulary.Where(x => !string.IsNullOrWhiteSpace(x))).Trim();
+        var result = await worker!.Transcribe(audio, language, terms[..Math.Min(terms.Length, 2000)], cancel);
+        LastMetrics = result.Metrics with { Reused = reused, InitializationMs = initialization };
+        string text = result.Text.Trim();
+        if (string.IsNullOrWhiteSpace(text)) throw new IOException("No speech was found. Check the microphone and try again.");
+        return TextProcessing.JoinRecognitionLines(text);
     }
     /// Live windows sent to the worker; Off never sends any.
     internal int LiveRequests => Volatile.Read(ref liveRequests);
@@ -86,7 +100,9 @@ internal sealed class Whisper : IAsyncDisposable
     /// final pass. Returns null when canceled; the final pass waits for the
     /// lock, so a live window can never run alongside or after it unnoticed.
     /// A worker that fails here is ended, so the final pass starts a fresh one.
-    internal async Task<IReadOnlyList<WhisperWindowSegment>?> RecognizeLive(LiveWindowRequest request, string language, CancellationToken cancel)
+    /// `started` runs once the window has the worker (after any wait for the lock, e.g. behind a launch
+    /// prewarm), so the caller's speed judgement and time limit cover the recognition only.
+    internal async Task<IReadOnlyList<WhisperWindowSegment>?> RecognizeLive(LiveWindowRequest request, string language, CancellationToken cancel, Action? started = null)
     {
         using (var waiting = CancellationTokenSource.CreateLinkedTokenSource(cancel, lifetime.Token)) {
             try { await modelLock.WaitAsync(waiting.Token); } catch (OperationCanceledException) { return null; }
@@ -96,6 +112,7 @@ internal sealed class Whisper : IAsyncDisposable
             if (cancel.IsCancellationRequested) return null;
             if (!File.Exists(Executable)) throw new FileNotFoundException("The Windows speech engine is missing. Install a complete pFlow package.");
             await EnsureWorker(lifetime.Token);
+            started?.Invoke();
             Interlocked.Increment(ref liveRequests);
             // The recognizer cancels a window after LiveSession.WindowLimitMs and the worker answers a
             // cancel within milliseconds; 30 s without any reply means the worker is stuck.

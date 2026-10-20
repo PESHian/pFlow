@@ -101,6 +101,7 @@ public sealed class LiveSession(uint session, LiveWindowPlanner? planner = null,
     readonly object sync = new();
     readonly Func<long>? clock = clock;
     long inFlightSince, restUntil;
+    bool began;
     readonly LiveWindowPlanner planner = planner ?? new();
     readonly LiveAudioRing ring = new(ringSeconds);
     readonly WhisperLiveMerger merger = new();
@@ -137,9 +138,16 @@ public sealed class LiveSession(uint session, LiveWindowPlanner? planner = null,
             var window = ring.Snapshot(start, end);
             if (!LiveAudioGate.HasSpeech(fresh) || window.Length == 0) { SilentWindows++; return null; }
             Inferences++;
-            inFlightSince = now;
+            inFlightSince = now; began = false;
             return inFlight = new LiveWindowRequest(Session, nextSequence++, end - window.Length, end, window);
         }
+    }
+
+    /// The window has the worker and recognition starts now. Time spent waiting
+    /// for the worker (a launch prewarm, a model load) is never held against it.
+    public void Begin(LiveWindowRequest request)
+    {
+        lock (sync) { if (ReferenceEquals(request, inFlight)) { began = true; inFlightSince = clock?.Invoke() ?? 0; } }
     }
 
     /// Applies a finished window. Returns the update to show, or null when the
@@ -157,10 +165,14 @@ public sealed class LiveSession(uint session, LiveWindowPlanner? planner = null,
 
     /// Called under `sync` when the window in flight ends, however it ended. A
     /// window the recognizer canceled while the take was still going was at
-    /// its time limit, so it counts as slow whatever the clock says.
+    /// its time limit, so it counts as slow whatever the clock says. A window
+    /// that never began (canceled while waiting for the worker) says nothing.
     void Rest(LiveWindowRequest ended, bool canceled)
     {
-        long now = clock?.Invoke() ?? 0, took = Math.Max(0, now - inFlightSince);
+        long now = clock?.Invoke() ?? 0;
+        // A window that never ran has nothing to rest from and says nothing about speed.
+        if (!began) { restUntil = now; return; }
+        long took = Math.Max(0, now - inFlightSince);
         restUntil = now + (long)(took * RestRatio);
         // Replays have no clock; a window canceled because the take stopped says nothing about speed.
         if (clock == null || Closed) return;

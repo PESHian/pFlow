@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Threading;
 using PFlow.Core;
 using PFlow.Windows;
@@ -65,6 +66,31 @@ internal static partial class Program
             var again = new FakeTarget();
             var recovered = await pipeline.Run(Path.Combine(root, "short-1.wav"), 5, again, directory, capsule.Handle, (_, _) => { }, CancellationToken.None);
             Check("the next take starts a new worker and inserts normally", recovered.Status == "Inserted" && again.Inserted.Count == 1 && whisper.WorkerId != worker);
+
+            // 4. A slow start (slow disk, virus scanner reading the model): hashing and loading report progress, so a
+            //    stall limit far below the whole start time still lets the take finish. No retry is needed for that.
+            int retries = whisper.Retries;
+            SpeechWorker.StartThrottle = () => Task.Delay(8); SpeechWorker.StallLimit = TimeSpan.FromMilliseconds(1500);
+            try {
+                whisper.EndWorker(); var slow = new FakeTarget(); var watch = Stopwatch.StartNew();
+                var slowStart = await pipeline.Run(Path.Combine(root, "short-1.wav"), 5, slow, directory, capsule.Handle, (_, _) => { }, CancellationToken.None, "Fictional live words so far");
+                Console.WriteLine($"START slow start took {watch.Elapsed.TotalMilliseconds:F0} ms with a 1500 ms stall limit; model load {whisper.WorkerLoadMs:F0} ms, load frames {whisper.WorkerStartHeartbeats}");
+                Check("a start several times longer than the stall limit still finishes because it keeps reporting progress", slowStart.Status == "Inserted" && slow.Inserted.Count == 1 && watch.Elapsed > TimeSpan.FromMilliseconds(3000) && whisper.Retries == retries);
+                // The worker sends a frame as it starts reading the model and then every 250 ms of loading.
+                Check("the worker reported progress while loading the model", whisper.WorkerStartHeartbeats >= 1);
+            } finally { SpeechWorker.StartThrottle = null; SpeechWorker.StallLimit = TimeSpan.FromSeconds(60); }
+            // 5. The worker fails to start once: one fresh try, the finished text goes in. Twice: an honest message that
+            //    does not blame the recording's length, nothing inserted, the live words kept once.
+            try {
+                whisper.EndWorker(); SpeechWorker.FailNextStarts = 1; var once = new FakeTarget();
+                var retried = await pipeline.Run(Path.Combine(root, "short-1.wav"), 5, once, directory, capsule.Handle, (_, _) => { }, CancellationToken.None, "Fictional live words so far");
+                Check("a worker that fails to start is replaced once and the finished text is inserted", retried.Status == "Inserted" && once.Inserted.Count == 1 && retried.Notice == null && whisper.Retries == retries + 1);
+                whisper.EndWorker(); SpeechWorker.FailNextStarts = 2; var twice = new FakeTarget(); int entries = store.History.Count;
+                var gaveUp = await pipeline.Run(Path.Combine(root, "short-1.wav"), 5, twice, directory, capsule.Handle, (_, _) => { }, CancellationToken.None, "Fictional live words so far");
+                Check("after the retry also fails the live words are kept with a message that does not say 'shorter recording'", gaveUp.Status == LiveTake.KeptStatus && gaveUp.Notice != null
+                    && gaveUp.Notice.Contains("stopped answering") && !gaveUp.Notice.Contains("shorter recording") && twice.Inserted.Count == 0 && store.History.Count == entries + 1 && store.History[0].Text == "Fictional live words so far");
+                Check("no third start was attempted", SpeechWorker.FailNextStarts == 0);
+            } finally { SpeechWorker.FailNextStarts = 0; }
             Console.WriteLine($"{passed} final-priority checks passed.");
         } finally { preview.Close(); capsule.Close(); Directory.Delete(directory, true); }
     }
@@ -117,7 +143,7 @@ internal static partial class Program
         window.Show(); window.Activate(); await Dispatcher.Yield(DispatcherPriority.Background); await Task.Delay(500);
         try {
             Check("Settings pages pan vertically by touch", ScrollViewer.GetPanningMode(scroll) == PanningMode.VerticalOnly);
-            Check("lists and text boxes made pannable carry the same mode", ScrollViewer.GetPanningMode(SettingsWindow.Pannable(new ListBox())) == PanningMode.VerticalOnly
+            Check("lists and text boxes made pannable start with the same mode (then follow whether they can scroll)", ScrollViewer.GetPanningMode(SettingsWindow.Pannable(new ListBox())) == PanningMode.VerticalOnly
                 && ScrollViewer.GetPanningMode(SettingsWindow.Pannable(new TextBox())) == PanningMode.VerticalOnly);
             Check("the page starts at the top and has room to scroll", scroll.VerticalOffset == 0 && scroll.ScrollableHeight > 500);
             var handle = new WindowInteropHelper(window).Handle; SetForegroundWindow(handle); await Task.Delay(200);
@@ -161,7 +187,63 @@ internal static partial class Program
             Check("the mouse wheel still scrolls the page", scroll.VerticalOffset > afterTouch);
             double beforeKey = scroll.VerticalOffset; scroll.PageDown(); await Dispatcher.Yield(DispatcherPriority.Background);
             Check("keyboard paging still scrolls the page", scroll.VerticalOffset > beforeKey);
-            Console.WriteLine($"{passed} touch scroll checks passed.");
-        } finally { window.Close(); if (syntheticTouch != IntPtr.Zero) { DestroySyntheticPointerDevice(syntheticTouch); syntheticTouch = IntPtr.Zero; } }
+        } finally { window.Close(); }
+        try { await NestedTouchScroll(); }
+        finally { if (syntheticTouch != IntPtr.Zero) { DestroySyntheticPointerDevice(syntheticTouch); syntheticTouch = IntPtr.Zero; } }
+        Console.WriteLine($"{passed} touch scroll checks passed.");
+    }
+
+    /// A 120 px finger drag that starts at the center of `element`.
+    static async Task Drag(FrameworkElement element)
+    {
+        var at = element.PointToScreen(new Point(element.ActualWidth / 2, element.ActualHeight / 2)); int x = (int)at.X, y = (int)at.Y;
+        Check("finger down on " + element.GetType().Name, Touch(x, y, POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT));
+        await Task.Delay(60); await Dispatcher.Yield(DispatcherPriority.Background);
+        for (int step = 1; step <= 24; step++) { await Task.Delay(25); Touch(x, y - step * 5, POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT); await Dispatcher.Yield(DispatcherPriority.Background); }
+        await Task.Delay(25); Touch(x, y - 120, POINTER_FLAG_UP);
+        await Task.Delay(600); await Dispatcher.Yield(DispatcherPriority.Background);
+    }
+
+    /// History-like page: a drag that starts on a list or text box with nothing more to show
+    /// moves the page; a list with more to show scrolls itself first.
+    static async Task NestedTouchScroll()
+    {
+        var content = new StackPanel();
+        var shortList = SettingsWindow.Pannable(new ListBox { Height = 120, ItemsSource = new[] { "Fictional one", "Fictional two", "Fictional three" } });
+        var text = SettingsWindow.Pannable(new TextBox { Height = 100, IsReadOnly = true, Text = "Fictional short note", VerticalScrollBarVisibility = ScrollBarVisibility.Auto });
+        var longList = SettingsWindow.Pannable(new ListBox { Height = 120, ItemsSource = Enumerable.Range(0, 60).Select(i => "Fictional entry " + i).ToList() });
+        content.Children.Add(shortList); content.Children.Add(text); content.Children.Add(longList);
+        for (int i = 0; i < 60; i++) content.Children.Add(new TextBlock { Text = "Fictional line " + i, Height = 24 });
+        var page = SettingsWindow.Scroll(content);
+        var window = new Window { Title = "pFlow fictional nested touch scroll", Width = 320, Height = 420, Content = page, Topmost = true, WindowStartupLocation = WindowStartupLocation.CenterScreen, ShowActivated = true };
+        window.Show(); window.Activate(); await Dispatcher.Yield(DispatcherPriority.Background); await Task.Delay(500);
+        try {
+            SetForegroundWindow(new WindowInteropHelper(window).Handle); await Task.Delay(200);
+            Check("the nested page starts at the top", page.VerticalOffset == 0 && page.ScrollableHeight > 500);
+            Check("after layout a list with nothing to scroll leaves panning to the page, a long one pans itself",
+                ScrollViewer.GetPanningMode(shortList) == PanningMode.None && ScrollViewer.GetPanningMode(text) == PanningMode.None && ScrollViewer.GetPanningMode(longList) == PanningMode.VerticalOnly);
+            await Drag(shortList);
+            Console.WriteLine($"TOUCH nested: drag on a 3-item list moved the page {page.VerticalOffset:F1}");
+            Check("a drag that starts on a list with nothing more to show scrolls the page", page.VerticalOffset >= 60);
+            page.ScrollToTop(); await Dispatcher.Yield(DispatcherPriority.Background); await Task.Delay(200);
+            await Drag(text);
+            Console.WriteLine($"TOUCH nested: drag on a short text box moved the page {page.VerticalOffset:F1}");
+            Check("a drag that starts on a short text box scrolls the page", page.VerticalOffset >= 60);
+            page.ScrollToTop(); await Dispatcher.Yield(DispatcherPriority.Background); await Task.Delay(200);
+            var inner = (ScrollViewer)VisualTreeHelperFind(longList);
+            await Drag(longList);
+            Console.WriteLine($"TOUCH nested: drag on a 60-item list moved the list {inner.VerticalOffset:F1} and the page {page.VerticalOffset:F1}");
+            Check("a drag that starts on a list with more to show scrolls the list, not the page", inner.VerticalOffset > 0 && page.VerticalOffset == 0);
+        } finally { window.Close(); }
+    }
+
+    static DependencyObject VisualTreeHelperFind(DependencyObject root)
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++) {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is ScrollViewer viewer) return viewer;
+            if (VisualTreeHelperFind(child) is ScrollViewer found) return found;
+        }
+        return null!;
     }
 }

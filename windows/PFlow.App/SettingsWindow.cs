@@ -41,7 +41,29 @@ internal sealed partial class SettingsWindow : Window
     static TextBlock Text(string value) => new() { Text = value, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 5), LineHeight = 19 };
     static Button Button(string label, Action click) { var b = new Button { Content = label, Margin = new Thickness(0, 4, 0, 4), HorizontalAlignment = HorizontalAlignment.Left }; b.Click += (_, _) => click(); return b; }
     /// Pages, lists and long text boxes scroll by touch (drag or pan) as well as by wheel and keyboard.
-    internal static T Pannable<T>(T element) where T : DependencyObject { ScrollViewer.SetPanningMode(element, PanningMode.VerticalOnly); return element; }
+    /// A list or text box inside a page pans only while it has something to scroll (WPF would otherwise
+    /// swallow the finger: it cancels the manipulation and turns it into mouse input, so the page never
+    /// moves); with nothing to scroll the page around it takes the drag. At its end, what the finger
+    /// cannot use there moves the page too, instead of nudging the window.
+    internal static T Pannable<T>(T element) where T : UIElement
+    {
+        ScrollViewer.SetPanningMode(element, PanningMode.VerticalOnly);
+        if (element is ScrollViewer) return element;
+        element.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((sender, e) => {
+            if (e.OriginalSource is ScrollViewer inner) ScrollViewer.SetPanningMode(element, inner.ScrollableHeight > 0 ? PanningMode.VerticalOnly : PanningMode.None);
+        }));
+        element.AddHandler(ManipulationBoundaryFeedbackEvent, new EventHandler<System.Windows.Input.ManipulationBoundaryFeedbackEventArgs>((sender, e) => {
+            if (PageAround(element) is { } page) { page.ScrollToVerticalOffset(page.VerticalOffset - e.BoundaryFeedback.Translation.Y); e.Handled = true; }
+        }));
+        return element;
+    }
+    /// The nearest scrolling page above an element, or null.
+    static ScrollViewer? PageAround(DependencyObject element)
+    {
+        for (var parent = VisualTreeHelper.GetParent(element); parent != null; parent = VisualTreeHelper.GetParent(parent))
+            if (parent is ScrollViewer page && ScrollViewer.GetPanningMode(page) != PanningMode.None) return page;
+        return null;
+    }
     internal static ScrollViewer Scroll(UIElement content) => Pannable(new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = content });
     internal void OpenHistoryPage() => ShowPage("View history", History, true);
     void ShowHome() { cancelKeySelection?.Invoke(); page.Content = home; }

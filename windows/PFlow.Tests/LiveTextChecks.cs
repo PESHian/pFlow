@@ -112,18 +112,18 @@ internal static class LiveTextChecks
     {
         static long AudioMs(LiveWindowRequest request) => (request.EndSample - request.StartSample) / LiveWindowPlanner.SamplesPerMs;
         long now = 0; var take = new LiveSession(30, clock: () => now);
-        take.Append(Tone(2000)); var first = take.Next()!;
+        take.Append(Tone(2000)); var first = take.Next()!; take.Begin(first);
         Check("the slow-window floor is three seconds", LiveSession.SlowWindowFloorMs == 3000 && AudioMs(first) == 2000);
         now = 3001; take.Complete(first, [new(0, 2000, " Copper", .05)]);
         Check("one slow window keeps live words going", !take.TooSlow && take.Text.Trim() == "Copper");
-        now = 7000; take.Append(Tone(5000)); var second = take.Next()!;
+        now = 7000; take.Append(Tone(5000)); var second = take.Next()!; take.Begin(second);
         long limit = Math.Max(AudioMs(second), LiveSession.SlowWindowFloorMs);
         now += limit; take.Complete(second, [new(0, 7000, " Copper kettle", .05)]);
         Check("a window exactly as long as its audio is not slow", !take.TooSlow);
-        now += 2 * limit; take.Append(Tone(1000)); var third = take.Next()!;
+        now += 2 * limit; take.Append(Tone(1000)); var third = take.Next()!; take.Begin(third);
         now += Math.Max(AudioMs(third), LiveSession.SlowWindowFloorMs) + 1; take.Complete(third, [new(0, 8000, " Copper kettle lid", .05)]);
         Check("slow, quick, slow is not two in a row", !take.TooSlow);
-        now += 100_000; take.Append(Tone(1000)); var fourth = take.Next()!;
+        now += 100_000; take.Append(Tone(1000)); var fourth = take.Next()!; take.Begin(fourth);
         now += Math.Max(AudioMs(fourth), LiveSession.SlowWindowFloorMs) + 1; take.Complete(fourth, [new(0, 9000, " Copper kettle lid on", .05)]);
         Check("two slow windows in a row end live words and keep the words shown", take.TooSlow && take.Text.Trim() == "Copper kettle lid on" && !take.Failed);
         now += 100_000; take.Append(Tone(2000));
@@ -132,24 +132,44 @@ internal static class LiveTextChecks
 
         // A window canceled at the limit (no result) counts as slow too.
         long clock2 = 0; var canceled = new LiveSession(31, clock: () => clock2);
-        canceled.Append(Tone(1000)); var a = canceled.Next()!;
+        canceled.Append(Tone(1000)); var a = canceled.Next()!; canceled.Begin(a);
         clock2 = LiveSession.WindowLimitMs; canceled.Abandon(a);
-        clock2 += LiveSession.WindowLimitMs; canceled.Append(Tone(1000)); var b = canceled.Next()!;
+        clock2 += LiveSession.WindowLimitMs; canceled.Append(Tone(1000)); var b = canceled.Next()!; canceled.Begin(b);
         clock2 += 1; canceled.Abandon(b); // the recognizer's clock, not the session's, decides when a window is canceled
         Check("two windows canceled at the limit end live words", canceled.TooSlow && LiveSession.WindowLimitMs == 10_000);
 
+        // Waiting for the worker (a launch prewarm, a model load) is not slowness: the clock starts at Begin.
+        long clock5 = 0; var waited = new LiveSession(34, clock: () => clock5);
+        waited.Append(Tone(1000)); var w1 = waited.Next()!;
+        clock5 = 8000; waited.Begin(w1); clock5 = 8500; waited.Complete(w1, [new(0, 1000, " Lantern", .05)]);
+        clock5 = 9000; waited.Append(Tone(1000)); var w2 = waited.Next();
+        Check("the rest after a waited window is its 500 ms of recognition, not the 8 s wait", w2 != null && w2.Sequence == 1);
+        clock5 = 17_000; waited.Begin(w2!); clock5 = 17_400; waited.Complete(w2!, [new(0, 2000, " Lantern light", .05)]);
+        Check("an 8 s wait for the worker before a short window is not slow", !waited.TooSlow && waited.Text.Trim() == "Lantern light");
+        long clock6 = 0; var neverBegan = new LiveSession(35, clock: () => clock6);
+        neverBegan.Append(Tone(1000)); var n1 = neverBegan.Next()!; clock6 = 20_000; neverBegan.Abandon(n1);
+        clock6 = 20_100; neverBegan.Append(Tone(1000)); var n2 = neverBegan.Next();
+        Check("a window canceled before it ran leaves no rest behind", n2 != null);
+        clock6 = 41_000; neverBegan.Abandon(n2!);
+        Check("windows canceled while still waiting for the worker never count as slow", !neverBegan.TooSlow);
+        clock6 = 100_000; neverBegan.Append(Tone(1000)); var n3 = neverBegan.Next();
+        Check("live words go on after waits", n3 != null);
+        neverBegan.Begin(n1); // not the window in flight: ignored
+        clock6 = 100_000 + LiveSession.SlowWindowFloorMs + 1; neverBegan.Complete(n3!, [new(0, 3000, " Lamp", .05)]);
+        Check("Begin for a window that is not in flight is ignored; the live one was never begun, so it is not judged", !neverBegan.TooSlow && neverBegan.Text.Trim() == "Lamp");
+
         // A stop cancels the window in flight; that is not slowness and must not end anything for the next take.
         long clock3 = 0; var stopped = new LiveSession(32, clock: () => clock3);
-        stopped.Append(Tone(1000)); var c0 = stopped.Next()!;
+        stopped.Append(Tone(1000)); var c0 = stopped.Next()!; stopped.Begin(c0);
         clock3 = LiveSession.SlowWindowFloorMs + 1; stopped.Complete(c0, [new(0, 1000, " Slow", .05)]); // one slow window
-        clock3 *= 2; stopped.Append(Tone(1000)); var c = stopped.Next()!;
+        clock3 *= 2; stopped.Append(Tone(1000)); var c = stopped.Next()!; stopped.Begin(c);
         clock3 += 50_000; stopped.Close(); stopped.Abandon(c);
         Check("a window canceled by the stop does not count as a second slow window", !stopped.TooSlow);
 
         // Fast machine: a 15 s window in 1 s on the test VM is far from slow.
         long clock4 = 0; var quick = new LiveSession(33, clock: () => clock4);
-        quick.Append(Tone(15_000)); var d = quick.Next()!; clock4 = 1000; quick.Complete(d, [new(0, 15_000, " Harbor", .05)]);
-        clock4 = 3000; quick.Append(Tone(2000)); var e = quick.Next()!; clock4 = 4000; quick.Complete(e, [new(0, 17_000, " Harbor light", .05)]);
+        quick.Append(Tone(15_000)); var d = quick.Next()!; quick.Begin(d); clock4 = 1000; quick.Complete(d, [new(0, 15_000, " Harbor", .05)]);
+        clock4 = 3000; quick.Append(Tone(2000)); var e = quick.Next()!; quick.Begin(e); clock4 = 4000; quick.Complete(e, [new(0, 17_000, " Harbor light", .05)]);
         Check("quick windows never trip the slow rule", !quick.TooSlow && quick.Inferences == 2);
         Check("the note tells the person what happens next", LiveTake.TooSlowNote.Contains("when you stop") && LiveTake.TooSlowNote.Length <= 60);
     }
@@ -214,13 +234,13 @@ internal static class LiveTextChecks
         long now = 0;
         var take = new LiveSession(20, clock: () => now);
         take.Append(Tone(1000));
-        var slow = take.Next()!;
+        var slow = take.Next()!; take.Begin(slow);
         Check("the first window starts at once", slow != null && slow.Sequence == 0);
         now = 900; take.Append(Tone(1000));
         take.Complete(slow!, [new(0, 1000, " Copper", .05)]);
         Check("after a 900 ms window nothing starts during the next 900 ms", take.Next() == null && !take.Busy);
         now = 1799; Check("still resting 1 ms before the rest ends", take.Next() == null);
-        now = 1800; var next = take.Next();
+        now = 1800; var next = take.Next(); take.Begin(next!);
         Check("the next window starts when the rest ends and covers the newest audio", next != null && next.EndSample == 2000 * 16);
 
         // A fast machine: a 100 ms window never holds the next one back.
@@ -230,7 +250,7 @@ internal static class LiveTextChecks
 
         // Cancel: an abandoned slow window rests too, and stopping during a rest keeps the words.
         long clock2 = 0; var canceled = new LiveSession(21, clock: () => clock2);
-        canceled.Append(Tone(1000)); var first = canceled.Next()!;
+        canceled.Append(Tone(1000)); var first = canceled.Next()!; canceled.Begin(first);
         clock2 = 800; canceled.Abandon(first); canceled.Append(Tone(1000));
         Check("a canceled slow window does not restart back to back", canceled.Next() == null && !canceled.Busy);
         Check("stopping during a rest ends the take with its words", canceled.Close() == "" && canceled.Next() == null);
@@ -238,7 +258,7 @@ internal static class LiveTextChecks
 
         // Device change: the recorder pauses while the new microphone opens, then audio resumes.
         long clock3 = 0; var device = new LiveSession(22, clock: () => clock3);
-        device.Append(Tone(1000)); var before = device.Next()!;
+        device.Append(Tone(1000)); var before = device.Next()!; device.Begin(before);
         clock3 = 700; device.Complete(before, [new(0, 1000, " Harbor", .05)]);
         clock3 = 4000; Check("no audio during the switch plans nothing", device.Next() == null);
         device.Append(Tone(300)); device.Append(Tone(400)); device.Append(Tone(300));

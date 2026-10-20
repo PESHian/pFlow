@@ -176,15 +176,15 @@ static void recognize_live(whisper_context * ctx, int threads, const Job & job) 
 // still making progress. Failures here are ignored: the reply itself reports a
 // closed pipe. Nothing else writes to stdout during the pass.
 static Clock::time_point last_progress;
-static bool progress_beat(void *) {
+static void progress_frame(std::chrono::milliseconds interval) {
     auto now = Clock::now();
-    if (now - last_progress >= std::chrono::seconds(1)) {
+    if (now - last_progress >= interval) {
         last_progress = now;
         uint32_t frame = kProgress;
         if (fwrite(&frame, sizeof(frame), 1, stdout) == 1) fflush(stdout);
     }
-    return false;
 }
+static bool progress_beat(void *) { progress_frame(std::chrono::seconds(1)); return false; }
 
 static void transcribe_file(whisper_context * ctx, int threads, const Job & job) {
     auto & audio = job.audio; auto & language = job.language; auto & prompt = job.prompt;
@@ -231,7 +231,11 @@ int main() {
         std::ifstream model_file(std::filesystem::u8path(model), std::ios::binary);
         if (!model_file) { put(3); put(std::string("Speech model could not open.")); fflush(stdout); return 3; }
         whisper_model_loader loader{}; loader.context = &model_file;
-        loader.read = [](void * user, void * data, size_t size) -> size_t { auto & file = *static_cast<std::ifstream *>(user); file.read(static_cast<char *>(data), size); return static_cast<size_t>(file.gcount()); };
+        // A slow disk or a virus scanner can make the 487 MB load take a while: progress frames go out before
+        // the ready reply (one as reading begins, then every 250 ms), so the app can tell a slow load from a
+        // stuck worker.
+        last_progress = start - std::chrono::hours(1);
+        loader.read = [](void * user, void * data, size_t size) -> size_t { auto & file = *static_cast<std::ifstream *>(user); file.read(static_cast<char *>(data), size); progress_frame(std::chrono::milliseconds(250)); return static_cast<size_t>(file.gcount()); };
         loader.eof = [](void * user) { return static_cast<std::ifstream *>(user)->eof(); };
         loader.close = [](void * user) { static_cast<std::ifstream *>(user)->close(); };
         std::unique_ptr<whisper_context, decltype(&whisper_free)> ctx(whisper_init_with_params_no_state(&loader, options), whisper_free);

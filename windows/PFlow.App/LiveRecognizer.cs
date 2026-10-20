@@ -43,8 +43,8 @@ internal sealed class LiveRecognizer
                 if (session.Next() is not { } request) continue;
                 IReadOnlyList<WhisperWindowSegment>? segments;
                 // A window that outlives the limit is canceled (the worker keeps its warm model) and counts as slow.
-                using var window = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token); window.CancelAfter(windowLimit);
-                try { segments = await whisper.RecognizeLive(request, language, window.Token); }
+                using var window = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token);
+                try { segments = await whisper.RecognizeLive(request, language, window.Token, started: () => { session.Begin(request); window.CancelAfter(windowLimit); }); }
                 catch (Exception) when (!stopping.IsCancellationRequested) { session.Fail(); onFailure(); return; }
                 if (segments == null) session.Abandon(request);
                 else if (session.Complete(request, segments) is { } update) onUpdate(update);

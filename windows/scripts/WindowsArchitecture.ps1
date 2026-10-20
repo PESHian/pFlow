@@ -72,7 +72,9 @@ function Get-PFlowExecutableArchitecture([string]$Path) {
 }
 
 function Assert-PFlowArchitecture([string]$Source, [string]$Expected = (Get-PFlowArchitecture)) {
-    foreach ($name in @('pFlow.exe', 'engine\whisper-cli.exe', 'engine\pflow-whisper.exe')) {
+    # x64 payloads also carry the AVX2 speech worker; without it dictation would silently run the slow baseline.
+    $names = @('pFlow.exe', 'engine\whisper-cli.exe', 'engine\pflow-whisper.exe'); if ($Expected -eq 'x64') { $names += 'engine\pflow-whisper-avx2.exe' }
+    foreach ($name in $names) {
         $path = Join-Path $Source $name
         if (!(Test-Path -LiteralPath $path -PathType Leaf) -or (Get-PFlowExecutableArchitecture $path) -ne $Expected) {
             throw "This package does not match $Expected Windows. Download the universal Windows ZIP. Your installed app was not changed."
