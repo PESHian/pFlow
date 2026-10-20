@@ -87,14 +87,14 @@ final class ModifierHotkeyMonitor {
     private func combination() {
         usedInCombination = true
         if activation.isDown {
-            NSLog("Yap: Right Command recording cancelled by a shortcut or click")
+            NSLog("pFlow: Right Command recording cancelled by a shortcut or click")
             emit(activation.interrupt())
         }
     }
 
     func rightCommand(_ event: NSEvent) {
         guard let down = CommandKey.rightCommandTransition(keyCode: Int64(event.keyCode), flags: UInt64(event.modifierFlags.rawValue)) else { return }
-        NSLog("Yap: Right Command \(down ? "down" : "up"), flags=\(event.modifierFlags.rawValue)")
+        NSLog("pFlow: Right Command \(down ? "down" : "up"), flags=\(event.modifierFlags.rawValue)")
         // Starting audio can delay delivery. Classify the physical key times,
         // not the time the main thread finally handles their events.
         let now = event.timestamp
@@ -111,7 +111,7 @@ final class ModifierHotkeyMonitor {
                     let effects = self.activation.recoverRelease(
                         commandIsDown: commandIsDown, at: ProcessInfo.processInfo.systemUptime)
                     if !self.activation.isDown {
-                        NSLog("Yap: Right Command release recovered from modifier state")
+                        NSLog("pFlow: Right Command release recovered from modifier state")
                         self.emit(effects)
                         return
                     }

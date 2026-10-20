@@ -19,7 +19,7 @@ enum AppRelauncher {
         ) { app, error in
             Task { @MainActor in
                 guard error == nil, app != nil else {
-                    NSLog("Yap: relaunch failed (\(error?.localizedDescription ?? "unknown")), falling back")
+                    NSLog("pFlow: relaunch failed (\(error?.localizedDescription ?? "unknown")), falling back")
                     relaunchViaOpenTool()
                     return
                 }

@@ -90,7 +90,7 @@ final class RecordingCoordinator {
             guard let self else { return }
             do { try await self.session.start(take: take, live: self.takeLiveTextMode.showsPreview) }
             catch {
-                NSLog("Yap: failed to start recording: \(error)")
+                NSLog("pFlow: failed to start recording: \(error)")
                 self.transcript.cancel()
                 self.leaveLiveTyping()
                 _ = try? await self.session.stop()
@@ -348,9 +348,9 @@ final class RecordingCoordinator {
                 outcome = await injector.deliver(text, formatted: formattedText)
             }
             lastOutcome = outcome
-            NSLog("Yap: insertion result: \(outcome)")
+            NSLog("pFlow: insertion result: \(outcome)")
             if case .blockedBySecureInput(let holder) = outcome {
-                NSLog("Yap: paste blocked by secure input held by \(holder ?? "another app"); text left on clipboard")
+                NSLog("pFlow: paste blocked by secure input held by \(holder ?? "another app"); text left on clipboard")
             }
 
             history.save(text: text, duration: duration, device: recordingDevice,
@@ -376,7 +376,7 @@ final class RecordingCoordinator {
                 hud.hide(after: 3)
             }
         } catch {
-            NSLog("Yap: failed to finish recording: \(error.localizedDescription)")
+            NSLog("pFlow: failed to finish recording: \(error.localizedDescription)")
             keepRecoverableText(after: error, duration: duration)
         }
         state = .idle

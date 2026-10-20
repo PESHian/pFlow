@@ -233,7 +233,7 @@ final class TextInjector: TextInjecting {
     /// fallback for when automation is unavailable.
     private func postPaste() async {
         if pasteViaAppleScript() { return }
-        NSLog("Yap: AppleScript paste unavailable, falling back to synthetic key events")
+        NSLog("pFlow: AppleScript paste unavailable, falling back to synthetic key events")
         await postSyntheticPaste()
     }
 
@@ -282,7 +282,7 @@ final class TextInjector: TextInjecting {
         var error: NSDictionary?
         script.executeAndReturnError(&error)
         if let error {
-            NSLog("Yap: AppleScript paste failed: \(error)")
+            NSLog("pFlow: AppleScript paste failed: \(error)")
             return false
         }
         return true

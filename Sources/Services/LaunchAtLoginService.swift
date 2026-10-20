@@ -16,7 +16,7 @@ final class LaunchAtLoginService {
     func refresh() {
         isEnabled = SMAppService.mainApp.status == .enabled
         let status = isEnabled ? "enabled" : (needsApproval ? "requires approval" : "disabled")
-        NSLog("Yap: launch-at-login status: \(status)")
+        NSLog("pFlow: launch-at-login status: \(status)")
     }
 
     func set(_ enabled: Bool) {
@@ -29,7 +29,7 @@ final class LaunchAtLoginService {
                 try SMAppService.mainApp.unregister()
             }
         } catch {
-            NSLog("Yap: launch-at-login toggle failed: \(error.localizedDescription)")
+            NSLog("pFlow: launch-at-login toggle failed: \(error.localizedDescription)")
         }
         refresh()
     }

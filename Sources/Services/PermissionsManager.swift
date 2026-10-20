@@ -154,7 +154,7 @@ final class PermissionsManager {
             try task.run()
             task.waitUntilExit()
         } catch {
-            NSLog("Yap: tccutil reset failed: \(error.localizedDescription)")
+            NSLog("pFlow: tccutil reset failed: \(error.localizedDescription)")
         }
         refresh()
         requestAccessibility()

@@ -178,7 +178,7 @@ final class TranscriptCleanupService: TranscriptCleaning {
             return edited
         } catch {
             // Timeout, guardrail refusal, context overflow — all land here.
-            NSLog("Yap: transcript post-processing fell back to the raw text: \(error.localizedDescription)")
+            NSLog("pFlow: transcript post-processing fell back to the raw text: \(error.localizedDescription)")
             return text
         }
     }

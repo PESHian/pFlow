@@ -94,7 +94,7 @@ final class TranscriptionService: StreamingTranscriber {
                 }
             } catch {
                 if !Task.isCancelled {
-                    NSLog("Yap: live recognition stopped: \(error.localizedDescription)")
+                    NSLog("pFlow: live recognition stopped: \(error.localizedDescription)")
                     self.textLock.withLock { self.recognitionFailed = true }
                 }
             }
@@ -156,7 +156,7 @@ final class TranscriptionService: StreamingTranscriber {
             do {
                 try await AssetInventory.reserve(locale: locale)
             } catch {
-                NSLog("Yap: could not reserve locale \(locale.identifier): \(error.localizedDescription)")
+                NSLog("pFlow: could not reserve locale \(locale.identifier): \(error.localizedDescription)")
             }
         }
     }
