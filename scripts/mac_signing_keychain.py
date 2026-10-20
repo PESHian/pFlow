@@ -31,7 +31,7 @@ def main():
                 '--team-id', os.environ['PFLOW_DEVELOPER_TEAM'])
             certificate.unlink()
             env = dict(os.environ, PFLOW_SIGNING_KEYCHAIN=str(keychain), YAP_NOTARY_PROFILE='pflow-release')
-            subprocess.run([sys.executable, 'scripts/mac_release.py', '--app', 'build/Build/Products/Release/Yap.app'], env=env, check=True)
+            subprocess.run([sys.executable, 'scripts/mac_release.py', '--app', 'build/Build/Products/Release/pFlow.app'], env=env, check=True)
         finally:
             if keychain.exists():
                 run('security', 'delete-keychain', keychain)

@@ -23,7 +23,7 @@ jobs:
           xcodegen generate
           xcodebuild -project Yap.xcodeproj -scheme Yap -configuration Release -destination 'platform=macOS' -derivedDataPath build -only-testing:YapTests/ReleaseUpdatesTests -only-testing:YapTests/MacUpdateProcessTests CODE_SIGN_IDENTITY=- ENABLE_TESTABILITY=YES test > build-updates.log 2>&1 || { tail -60 build-updates.log; exit 1; }
           tail -20 build-updates.log
-          app=build/Build/Products/Release/Yap.app
+          app=build/Build/Products/Release/pFlow.app
           codesign --verify --deep --strict "$app"
           bash release.sh --testing "$app"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

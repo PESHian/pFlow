@@ -99,10 +99,26 @@ enum MacUpdateInstaller {
     static func verifyDeveloperID(_ app: URL, team: String) throws {
         try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--all-architectures", "-R", "=" + (try developerRequirement(team: team)), app.path])
     }
+    // Earlier builds, including public 0.3.5, used the internal name Yap. Updates
+    // only move forward, so every bundle this code accepts (its own helper copy
+    // and the download) carries the current name.
+    static let permittedExecutables: Set<String> = ["pFlow"]
+    // The bundle's main program, accepted only under a permitted plain name and
+    // only as a regular file that really lives in this bundle's Contents/MacOS.
+    static func executable(_ app: URL) throws -> URL {
+        guard let name = try metadata(app)["CFBundleExecutable"] as? String,
+              name.range(of: #"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"#, options: .regularExpression) != nil,
+              permittedExecutables.contains(name) else { throw UpdateError.invalid }
+        let file = app.appendingPathComponent("Contents/MacOS", isDirectory: true).appendingPathComponent(name, isDirectory: false)
+        let inside = app.resolvingSymlinksInPath().appendingPathComponent("Contents/MacOS", isDirectory: true).appendingPathComponent(name, isDirectory: false)
+        guard try FileManager.default.attributesOfItem(atPath: file.path)[.type] as? FileAttributeType == .typeRegular,
+              file.resolvingSymlinksInPath().standardizedFileURL.path == inside.standardizedFileURL.path else { throw UpdateError.invalid }
+        return file
+    }
     static func verifyBundle(_ app: URL, version: String) throws {
         let info = try metadata(app)
-        guard info["CFBundleIdentifier"] as? String == "com.pesh.Yap", info["CFBundleExecutable"] as? String == "Yap", info["CFBundleShortVersionString"] as? String == version else { throw UpdateError.invalid }
-        try run("/usr/bin/lipo", ["-verify_arch", "arm64", app.appendingPathComponent("Contents/MacOS/Yap").path])
+        guard info["CFBundleIdentifier"] as? String == "com.pesh.Yap", info["CFBundleShortVersionString"] as? String == version else { throw UpdateError.invalid }
+        try run("/usr/bin/lipo", ["-verify_arch", "arm64", try executable(app).path])
     }
     static func verify(_ app: URL, version: String) throws {
         try verifyDeveloperID(app, team: expectedTeam)
@@ -232,7 +248,7 @@ final class MacUpdates: ObservableObject {
             let file = job.appendingPathComponent("plan.json"); try JSONEncoder().encode(plan).write(to: file, options: .atomic)
             let helperApp = job.appendingPathComponent("helper.app")
             try MacUpdateInstaller.copyHelper(from: Bundle.main.bundleURL, to: helperApp, version: Self.current)
-            let process = Process(); process.executableURL = helperApp.appendingPathComponent("Contents/MacOS/Yap"); process.arguments = ["--apply-update", file.path]; try process.run(); helper = process
+            let process = Process(); process.executableURL = try MacUpdateInstaller.executable(helperApp); process.arguments = ["--apply-update", file.path]; try process.run(); helper = process
             let deadline = Date().addingTimeInterval(60)
             while !fm.fileExists(atPath: job.appendingPathComponent("ready").path) { guard process.isRunning, Date() < deadline else { throw UpdateError.failed }; try await Task.sleep(for: .milliseconds(100)) }
             try Task.checkCancellation(); NSApplication.shared.terminate(nil)

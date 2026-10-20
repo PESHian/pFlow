@@ -31,13 +31,59 @@ struct ReleaseUpdatesTests {
             try MacUpdateInstaller.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path])
         }
         try MacUpdateInstaller.copyHelper(from: original, to: helper, version: version, validate: integrityOnly)
-        for file in ["Contents/Info.plist", "Contents/MacOS/Yap", "Contents/_CodeSignature/CodeResources"] {
+        for file in ["Contents/Info.plist", "Contents/MacOS/pFlow", "Contents/_CodeSignature/CodeResources"] {
             #expect(try Data(contentsOf: original.appendingPathComponent(file)) == Data(contentsOf: helper.appendingPathComponent(file)))
         }
+        #expect(try MacUpdateInstaller.executable(helper) == helper.appendingPathComponent("Contents/MacOS/pFlow"))
+        let tampered = root.appendingPathComponent("tampered.app")
+        try fm.copyItem(at: helper, to: tampered)
+        let program = try FileHandle(forWritingTo: tampered.appendingPathComponent("Contents/MacOS/pFlow"))
+        try program.seek(toOffset: 4096); try program.write(contentsOf: Data([0, 1, 2, 3])); try program.close()
+        #expect(throws: (any Error).self) { try integrityOnly(tampered, version) }
         let plist = helper.appendingPathComponent("Contents/Info.plist")
         var info = try MacUpdateInstaller.metadata(helper); info["CFBundleIdentifier"] = "com.pesh.Yap.UpdateHelper"
         try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: plist)
         #expect(throws: (any Error).self) { try integrityOnly(helper, version) }
+    }
+    @Test func executableMustBePermittedRegularAndInsideTheBundle() throws {
+        let fm = FileManager.default, root = fm.temporaryDirectory.appendingPathComponent("pflow-executable-fictional-\(UUID().uuidString)")
+        try fm.createDirectory(at: root, withIntermediateDirectories: false); defer { try? fm.removeItem(at: root) }
+        let real = try MacUpdateInstaller.executable(Bundle.main.bundleURL)
+        #expect(real.lastPathComponent == "pFlow")
+        // Each fixture declares `name` and places a real arm64 program at `file`
+        // (relative to Contents), so only the rule under test can reject it.
+        func fixture(_ name: String, file: String, link: URL? = nil, program: URL? = nil) throws -> URL {
+            let app = root.appendingPathComponent("\(UUID().uuidString).app"), target = app.appendingPathComponent("Contents/" + file)
+            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let info: [String: Any] = ["CFBundleIdentifier": "com.pesh.Yap", "CFBundleExecutable": name, "CFBundleShortVersionString": "0.3.6"]
+            try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: app.appendingPathComponent("Contents/Info.plist"))
+            if let link { try fm.createSymbolicLink(at: target, withDestinationURL: link) } else { try fm.copyItem(at: program ?? real, to: target) }
+            return app
+        }
+        let accepted = try fixture("pFlow", file: "MacOS/pFlow")
+        #expect(try MacUpdateInstaller.executable(accepted) == accepted.appendingPathComponent("Contents/MacOS/pFlow"))
+        try MacUpdateInstaller.verifyBundle(accepted, version: "0.3.6")
+        for (name, file) in [("Yap", "MacOS/Yap"), ("Other", "MacOS/Other"), ("../pFlow", "pFlow"), ("../../pFlow", "../pFlow"), ("pFlow ", "MacOS/pFlow ")] {
+            let app = try fixture(name, file: file)
+            #expect(throws: (any Error).self, "\(name)") { try MacUpdateInstaller.executable(app) }
+            #expect(throws: (any Error).self, "\(name)") { try MacUpdateInstaller.verifyBundle(app, version: "0.3.6") }
+        }
+        let outside = root.appendingPathComponent("outside"); try fm.createDirectory(at: outside, withIntermediateDirectories: false)
+        try fm.copyItem(at: real, to: outside.appendingPathComponent("pFlow"))
+        let linkedFile = try fixture("pFlow", file: "MacOS/pFlow", link: outside.appendingPathComponent("pFlow"))
+        let linkedFolder = try fixture("pFlow", file: "MacOS", link: outside)
+        for app in [linkedFile, linkedFolder] {
+            #expect(throws: (any Error).self) { try MacUpdateInstaller.executable(app) }
+        }
+        let source = root.appendingPathComponent("intel.c"), intel = root.appendingPathComponent("intel")
+        try Data("int main(void) { return 0; }\n".utf8).write(to: source)
+        try MacUpdateInstaller.run("/usr/bin/xcrun", ["clang", "-arch", "x86_64", "-mmacosx-version-min=27.0", source.path, "-o", intel.path])
+        let text = root.appendingPathComponent("not-a-program"); try Data("Fictional text, not a program.".utf8).write(to: text)
+        for program in [intel, text] {
+            let app = try fixture("pFlow", file: "MacOS/pFlow", program: program)
+            #expect(try MacUpdateInstaller.executable(app).lastPathComponent == "pFlow")
+            #expect(throws: (any Error).self) { try MacUpdateInstaller.verifyBundle(app, version: "0.3.6") }
+        }
     }
     @Test func signedFeedAndVersionRules() throws {
         struct Vector: Decodable { let name: String; let data: String; let signature: String }

@@ -97,21 +97,25 @@ def package(app, dist, *, testing=False, env=None):
     commit = run('git', 'rev-parse', 'HEAD').decode().strip() if signing else ''
     if app is None:
         if testing:
-            app = ROOT / 'build/Build/Products/Release/Yap.app'
+            app = ROOT / 'build/Build/Products/Release/pFlow.app'
         else:
             run('xcodegen', 'generate')
             run('xcodebuild', '-project', 'Yap.xcodeproj', '-scheme', 'Yap', '-configuration', 'Release',
                 '-destination', 'platform=macOS', '-derivedDataPath', 'build', 'CODE_SIGNING_ALLOWED=NO',
                 'CODE_SIGNING_REQUIRED=NO', 'CODE_SIGN_IDENTITY=', f'PFLOW_DEVELOPER_TEAM={signing[0]}', 'clean', 'build')
-            app = ROOT / 'build/Build/Products/Release/Yap.app'
+            app = ROOT / 'build/Build/Products/Release/pFlow.app'
     app = Path(app).resolve()
     info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
     version = info.get('CFBundleShortVersionString', '')
     if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version) or any(int(x) > 2147483647 for x in version.split('.')):
         raise ValueError('Invalid app version')
-    if info.get('CFBundleIdentifier') != 'com.pesh.Yap' or info.get('CFBundleExecutable') != 'Yap':
+    # Keep the bundle ID for existing data; the executable is the name macOS shows.
+    if info.get('CFBundleIdentifier') != 'com.pesh.Yap' or info.get('CFBundleExecutable') != 'pFlow':
         raise ValueError('Unexpected app identity')
-    run('lipo', '-verify_arch', 'arm64', app / 'Contents/MacOS/Yap')
+    executable = app / 'Contents/MacOS/pFlow'
+    if executable.is_symlink() or not executable.is_file():
+        raise ValueError('Unexpected app executable')
+    run('lipo', '-verify_arch', 'arm64', executable)
     # Public 0.3.5 updaters require this suffix, even for notarized downloads.
     name = f'pFlow-Mac-{version}-testing.dmg'
     dist = Path(dist); dist.mkdir(parents=True, exist_ok=True)

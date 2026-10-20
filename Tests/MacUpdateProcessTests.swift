@@ -76,8 +76,8 @@ struct MacUpdateProcessTests {
         func bundle(_ path: URL, version: String, control: URL) throws {
             let macos = path.appendingPathComponent("Contents/MacOS")
             try fm.createDirectory(at: macos, withIntermediateDirectories: true)
-            try fm.copyItem(at: executable, to: macos.appendingPathComponent("Yap"))
-            let info: [String: Any] = ["CFBundleIdentifier":"com.pesh.Yap", "CFBundleExecutable":"Yap", "CFBundleName":"pFlow fictional update fixture", "CFBundlePackageType":"APPL", "CFBundleShortVersionString":version, "CFBundleVersion":"1", "LSUIElement":true, "PFLOWFixtureRoot":control.path]
+            try fm.copyItem(at: executable, to: macos.appendingPathComponent("pFlow"))
+            let info: [String: Any] = ["CFBundleIdentifier":"com.pesh.Yap", "CFBundleExecutable":"pFlow", "CFBundleName":"pFlow fictional update fixture", "CFBundlePackageType":"APPL", "CFBundleShortVersionString":version, "CFBundleVersion":"1", "LSUIElement":true, "PFLOWFixtureRoot":control.path]
             try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: path.appendingPathComponent("Contents/Info.plist"))
             try MacUpdateInstaller.run("/usr/bin/codesign", ["--force", "--sign", "-", path.path])
         }
@@ -96,7 +96,7 @@ struct MacUpdateProcessTests {
             try bundle(destination, version: "0.3.4", control: directory); try bundle(source, version: "0.3.5", control: directory)
             let history = directory.appendingPathComponent("fictional-history.txt")
             try Data("Private fictional history.".utf8).write(to: history)
-            if scenario == "corrupt" { let handle = try FileHandle(forWritingTo: source.appendingPathComponent("Contents/MacOS/Yap")); try handle.seek(toOffset: 1024); try handle.write(contentsOf: Data([0,1,2,3])); try handle.close() }
+            if scenario == "corrupt" { let handle = try FileHandle(forWritingTo: source.appendingPathComponent("Contents/MacOS/pFlow")); try handle.seek(toOffset: 1024); try handle.write(contentsOf: Data([0,1,2,3])); try handle.close() }
             try MacUpdateInstaller.run("/usr/bin/open", ["-n", destination.path])
             let started = directory.appendingPathComponent("started-0.3.4")
             try await wait { fm.fileExists(atPath: started.path) }

@@ -32,4 +32,7 @@ if ($LASTEXITCODE) { throw 'Windows app build failed.' }
 Copy-Item "$engine\*" "$root\dist\$rid\engine" -Force
 Copy-Item "$PSScriptRoot\install-windows.ps1","$PSScriptRoot\WindowsArchitecture.ps1" "$root\dist\$rid"
 Assert-PFlowArchitecture "$root\dist\$rid" $arch
+# Windows shows these as the app and publisher in Task Manager, startup apps and file details.
+$label = [Diagnostics.FileVersionInfo]::GetVersionInfo("$root\dist\$rid\pFlow.exe")
+if ($label.ProductName -ne 'pFlow' -or $label.FileDescription -ne 'pFlow' -or $label.CompanyName -ne 'Pesh') { throw "Unexpected public app labels: $($label.ProductName) / $($label.FileDescription) / $($label.CompanyName)." }
 Write-Output "Published $root\dist\$rid"

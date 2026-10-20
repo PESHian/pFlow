@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 #
-# Builds Yap from source and installs it into /Applications.
+# Builds pFlow from source and installs it into /Applications.
 #
 # For local development. Released builds are signed and notarized; this one is
 # signed ad-hoc, which means macOS treats every rebuild as a new application and
-# forgets the permissions you granted the previous one. Yap has a
+# forgets the permissions you granted the previous one. pFlow has a
 # "Reset and re-grant" button in Settings for that.
 
 set -euo pipefail
 
-APP_NAME="Yap"
+PROJECT="Yap"
+APP_NAME="pFlow"
 BUILD_DIR="build"
 INSTALL_DIR="/Applications"
 CONFIGURATION="${CONFIGURATION:-Release}"
@@ -34,8 +35,8 @@ xcodegen generate
 
 info "Building $APP_NAME ($CONFIGURATION)"
 xcodebuild \
-  -project "$APP_NAME.xcodeproj" \
-  -scheme "$APP_NAME" \
+  -project "$PROJECT.xcodeproj" \
+  -scheme "$PROJECT" \
   -configuration "$CONFIGURATION" \
   -destination 'platform=macOS' \
   -derivedDataPath "$BUILD_DIR" \
@@ -54,6 +55,10 @@ fi
 info "Installing to $INSTALL_DIR/$APP_NAME.app"
 rm -rf "${INSTALL_DIR:?}/$APP_NAME.app"
 cp -R "$BUILT_APP" "$INSTALL_DIR/"
+
+if [ -d "$INSTALL_DIR/Yap.app" ]; then
+  info "An older copy is still at $INSTALL_DIR/Yap.app. Quit it and move it to the Trash; your settings and history stay."
+fi
 
 info "Launching"
 open "$INSTALL_DIR/$APP_NAME.app"

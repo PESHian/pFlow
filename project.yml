@@ -42,7 +42,10 @@ targets:
       base:
         INFOPLIST_FILE: Sources/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: com.pesh.Yap
-        PRODUCT_NAME: Yap
+        # The executable and built app are pFlow so macOS lists that name. The
+        # bundle ID and Swift module stay Yap to keep data, login and tests.
+        PRODUCT_NAME: pFlow
+        PRODUCT_MODULE_NAME: Yap
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Yap-Bridging-Header.h
         PFLOW_ENTITLEMENTS_FILE: Sources/Yap.entitlements
         CODE_SIGN_ENTITLEMENTS: $(PFLOW_ENTITLEMENTS_FILE)
@@ -64,6 +67,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.pesh.YapTests
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/pFlow.app/Contents/MacOS/pFlow
         GENERATE_INFOPLIST_FILE: YES
 
 schemes:

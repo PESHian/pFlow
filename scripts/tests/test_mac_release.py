@@ -25,9 +25,9 @@ class MacReleaseTests(unittest.TestCase):
         self.app = self.root / 'built.app'
         (self.app / 'Contents/MacOS').mkdir(parents=True)
         (self.app / 'Contents/Helpers').mkdir()
-        for name in ['MacOS/Yap', 'Helpers/whisper-cli']:
+        for name in ['MacOS/pFlow', 'Helpers/whisper-cli']:
             (self.app / 'Contents' / name).write_bytes(bytes.fromhex('cffaedfe') + b'fictional')
-        info = dict(CFBundleIdentifier='com.pesh.Yap', CFBundleExecutable='Yap', CFBundleShortVersionString='0.3.6', PFLOWUpdateTeamID=TEAM)
+        info = dict(CFBundleIdentifier='com.pesh.Yap', CFBundleExecutable='pFlow', CFBundleShortVersionString='0.3.6', PFLOWUpdateTeamID=TEAM)
         (self.app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
         self.dist = self.root / 'dist'
         self.calls = []
@@ -129,6 +129,19 @@ class MacReleaseTests(unittest.TestCase):
             with self.subTest(field=field):
                 with self.assertRaises(ValueError): release.package(self.app, self.dist, env=dict(ENV, **{field:value}))
         self.assertFalse(any(a[:2] == ('xcrun', 'notarytool') for a in self.calls))
+
+    def test_only_the_pflow_executable_is_packaged(self):
+        info = plistlib.loads((self.app / 'Contents/Info.plist').read_bytes())
+        for name in ['Yap', '../pFlow', 'Other']:
+            with self.subTest(name=name):
+                (self.app / 'Contents/Info.plist').write_bytes(plistlib.dumps(dict(info, CFBundleExecutable=name)))
+                with self.assertRaises(ValueError): self.package(testing=True)
+        (self.app / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
+        executable = self.app / 'Contents/MacOS/pFlow'
+        executable.unlink(); executable.symlink_to(self.app / 'Contents/Helpers/whisper-cli')
+        with self.assertRaises(ValueError): self.package(testing=True)
+        self.assertFalse(any(a[0] == 'lipo' for a in self.calls))
+        self.assertFalse(list(self.dist.glob('*.dmg')))
 
     def test_testing_removes_stale_receipt_and_never_notarizes(self):
         self.dist.mkdir()

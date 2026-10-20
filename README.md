@@ -35,6 +35,8 @@ Quit pFlow before updating. Turn Mac dictation off before testing Windows record
 
 Choose **Check for updates** in the tray/menu bar or Settings, then **Install and restart**. pFlow checks a signed release list and verifies the download before replacing the app. Settings, history, and models stay on your device. Checks run only when requested. If your app has no Check for updates button, install a current build once using the steps above. Windows 0.1.11 and Mac 0.3.5 or later include the updater. Published GitHub binary releases become available in the app; source commits alone do not.
 
+**One-time Mac step.** Mac 0.3.5 and the 0.3.6 test downloads run under the old internal name Yap, which is why macOS can show Yap in its permission lists. They cannot install the first build named pFlow themselves; they report that the update could not finish and keep your app. Install that build once by hand: quit pFlow, open the new disk image, drag **pFlow by Pesh** into the same Applications folder, and choose **Replace**. Settings, history, dictionary, templates, and models stay. macOS may ask for Accessibility and Automation again. If **System Settings → Privacy & Security → Accessibility** or **Automation** still lists Yap, select Yap, click **−**, then open pFlow and allow it again. Later updates work from the app.
+
 Windows on/off controls show **On** or **Off** and a contrasting thumb. Settings shows the latest dictation time split into speech, AI cleanup, report formatting, and insertion when those stages ran. This readout contains no dictated words. AI cleanup remains optional; this release does not claim a processing speed improvement.
 
 ## Features
@@ -54,7 +56,7 @@ This public repository contains application source, artwork, licenses, and ficti
 
 ## Build from source
 
-Mac: install Xcode with the macOS 27 SDK and [XcodeGen](https://github.com/yonaskolb/XcodeGen), run `xcodegen generate`, then build the Yap scheme from `Yap.xcodeproj`. `scripts/build-whisper.sh` prepares the pinned local engine. `release.sh` supports Developer ID signing/notarization when you supply your own credentials.
+Mac: install Xcode with the macOS 27 SDK and [XcodeGen](https://github.com/yonaskolb/XcodeGen), run `xcodegen generate`, then build the Yap scheme from `Yap.xcodeproj`; it produces `pFlow.app`. `scripts/build-whisper.sh` prepares the pinned local engine. `release.sh` supports Developer ID signing/notarization when you supply your own credentials.
 
 For trusted Mac candidates, follow the [signing setup and release checks](updates/MAC-RELEASE.md). Production packaging requires an approved Developer ID identity and notarization access. Development builds cannot use the production updater. Public download claims above remain tied to the published builds until a new candidate passes the clean-Mac checks.
 
