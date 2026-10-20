@@ -101,7 +101,7 @@ internal static class LiveTextChecks
             Check("Type in the current app persists with other settings intact", reopened.LiveTextMode == LiveTextModes.TypeInApp && reopened.Language == "es" && reopened.Templates.Single().Name == "Garden log");
             File.WriteAllText(settings, File.ReadAllText(settings).Replace("\"liveTextMode\": \"type\"", "\"liveTextMode\": \"sideways\""));
             Check("an unknown saved Live text value loads as Off", new StateStore(directory).Preferences.LiveTextMode == LiveTextModes.Off);
-            Check("Type in the current app shows the preview for now", LiveTextModes.ShowsPreview(LiveTextModes.TypeInApp) && LiveTextModes.ShowsPreview(LiveTextModes.Preview) && !LiveTextModes.ShowsPreview("sideways"));
+            Check("Type in the current app also shows the preview", LiveTextModes.ShowsPreview(LiveTextModes.TypeInApp) && LiveTextModes.ShowsPreview(LiveTextModes.Preview) && !LiveTextModes.ShowsPreview("sideways"));
         } finally { Directory.Delete(directory, true); }
     }
 

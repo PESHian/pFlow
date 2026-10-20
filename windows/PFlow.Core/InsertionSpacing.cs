@@ -25,8 +25,9 @@ public static class InsertionSpacing
         return new(left != null && NeedsGap(left, first) ? " " : "", right != null && NeedsGap(last, right) ? " " : "");
     }
     static bool IsWord(string value) => value.EnumerateRunes().Any(Rune.IsLetterOrDigit);
-    static bool Unspaced(string value) => value.EnumerateRunes().Any(r => r.Value is >= 0x2E80 and <= 0x9FFF or >= 0xF900 and <= 0xFAFF or >= 0x20000 and <= 0x323AF);
+    /// Chinese and Japanese are written without spaces between words.
+    public static bool UsesUnspacedScript(string value) => value.EnumerateRunes().Any(r => r.Value is >= 0x2E80 and <= 0x9FFF or >= 0xF900 and <= 0xFAFF or >= 0x20000 and <= 0x323AF);
     static bool NeedsGap(string left, string right) => !string.IsNullOrWhiteSpace(left) && !string.IsNullOrWhiteSpace(right)
         && !"([{‘“_-/'\\@#".Contains(left, StringComparison.Ordinal) && !".,;:!?%)]}’”_-/'\\@#".Contains(right, StringComparison.Ordinal)
-        && !Unspaced(left) && !Unspaced(right);
+        && !UsesUnspacedScript(left) && !UsesUnspacedScript(right);
 }

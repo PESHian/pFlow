@@ -91,3 +91,27 @@ An optional `field {value, selection}` on a step is the simulated field after it
    refused. Otherwise, only if the checks in rule 2 pass right now, it puts the
    original selected text back and selects it again. A later edit by the
    person, anywhere in the field, means cancel leaves everything alone.
+
+## Provider capability matrix
+
+What each destination actually did with "Type in the current app". "Inline"
+means settled words, revisions, the final and cancel were written and read
+back there; "Preview" means pFlow refused at begin, wrote nothing, and showed
+the preview with the finished text inserted once at the end the normal way.
+
+| Platform | Destination | Result | How it was checked |
+|---|---|---|---|
+| Windows 11 ARM64 | Notepad 11.2607 (RichEditD2DPT) | Inline | Throwaway tab in the signed-in session, closed without saving |
+| Windows 11 ARM64 | Win32 Edit (WinForms TextBox, separate test process) | Inline | Test-owned window |
+| Windows 11 ARM64 | RichEdit 5.0 (WinForms RichTextBox, separate test process) | Inline; plain text takes the formatting at the caret, other runs keep theirs | Test-owned window |
+| Windows 11 ARM64 | Edge (Chromium) `input` and `textarea`, local file page | Preview: no native range write | Private Edge profile |
+| Windows 11 ARM64 | App running as administrator | Preview: Windows hides its fields from pFlow | Test-owned window, pFlow at medium integrity |
+| Windows | Electron editor (VS Code) | NOT RUN: not installed on the test VM | — |
+| macOS 27 | TextEdit, Safari, VS Code | NOT RUN: test build not trusted for Accessibility | — |
+
+Windows writes use window messages (EM_SETSEL, then EM_REPLACESEL) only for
+Win32 edit and rich edit controls, after UI Automation and the control agree
+on the selection. They do not go through the keyboard, so a held activation
+key cannot change them (not yet tried with a physical key), and they never use
+keys or the clipboard. Line breaks are written the way the field stores them
+(CR LF for edit, CR for rich edit) so the read-back can be exact.

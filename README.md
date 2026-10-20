@@ -61,6 +61,17 @@ Typing stops for the rest of the take if you move the cursor, type, switch apps 
 | TextEdit (plain and rich), Safari text box and text area, VS Code | Not run, same reason. A Debug-only self-test (`--pflow-inline-selftest <folder>`) drives these with throwaway documents once a build is allowed |
 | Field that cannot be read or set, has several cursors, or holds over 100,000 characters | Preview for the take (test field only) |
 
+### Live text: Type in the current app (Windows)
+
+Same rules as the Mac, shared through the same test cases. pFlow types only into classic Windows text boxes (Notepad, and edit and rich edit boxes in desktop apps), writing with the box's own text messages, never keystrokes or the clipboard, and reading every write back. Line breaks follow the box. Other fields, such as web pages in Edge and apps running as administrator, show the preview and get the finished text once when you stop.
+
+| Destination | Checked behavior |
+|---|---|
+| Notepad, a Windows edit box and rich edit box in a test window (Unicode, CRLF, formatting, selection, cancel, edits, app and field switches, password field, a box that changes what was written) | Inline |
+| Edge text box and text area on a local page | Preview |
+| App running as administrator | Preview |
+| Electron editor (VS Code) | Not run: not installed on the test PC |
+
 ## Privacy
 
 Whisper transcribes audio on your device. Mac AI defaults to on-device processing. Source builds with Apple’s required entitlement can opt into Apple Private Cloud Compute, which sends text and formatting instructions to Apple; the supplied Mac testing download has no cloud entitlement. Windows AI runs locally. Model downloads contact their hosting services. History and settings stay in your user account, outside the app. Delete history entries when they are no longer needed.

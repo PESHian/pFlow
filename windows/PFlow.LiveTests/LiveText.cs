@@ -40,7 +40,7 @@ internal static partial class Program
     /// recorder's 100 ms blocks arrive in real time, live windows go to the warm
     /// worker, stop drains live work, then the normal whole-recording pass runs.
     static async Task<TakeReport> FeedTake(string name, string audio, string mode, bool continuous, Whisper whisper, StateStore store, LivePreview preview,
-        Capsule capsule, Func<TakeReport, LiveRecognizer?, Task>? during = null, Action? eachBlock = null)
+        Capsule capsule, Func<TakeReport, LiveRecognizer?, Task>? during = null, Action? eachBlock = null, Action<string>? typed = null)
     {
         var report = new TakeReport { Name = name, Mode = LiveTextModes.Resolve(mode) };
         var trigger = new PFlow.Core.Trigger();
@@ -53,9 +53,14 @@ internal static partial class Program
             LiveRecognizer recognizer = null!;
             recognizer = new LiveRecognizer((uint)Random.Shared.Next(1, int.MaxValue), whisper, "en",
                 update => preview.Dispatcher.InvokeAsync(() => {
-                    if (!reconciler.Apply(update)) return;
-                    preview.ShowText(reconciler.Text); preview.Reveal(capsule.Handle);
-                    report.Updates.Add((clock.Elapsed.TotalMilliseconds, reconciler.Text));
+                    // As Program does: a repeat of the same words is not shown again but still goes to typing.
+                    long? accepted = reconciler.LastSequence; bool changed = reconciler.Apply(update);
+                    if (reconciler.LastSequence == accepted) return;
+                    if (changed) {
+                        preview.ShowText(reconciler.Text); preview.Reveal(capsule.Handle);
+                        report.Updates.Add((clock.Elapsed.TotalMilliseconds, reconciler.Text));
+                    }
+                    typed?.Invoke(reconciler.Text);
                 }),
                 () => preview.Dispatcher.InvokeAsync(() => { report.FailedAtMs = clock.Elapsed.TotalMilliseconds; preview.SetNote("Live words stopped"); }));
             live = recognizer; reconciler.Begin(recognizer.SessionName); preview.Begin();
@@ -177,7 +182,7 @@ internal static partial class Program
                     Check("Preview in pFlow is saved for the next recording", new StateStore(directory).Preferences.LiveTextMode == LiveTextModes.Preview);
                     picker.SelectedIndex = 2;
                     Check("Type in the current app is saved", new StateStore(directory).Preferences.LiveTextMode == LiveTextModes.TypeInApp);
-                    Check("Settings says typing into the app is not ready yet", Descendants<System.Windows.Controls.TextBlock>(window).Any(x => x.Text.StartsWith("Typing straight into your app is not ready yet")));
+                    Check("Settings explains typing into the app", Descendants<System.Windows.Controls.TextBlock>(window).Any(x => x.Text.StartsWith("Types your words into the app as you talk")));
                 }
                 Descendants<System.Windows.Controls.TextBlock>(window).First(x => x.Text.EndsWith("can differ a little from the preview.") || x.Text.StartsWith("Words appear in your app")).BringIntoView();
                 await Task.Delay(150); window.UpdateLayout();

@@ -14,6 +14,9 @@ internal sealed partial class Program : Application
     // Live text for the current take only; the setting is read once when a take starts.
     LiveRecognizer? live;
     readonly LiveTranscriptReconciler transcript = new();
+    // "Type in the current app": at most one take types at a time, and only while it records.
+    readonly LiveInlineSlot typing = new();
+    string? typingSession;
     KeyboardHook keyboard = null!;
     Forms.NotifyIcon tray = null!;
     System.Drawing.Icon? trayIcon;
@@ -92,8 +95,18 @@ internal sealed partial class Program : Application
     void ShowLive(LiveRecognizer owner, TranscriptUpdate update)
     {
         // Updates from an earlier take, or after this one ended, are ignored.
-        if (ReferenceEquals(live, owner) && transcript.Apply(update)) preview.ShowText(transcript.Text);
+        if (!ReferenceEquals(live, owner)) return;
+        long? accepted = transcript.LastSequence;
+        bool changed = transcript.Apply(update);
+        if (transcript.LastSequence == accepted) return;
+        if (changed) preview.ShowText(transcript.Text);
+        // A repeat of the same words still goes to typing: it is how the last words settle.
+        if (typingSession == owner.SessionName && recorder != null && typing.Reconcile(typingSession, transcript.Text) is LiveStop stop)
+            preview.SetNote(LiveInlineText.StoppedNote(stop));
     }
+    /// The words typed live for this take, as the pipeline finishes it.
+    LiveTyping? TypingFor(string? session) => session == null ? null
+        : new LiveTyping(text => typing.Finalize(session, text), () => typing.Typed(session), () => typing.Cancel(session));
     void LiveStopped(LiveRecognizer owner) { if (ReferenceEquals(live, owner)) preview.SetNote("Live words stopped"); }
     void EndLive()
     {
@@ -128,11 +141,19 @@ internal sealed partial class Program : Application
                 session = new CancellationTokenSource(TimeSpan.FromHours(2));
                 sessionDirectory = Path.Combine(store.DirectoryPath, "recording-" + Guid.NewGuid()); Directory.CreateDirectory(sessionDirectory);
                 Cue(true);
-                if (LiveTextModes.ShowsPreview(store.Preferences.LiveTextMode)) {
+                string mode = LiveTextModes.Resolve(store.Preferences.LiveTextMode);
+                typing.Abandon(); typingSession = null;
+                if (LiveTextModes.ShowsPreview(mode)) {
                     LiveRecognizer recognizer = null!;
                     recognizer = new LiveRecognizer(unchecked((uint)sessionId), whisper, store.Preferences.Language,
                         update => Dispatcher.InvokeAsync(() => ShowLive(recognizer, update)), () => Dispatcher.InvokeAsync(() => LiveStopped(recognizer)));
                     live = recognizer; transcript.Begin(recognizer.SessionName); preview.Begin();
+                    if (mode == LiveTextModes.TypeInApp) {
+                        // Checked against the field just captured, before any pFlow window shows.
+                        var refused = typing.Begin(recognizer.SessionName, target.LiveField());
+                        if (refused == null) typingSession = recognizer.SessionName;
+                        preview.SetNote(refused is LiveStop stop ? LiveInlineText.PreviewNote(stop) : "Typing in " + target.ApplicationName);
+                    }
                 }
                 recorder = new WaveRecorder(Path.Combine(sessionDirectory, "audio.wav"), live == null ? null : live.Append);
                 live?.Start();
@@ -160,7 +181,7 @@ internal sealed partial class Program : Application
     {
         if (recorder == null || target == null || session == null) return;
         var active = recorder; recorder = null; var originalTarget = target; var cancellation = session; string folder = sessionDirectory!; long owner = sessionId;
-        var takeLive = live; string? liveWords = null;
+        var takeLive = live; string? liveWords = null; string? takeTyping = typingSession;
         double seconds = 0; bool processing = false;
         var timing = new Dictionary<string, double> { ["releaseDelayMs"] = elapsed.Elapsed.TotalMilliseconds };
         try {
@@ -170,14 +191,16 @@ internal sealed partial class Program : Application
                 stop.Restart(); liveWords = await takeLive.Stop(); timing["liveStopMs"] = stop.Elapsed.TotalMilliseconds;
                 timing["liveWindows"] = takeLive.Session.Inferences;
             }
-            if (seconds < 0.3) { Set(Phase.Canceled); return; }
+            if (seconds < 0.3) { CancelTyping(takeTyping); Set(Phase.Canceled); return; }
             Cue(false);
             processing = true; var pipeline = new DictationPipeline(store, whisper, textModel) { Timing = (name, ms) => timing[name] = ms };
-            var result = await pipeline.Run(path, seconds, originalTarget, folder, capsule.Handle, Set, cancellation.Token, liveWords);
+            var result = await pipeline.Run(path, seconds, originalTarget, folder, capsule.Handle, Set, cancellation.Token, liveWords, TypingFor(takeTyping));
             if (result.Notice != null) Notify(result.Notice);
         } catch (OperationCanceledException) { Set(Phase.Canceled); }
         catch (Exception error) { Failure(error); }
         finally {
+            // Whatever happened, this take never writes again; typed words stay where they are.
+            if (takeTyping != null && typingSession == takeTyping) { typing.Abandon(); typingSession = null; }
             if (ReferenceEquals(live, takeLive)) EndLive();
             active.Dispose(); cancellation.Dispose(); if (ReferenceEquals(session, cancellation)) session = null;
             if (Directory.Exists(folder)) Directory.Delete(folder, true);
@@ -192,9 +215,17 @@ internal sealed partial class Program : Application
             try { store.Write("last-processing-times.json", timing); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
     }
+    /// Takes this take's typed words back out, only while the field is exactly
+    /// as pFlow left it; otherwise they stay and the person is told.
+    void CancelTyping(string? session)
+    {
+        if (session == null || typingSession != session) return;
+        typingSession = null;
+        if (typing.Cancel(session).Result == LiveCancel.Left) Notify(LiveInlineText.Left);
+    }
     void Cancel()
     {
-        stopDelay?.Cancel(); session?.Cancel();
+        stopDelay?.Cancel(); session?.Cancel(); CancelTyping(typingSession);
         if (recorder != null) {
             recorder.Dispose(); recorder = null;
             if (sessionDirectory != null && Directory.Exists(sessionDirectory)) Directory.Delete(sessionDirectory, true);

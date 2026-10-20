@@ -3,7 +3,16 @@ using System.Windows.Automation.Text;
 
 namespace PFlow.Windows;
 
-internal sealed class InsertionTarget
+/// Where a finished take goes. The real one is the field captured at the start of the take.
+internal interface IInsertionTarget
+{
+    bool CanInsert { get; }
+    string ApplicationName { get; }
+    string ApplicationId { get; }
+    Task<string> Insert(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf = null);
+}
+
+internal sealed class InsertionTarget : IInsertionTarget
 {
     readonly AutomationElement element;
     readonly int[] runtimeId;
@@ -14,6 +23,7 @@ internal sealed class InsertionTarget
     readonly uint processId;
     FieldState State => new(foreground.ToInt64(), processId, string.Join(".", runtimeId), before, start, length);
     public const string SavedToHistory = "Saved to History. Open History to copy your dictation.";
+    public const string PlainOnly = "Inserted as plain text; bold headings could not be applied safely.";
     public bool CanInsert => readable;
     public string ApplicationName { get; }
     public string ApplicationId { get; }
@@ -23,6 +33,10 @@ internal sealed class InsertionTarget
         foreground = Native.GetForegroundWindow(); Native.GetWindowThreadProcessId(foreground, out processId);
         using var process = Process.GetProcessById((int)processId); ApplicationName = process.ProcessName; ApplicationId = process.ProcessName;
     }
+    /// The captured field for live typing, made before any pFlow window shows.
+    /// Null when the field cannot take verified range writes: the take uses Preview.
+    internal ILiveTextField? LiveField() => readable ? LiveTextField.Create(element, foreground, processId) : null;
+    internal string DescribeLiveField() => LiveTextField.Describe(element, foreground);
     static void CheckSecure(AutomationElement e)
     {
         for (AutomationElement? node = e; node != null; node = TreeWalker.ControlViewWalker.GetParent(node))
@@ -86,7 +100,7 @@ internal sealed class InsertionTarget
         catch (InvalidOperationException) when (!keepClipboard) {
             // Unsupported clipboard formats never block plain dictation or change the clipboard.
             string fallback = await TypeUnicode(text, expected, cancel);
-            return fallback == "Inserted" && rtf != null ? "Inserted as plain text; bold headings could not be applied safely." : fallback;
+            return fallback == "Inserted" && rtf != null ? PlainOnly : fallback;
         }
         using var clipboardLifetime = lease;
         Validate(); cancel.ThrowIfCancellationRequested();

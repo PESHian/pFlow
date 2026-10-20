@@ -16,13 +16,13 @@ public static class LiveTextModes
     /// today's behavior until the person picks something else.
     public static string Resolve(string? value) => value is Preview or TypeInApp ? value : Off;
 
-    /// Typing into the app is not built yet, so that choice shows the pFlow
-    /// preview and inserts the finished text once, exactly like Preview.
+    /// Typing into the app also shows the preview, which says when typing
+    /// stopped or the app does not allow it.
     public static bool ShowsPreview(string? value) => Resolve(value) != Off;
 
     public static string Note(string? value) => Resolve(value) switch {
         Preview => "Shows your words in a small pFlow window while you talk. Your app gets the finished text once you stop. Words show about a second behind, and the finished text can differ a little from the preview.",
-        TypeInApp => "Typing straight into your app is not ready yet. For now pFlow shows the preview and types the finished text once you stop. Words show about a second behind, and the finished text can differ a little from the preview.",
+        TypeInApp => "Types your words into the app as you talk, a little behind, and puts in the finished text when you stop. If you move the cursor, type, or switch apps, typing stops and the finished text is saved in History. Apps that don't allow this, such as web browsers, show the preview instead. Template styles such as bold arrive as plain text. Words show about a second behind, and the finished text can differ a little from the preview.",
         _ => "Words appear in your app after you stop talking."
     };
 }
@@ -41,6 +41,9 @@ public sealed class LiveTranscriptReconciler
     public Phases Phase { get; private set; } = Phases.Idle;
     public string Text { get; private set; } = "";
     long? lastSequence;
+    /// The newest accepted update. A repeat of the same words still moves it,
+    /// which is how the last words settle for live typing.
+    public long? LastSequence => lastSequence;
 
     public void Begin(string session) { Session = session; Phase = Phases.Open; Text = ""; lastSequence = null; }
 
