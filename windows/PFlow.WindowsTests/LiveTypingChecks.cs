@@ -45,7 +45,9 @@ internal static partial class Program
             // The preview names the app as it names itself, read from its program file only.
             var explorer = System.Diagnostics.Process.GetProcessesByName("explorer").FirstOrDefault();
             if (explorer != null) {
-                string expected = "Typing in " + System.Diagnostics.FileVersionInfo.GetVersionInfo(explorer.MainModule!.FileName).FileDescription!.Trim();
+                // Read by path: a 32-bit test process cannot list a 64-bit process's modules.
+                string program = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+                string expected = "Typing in " + System.Diagnostics.FileVersionInfo.GetVersionInfo(program).FileDescription!.Trim();
                 Check("typing note uses the app's own name, not its program file name", InsertionTarget.TypingNoteFor((uint)explorer.Id, explorer.ProcessName) == expected && expected != "Typing in explorer");
             }
             Check("typing note falls back to the program name when the app cannot be read", InsertionTarget.TypingNoteFor(0, "fictionalpad") == "Typing in fictionalpad");
