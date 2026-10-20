@@ -60,13 +60,13 @@ final class LiveInlineSession {
     }
 
     var stopped: LiveInlineOwnership.Stop? { ownership.stopped }
+    var touched: Bool { ownership.touched }
 
     /// Applies the newest transcript. Returns the reason when typing stops now.
     func update(_ transcript: String) -> LiveInlineOwnership.Stop? {
-        let wasStopped = ownership.stopped != nil
-        let step = ownership.update(transcript: transcript, observed: field.state())
-        let result = perform(step)
-        return wasStopped ? nil : result
+        // Once typing has stopped for the take, the field is not read again.
+        guard ownership.stopped == nil else { return nil }
+        return perform(ownership.update(transcript: transcript, observed: field.state()))
     }
 
     func finalize(_ text: String) -> LiveInlineFinal {
@@ -213,6 +213,12 @@ struct LiveInlineSlot {
     func reconcile(session: String, transcript: String) -> LiveInlineOwnership.Stop? {
         guard let current, current.id == session else { return nil }
         return current.update(transcript)
+    }
+
+    /// pFlow's words may be in the destination for this take.
+    func typed(session: String) -> Bool {
+        guard let current, current.id == session else { return false }
+        return current.touched
     }
 
     mutating func finalize(session: String, text: String) -> LiveInlineFinal {

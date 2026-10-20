@@ -281,8 +281,10 @@ internal static class LiveTextChecks
         var truncated = Result(1, 1, (0, 900, " Brave turtles"));
         Check("a reply cut short is rejected", await Rejected(truncated[..^5]));
 
-        var late = Result(1, 1, (0, 900, " old window")).Concat(Result(9, 3, (0, 900, " old take"))).Concat(Result(1, 2, (0, 900, " current"))).ToArray();
-        var (current, discarded) = await LiveWorkerProtocol.ReadReply(new MemoryStream(late), 1, 2, CancellationToken.None);
+        // Sequence numbers start again each take, so the older take's late reply
+        // carries the same sequence as the current request; only the take tells them apart.
+        var late = Result(2, 1, (0, 900, " old window")).Concat(Result(1, 2, (0, 900, " old take"))).Concat(Result(2, 2, (0, 900, " current"))).ToArray();
+        var (current, discarded) = await LiveWorkerProtocol.ReadReply(new MemoryStream(late), 2, 2, CancellationToken.None);
         Check("late replies for older windows and takes are discarded", discarded == 2 && current.Segments!.Single().Text == " current");
         var flood = Enumerable.Range(0, 3).SelectMany(i => Result(1, (uint)i, (0, 900, " old"))).Concat(Result(1, 5, (0, 900, " current"))).ToArray();
         Check("more stale replies than the limit end the worker", await Rejected(flood, 1, 5));

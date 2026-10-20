@@ -35,7 +35,7 @@ struct LiveInlineLooksTests {
                 model.liveNote = note
                 try save(RecordingHUDView(model: model), "note\(index)-\(Int(width))", scheme: scheme)
             }
-            for phase in [HUDPhase.passwordField, .typingStopped, .typedTextLeft] {
+            for phase in [HUDPhase.passwordField, .typingStopped, .typedTextLeft, .liveTextKept, .liveTextKeptTyped] {
                 let model = HUDModel()
                 model.phase = phase
                 try save(RecordingHUDView(model: model), "compact-\(phase)", scheme: scheme)

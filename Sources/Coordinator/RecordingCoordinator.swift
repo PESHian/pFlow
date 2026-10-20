@@ -399,7 +399,8 @@ final class RecordingCoordinator {
         history.save(text: kept, duration: duration, device: recordingDevice,
                      spokenWordCount: kept.split(whereSeparator: \.isWhitespace).count,
                      applicationName: applicationName, applicationBundleID: applicationBundleID)
-        hud.setPhase(.liveTextKept)
+        let typed = take.map { injector.typedLive(session: $0) } ?? false
+        hud.setPhase(typed ? .liveTextKeptTyped : .liveTextKept)
         hud.hide(after: 4)
     }
 }

@@ -59,10 +59,11 @@ struct RecordingHUDView: View {
                 Label("Dictation failed", systemImage: "exclamationmark.triangle")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.orange)
-            } else if model.phase == .liveTextKept {
-                Label("Kept in History", systemImage: "clock.arrow.circlepath")
+            } else if model.phase == .liveTextKept || model.phase == .liveTextKeptTyped {
+                Label(model.phase == .liveTextKeptTyped ? "Typed words stay" : "Kept in History",
+                      systemImage: "clock.arrow.circlepath")
                     .font(.system(size: 11, weight: .medium))
-                    .help("Speech recognition stopped early. The words so far are saved in History.")
+                    .help(title)
             } else if model.phase == .passwordField {
                 Label("Password field", systemImage: "lock")
                     .font(.system(size: 11, weight: .medium))
@@ -104,6 +105,8 @@ struct RecordingHUDView: View {
         case .savedToHistory: return "Text saved in History. Clipboard unchanged."
         case .restarting: return "Restarting pFlow"
         case .liveTextKept: return "Speech recognition stopped early. The words so far are saved in History."
+        case .liveTextKeptTyped:
+            return "Speech recognition stopped early. The words already typed stay in your app, and the words so far are saved in History."
         case .passwordField: return "Dictation is off in password fields."
         case .typingStopped: return "Typing stopped, so the finished text is saved in History. Check the words already typed."
         case .typedTextLeft: return "Cancelled. The app changed, so words pFlow already typed are still there."

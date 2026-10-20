@@ -14,6 +14,8 @@ enum HUDPhase: Equatable {
     case restarting
     // Recognition stopped partway; the words so far went to History.
     case liveTextKept
+    // The same after live typing put words in the app; those words stay there.
+    case liveTextKeptTyped
     // Dictation does not start in a password field.
     case passwordField
     // Live typing stopped during the take, so the finished text went to History only.

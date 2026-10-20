@@ -63,7 +63,8 @@ final class SimulatedTextField: LiveTextField {
 
     var value: String { current.value ?? "" }
 
-    func state() -> LiveFieldState { current }
+    private(set) var reads = 0
+    func state() -> LiveFieldState { reads += 1; return current }
     func canWriteRanges() -> Bool { writable }
     func replace(_ range: NSRange, with text: String) -> Bool {
         replaced.append((range, text))
@@ -104,6 +105,7 @@ final class LiveFakeInjector: TextInjecting {
         liveCalls += 1
         return live.reconcile(session: session, transcript: transcript)
     }
+    func typedLive(session: String) -> Bool { live.typed(session: session) }
     func finalizeLive(session: String, text: String) -> LiveInlineFinal { live.finalize(session: session, text: text) }
     func cancelLive(session: String) -> LiveInlineCancel { live.cancel(session: session) }
 }
@@ -117,7 +119,7 @@ struct LiveInlineTests {
         let files = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "json" }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        #expect(files.count >= 25)
+        #expect(files.count >= 28)
         for file in files {
             let name = file.lastPathComponent
             let fixture = try JSONDecoder().decode(InlineFixture.self, from: Data(contentsOf: file))
@@ -272,6 +274,43 @@ struct LiveInlineTests {
         #expect(injector.delivered.isEmpty)
         #expect(history.saved == ["thanks for the map and the compass"])
         #expect(hud.phases.last == .typingStopped)
+    }
+
+    @Test func recognitionFailingAfterTypedWordsSaysTheyStayInTheApp() async {
+        for typedFirst in [true, false] {
+            let field = SimulatedTextField("Note: ")
+            let session = FakeSession()
+            session.stopError = TranscriptionError.interrupted(kept: "harbor lights glow")
+            let history = FakeHistory()
+            let hud = FakeHUD()
+            let (coordinator, injector) = typingCoordinator(field, session: session, history: history, hud: hud)
+            coordinator.begin()
+            await Task.yield()
+            session.emit("harbor lights")
+            if typedFirst { session.emit("harbor lights glow") }
+            #expect(field.value == (typedFirst ? "Note: harbor lights" : "Note: "))
+            await coordinator.finish()
+            #expect(field.value == (typedFirst ? "Note: harbor lights" : "Note: "), "nothing more is typed")
+            #expect(injector.delivered.isEmpty)
+            #expect(history.saved == ["harbor lights glow"])
+            #expect(hud.phases.last == (typedFirst ? .liveTextKeptTyped : .liveTextKept))
+        }
+    }
+
+    @Test func afterTypingStopsLaterUpdatesNeverReadTheField() {
+        let field = SimulatedTextField("Dear Sam, ")
+        var slot = LiveInlineSlot()
+        #expect(slot.begin(id: "t", field: field) == .typing)
+        _ = slot.reconcile(session: "t", transcript: "thanks for")
+        _ = slot.reconcile(session: "t", transcript: "thanks for the map")
+        #expect(field.value == "Dear Sam, thanks for")
+        field.current.selection = NSRange(location: 0, length: 0)
+        #expect(slot.reconcile(session: "t", transcript: "thanks for the map and") == .caret)
+        let reads = field.reads
+        #expect(slot.reconcile(session: "t", transcript: "thanks for the map and the") == nil)
+        #expect(slot.reconcile(session: "t", transcript: "thanks for the map and the compass") == nil)
+        #expect(field.reads == reads)
+        #expect(field.replaced.count == 1)
     }
 
     @Test func unsupportedFieldUsesPreviewAndTheNormalFinalInsertion() async {

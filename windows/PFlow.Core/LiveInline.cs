@@ -277,9 +277,9 @@ public sealed class LiveInlineSession
     /// Applies the newest transcript. Returns the reason when typing stops now.
     public LiveStop? Update(string transcript)
     {
-        bool wasStopped = ownership.Stopped != null;
-        var result = Perform(ownership.Update(LineBreaks(transcript), field.State()));
-        return wasStopped ? null : result;
+        // Once typing has stopped for the take, the field is not read again.
+        if (ownership.Stopped != null) return null;
+        return Perform(ownership.Update(LineBreaks(transcript), field.State()));
     }
 
     public (LiveFinal Result, LiveStop? Stop) Finalize(string text)

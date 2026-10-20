@@ -22,7 +22,7 @@ internal static class LiveInlineChecks
     static void OwnershipFixtures()
     {
         var files = Directory.GetFiles(Path.Combine(AppContext.BaseDirectory, "live-text", "inline-ownership"), "*.json").OrderBy(x => x, StringComparer.Ordinal).ToArray();
-        Check($"the shared ownership fixtures are present ({files.Length})", files.Length >= 25);
+        Check($"the shared ownership fixtures are present ({files.Length})", files.Length >= 28);
         foreach (var file in files) {
             string name = Path.GetFileName(file);
             var root = JsonNode.Parse(File.ReadAllText(file))!;
@@ -130,7 +130,8 @@ internal static class LiveInlineChecks
         public Func<SimulatedField, TextSpan, string, bool>? OnReplace;
         public string Value => Current.Value ?? "";
         public string LineBreak => lineBreak;
-        public LiveFieldState State() => Current;
+        public int Reads;
+        public LiveFieldState State() { Reads++; return Current; }
         public bool CanWriteRanges() => Writable;
         public bool Replace(TextSpan range, string text)
         {
@@ -168,7 +169,9 @@ internal static class LiveInlineChecks
             field.Current = field.Current with { Selection = new TextSpan(0, 0) };
             Check("moving the caret stops typing", slot.Reconcile("t", "thanks for the map and") == LiveStop.Caret);
             field.Current = field.Current with { Selection = new TextSpan(20, 0) };
+            int reads = field.Reads;
             Check("putting the caret back does not resume typing", slot.Reconcile("t", "thanks for the map and the") == null && field.Replaced.Count == 1);
+            Check("after typing stopped, later updates never read the field", field.Reads == reads);
             var final = slot.Finalize("t", "thanks for the map and the compass");
             Check("the finished text is kept for History, not written", final == (LiveFinal.Kept, LiveStop.Caret) && field.Value == "Dear Sam, thanks for");
         }
