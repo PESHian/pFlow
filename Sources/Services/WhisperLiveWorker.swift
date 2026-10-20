@@ -7,6 +7,10 @@ protocol WhisperLiveWorking: AnyObject, Sendable {
     func load() throws
     /// 16 kHz mono samples in, Whisper segments out.
     func recognize(_ samples: [Float], language: String) throws -> [WhisperWindowSegment]
+    /// The take's finished text from its whole recording, decoded exactly as
+    /// the whole-recording whisper-cli pass does, with the model already loaded.
+    /// Raw whisper-cli text output (one line per segment).
+    func finishTake(recording: URL, language: String, threads: Int) throws -> String
     /// Safe from any thread. A call that is waiting fails promptly.
     func stop()
 }
@@ -19,9 +23,13 @@ protocol WhisperLiveWorking: AnyObject, Sendable {
 ///   request:  u32 "PLQ1", u32 id, u32 length + language, u32 count + count f32 samples
 ///   result:   u32 2, u32 id, u32 n, n × (i32 from ms, i32 to ms, f32 no-speech, u32 length + text), f64 ms
 ///   error:    u32 3, u32 id, u32 length + message
+///   finish:   u32 "PLF1", u32 id, u32 length + language, u32 threads, u32 length + recording path
+///   finished: u32 4, u32 id, u32 length + text (whisper-cli -otxt lines), f64 ms
+/// The finish request reads only the take's own recording, in its private folder.
 final class WhisperLiveProcess: WhisperLiveWorking, @unchecked Sendable {
     static let hello: UInt32 = 0x314C_4650
     static let request: UInt32 = 0x3151_4C50
+    static let finish: UInt32 = 0x3146_4C50
     static let maximumSamples = 30 * 16_000
 
     private let executable: URL
@@ -99,6 +107,23 @@ final class WhisperLiveProcess: WhisperLiveWorking, @unchecked Sendable {
         }
         _ = try read(8)
         return segments
+    }
+
+    func finishTake(recording: URL, language: String, threads: Int) throws -> String {
+        let id = lock.withLock { nextID &+= 1; return nextID }
+        var message = Data()
+        message.put(Self.finish)
+        message.put(id)
+        message.put(text: language)
+        message.put(UInt32(threads))
+        message.put(text: recording.path)
+        try write(message)
+        let status = try readNumber()
+        guard try readNumber() == id else { throw WhisperError.failed }
+        guard status == 4 else { _ = try? readText(limit: 4096); throw WhisperError.failed }
+        let text = try readText(limit: 4 * 1024 * 1024)
+        _ = try read(8)
+        return text
     }
 
     func stop() {

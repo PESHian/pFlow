@@ -87,27 +87,54 @@ final class WhisperTranscriber: StreamingTranscriber {
     /// The finished text always comes from one pass over the whole recording,
     /// the same as with Live text Off, so it includes the last words. Live
     /// windows only feed the preview; their words are kept if that pass fails.
+    /// With Live text on, the live helper already holds the model, so it runs
+    /// that pass itself with whisper-cli's exact decoding; if it cannot,
+    /// whisper-cli runs as usual.
     func finish() async throws -> String {
         defer { removeRecording() }
-        let (shown, failure) = await withCheckedContinuation { (continuation: CheckedContinuation<(String, Error?), Never>) in
+        let (shown, worker, failure) = await withCheckedContinuation {
+            (continuation: CheckedContinuation<(String, WhisperLiveWorking?, Error?), Never>) in
             queue.async { [self] in
                 writer = nil
-                let shown = live?.stop() ?? ""
+                let (shown, worker) = live?.stopKeepingWorker() ?? ("", nil)
                 live = nil
-                continuation.resume(returning: (shown, recordingError))
+                continuation.resume(returning: (shown, worker, recordingError))
             }
         }
+        defer { worker?.stop() }
         do {
             if let failure { throw failure }
             guard let directory else { return "" }
             try Task.checkCancellation()
-            return try await Self.transcribe(audio: directory.appending(path: "audio.wav"), model: modelURL,
+            let audio = directory.appending(path: "audio.wav")
+            let language = Self.language(for: locale)
+            if let worker, let text = try await Self.finishWithHelper(worker, audio: audio, language: language) {
+                return text
+            }
+            return try await Self.transcribe(audio: audio, model: modelURL,
                 executable: executableURL, output: directory.appending(path: "result"), locale: locale)
         } catch {
             let kept = shown.trimmingCharacters(in: .whitespacesAndNewlines)
             if kept.isEmpty || error is CancellationError { throw error }
             throw TranscriptionError.interrupted(kept: kept)
         }
+    }
+
+    /// The helper's finished text, or nil when it could not make it (whisper-cli
+    /// then runs). Cancelling ends the helper and throws.
+    private static func finishWithHelper(_ worker: WhisperLiveWorking, audio: URL, language: String) async throws -> String? {
+        let text: String? = await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    continuation.resume(returning: try? worker.finishTake(recording: audio, language: language,
+                                                                          threads: finalThreads))
+                }
+            }
+        } onCancel: {
+            worker.stop()
+        }
+        try Task.checkCancellation()
+        return text.map(finishedText)
     }
 
     func cancel() async {
@@ -131,11 +158,18 @@ final class WhisperTranscriber: StreamingTranscriber {
         let runner = WhisperProcess()
         try await runner.run(executable: executable, arguments: [
             "-m", model.path, "-f", audio.path, "-l", language(for: locale),
-            "-t", "4", "-otxt", "-of", output.path, "-np", "-nt"
+            "-t", "\(finalThreads)", "-otxt", "-of", output.path, "-np", "-nt"
         ])
         try Task.checkCancellation()
-        return try String(contentsOf: output.appendingPathExtension("txt"), encoding: .utf8)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return finishedText(try String(contentsOf: output.appendingPathExtension("txt"), encoding: .utf8))
+    }
+
+    /// Threads for the whole-recording pass, whichever process runs it.
+    static let finalThreads = 4
+
+    /// whisper-cli's text output as the take's finished text.
+    static func finishedText(_ output: String) -> String {
+        output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func language(for locale: Locale) -> String {

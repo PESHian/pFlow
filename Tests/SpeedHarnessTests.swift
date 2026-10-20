@@ -14,6 +14,7 @@ import Testing
 //   apple, apple-fast        Apple Speech with Live text Preview (fast = .fastResults)
 //   apple-off                Apple Speech with Live text Off
 //   whisper-on, whisper-off  Whisper (needs PFLOW_WHISPER_MODEL)
+//   whisper-identity         the live helper's finished text against whisper-cli
 //   locale                   locale resolution, cold/warm and after a language change
 //   cleanup                  on-device cleanup of each reference text
 // PFLOW_SPEED_FILES limits the recordings (comma list), PFLOW_SPEED_TAKES sets
@@ -280,6 +281,8 @@ struct SpeedHarnessTests {
             }
             report["takes"] = takes
             #expect(takes.allSatisfy { ($0["final"] as? String)?.isEmpty == false })
+        case "whisper-identity":
+            report["identity"] = try await measureIdentity()
         case "locale":
             report.merge(try await measureLocales()) { $1 }
         case "cleanup":
@@ -301,6 +304,59 @@ struct SpeedHarnessTests {
             Issue.record("unknown PFLOW_SPEED_RUN \(run)")
         }
         try write(report)
+    }
+
+    /// The live helper's finished-text pass against whisper-cli on the same
+    /// recording, after the helper has already run live windows on it.
+    private func measureIdentity() async throws -> [[String: Any]] {
+        let model = URL(fileURLWithPath: try #require(speedModel))
+        let cli = Bundle.main.bundleURL.appending(path: "Contents/Helpers/whisper-cli")
+        let scratch = FileManager.default.temporaryDirectory.appending(path: "pflow-speed-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: false,
+                                               attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        var rows: [[String: Any]] = []
+        let files = try recordings() + [folder.appending(path: "long.aiff")]
+        for url in files {
+            // The recording exactly as a take writes it: 16 kHz mono 16-bit.
+            let wav = scratch.appending(path: url.deletingPathExtension().lastPathComponent + ".wav")
+            let source = try AVAudioFile(forReading: url)
+            let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true)!
+            let converter = BufferConverter()
+            var samples: [Float] = []
+            do {
+                let writer = try AVAudioFile(forWriting: wav, settings: format.settings)
+                while source.framePosition < source.length {
+                    let buffer = AVAudioPCMBuffer(pcmFormat: source.processingFormat, frameCapacity: 4096)!
+                    try source.read(into: buffer, frameCount: 4096)
+                    let converted = try converter.convertBuffer(buffer, to: writer.processingFormat)
+                    try writer.write(from: converted)
+                    if let data = converted.floatChannelData, samples.count < 15 * 16_000 {
+                        samples += UnsafeBufferPointer(start: data[0], count: Int(converted.frameLength))
+                    }
+                }
+            }
+            let worker = WhisperLiveProcess(model: model)
+            try worker.load()
+            // Dirty the helper first, as a take does.
+            for end in stride(from: 16_000, through: min(samples.count, 15 * 16_000), by: 4 * 16_000) {
+                _ = try worker.recognize(Array(samples[0..<end]), language: "en")
+            }
+            var started = now()
+            let helper = WhisperTranscriber.finishedText(try worker.finishTake(recording: wav, language: "en",
+                                                                               threads: WhisperTranscriber.finalThreads))
+            let helperMs = ms(started, now())
+            worker.stop()
+            started = now()
+            let whole = try await WhisperTranscriber.transcribe(audio: wav, model: model, executable: cli,
+                                                                output: scratch.appending(path: "result"),
+                                                                locale: Locale(identifier: "en-US"))
+            let cliMs = ms(started, now())
+            rows.append(["file": url.lastPathComponent, "identical": helper == whole, "helperMs": helperMs,
+                         "cliMs": cliMs, "helper": helper, "cli": whole])
+            #expect(helper == whole, "\(url.lastPathComponent)")
+        }
+        return rows
     }
 
     /// Locale resolution as DictationSession does it, plus the start of a take

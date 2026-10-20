@@ -94,6 +94,7 @@ final class WhisperLiveRecognizer: @unchecked Sendable {
     private var lastEndSample = 0
     private var closed = false
     private var failed = false
+    private var loaded = false
     private var timer: DispatchSourceTimer?
     private var recognized: [Range<Int>] = []
 
@@ -112,6 +113,7 @@ final class WhisperLiveRecognizer: @unchecked Sendable {
     func start() {
         queue.async { [self] in
             do { try worker.load() } catch { fail(); return }
+            lock.withLock { loaded = true }
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now() + tick, repeating: tick, leeway: .milliseconds(20))
             timer.setEventHandler { [weak self] in self?.step() }
@@ -135,13 +137,30 @@ final class WhisperLiveRecognizer: @unchecked Sendable {
     /// Ends live recognition for the take and returns the words shown so far.
     @discardableResult
     func stop() -> String {
+        let text = closeWindows()
+        worker.stop()
+        return text
+    }
+
+    /// Ends live windows for the take but keeps the helper and its loaded
+    /// model for the finished-text pass. A window or model load still running
+    /// finishes first (one at most), so the helper is idle when this returns.
+    /// The worker is nil when it failed or never loaded; the caller ends it.
+    func stopKeepingWorker() -> (text: String, worker: WhisperLiveWorking?) {
+        let text = closeWindows()
+        queue.sync {}
+        let usable = lock.withLock { loaded && !failed }
+        if !usable { worker.stop() }
+        return (text, usable ? worker : nil)
+    }
+
+    private func closeWindows() -> String {
         let (timer, text) = lock.withLock { () -> (DispatchSourceTimer?, String) in
             closed = true
             defer { self.timer = nil }
             return (self.timer, merger.text)
         }
         timer?.cancel()
-        worker.stop()
         return text
     }
 

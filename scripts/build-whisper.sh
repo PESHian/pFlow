@@ -24,8 +24,8 @@ cmake --build "$CACHE/compiled" --config Release --target whisper-cli -j 4
 LIBRARIES="$CACHE/compiled"
 xcrun --sdk macosx clang++ -std=c++17 -O3 -DNDEBUG -arch arm64 -mmacosx-version-min=27.0 \
   -ffile-prefix-map="$ROOT"=/_/pflow \
-  -I"$SOURCE/include" -I"$SOURCE/ggml/include" "$ROOT/native/pflow-whisper-live.cpp" \
-  "$LIBRARIES/src/libwhisper.a" "$LIBRARIES/ggml/src/libggml.a" "$LIBRARIES/ggml/src/libggml-cpu.a" \
+  -I"$SOURCE/include" -I"$SOURCE/ggml/include" -I"$SOURCE/examples" "$ROOT/native/pflow-whisper-live.cpp" \
+  "$LIBRARIES/examples/libcommon.a" "$LIBRARIES/src/libwhisper.a" "$LIBRARIES/ggml/src/libggml.a" "$LIBRARIES/ggml/src/libggml-cpu.a" \
   "$LIBRARIES/ggml/src/ggml-blas/libggml-blas.a" "$LIBRARIES/ggml/src/ggml-metal/libggml-metal.a" \
   "$LIBRARIES/ggml/src/libggml-base.a" \
   -framework Accelerate -framework Foundation -framework Metal -framework MetalKit \

@@ -33,6 +33,12 @@ final class FakeLiveWorker: WhisperLiveWorking, @unchecked Sendable {
     private(set) var mostActive = 0
     private(set) var languages: [String] = []
     private(set) var stops = 0
+    /// The finished-text pass. Throwing (the default) means the helper cannot
+    /// do it, so whisper-cli runs.
+    var finishText: (URL, String, Int) throws -> String = { _, _, _ in throw Scripted.crash }
+    private(set) var finishes: [(recording: URL, language: String, threads: Int)] = []
+    /// Calls running at once, live windows and the finished-text pass together.
+    var overlapped: Int { lock.withLock { mostActive } }
 
     var snapshot: (calls: Int, active: Int, mostActive: Int, stops: Int) {
         lock.withLock { (calls, active, mostActive, stops) }
@@ -59,7 +65,24 @@ final class FakeLiveWorker: WhisperLiveWorking, @unchecked Sendable {
         return try respond(call, samples)
     }
 
-    func stop() { lock.withLock { stops += 1 } }
+    func finishTake(recording: URL, language: String, threads: Int) throws -> String {
+        let gate = lock.withLock { () -> DispatchSemaphore? in
+            active += 1
+            mostActive = max(mostActive, active)
+            finishes.append((recording, language, threads))
+            return finishGate
+        }
+        defer { lock.withLock { active -= 1 } }
+        gate?.wait()
+        return try finishText(recording, language, threads)
+    }
+    /// Holds the finished-text pass until `releaseFinish`.
+    private var finishGate: DispatchSemaphore?
+    func holdFinish() { lock.withLock { finishGate = DispatchSemaphore(value: 0) } }
+    func releaseFinish() { lock.withLock { finishGate }?.signal() }
+
+    /// Ending the helper makes a waiting call return, as closing the pipe does.
+    func stop() { lock.withLock { stops += 1; return finishGate }?.signal() }
 }
 
 private final class Box<T>: @unchecked Sendable {
@@ -293,7 +316,9 @@ struct WhisperLiveTests {
         try handle.truncate(atOffset: UInt64(WhisperModelStore.expectedBytes))
         try handle.close()
         let helper = root.appending(path: "helper")
-        let script = final.map { "#!/bin/sh\nprintf '%s' '\($0)' > \"${11}.txt\"\n" } ?? "#!/bin/sh\nexit 17\n"
+        // The fake whisper-cli leaves a mark beside itself, so a test can tell whether it ran.
+        let script = final.map { "#!/bin/sh\ntouch \"$(dirname \"$0\")/cli-ran\"\nprintf '%s' '\($0)' > \"${11}.txt\"\n" }
+            ?? "#!/bin/sh\ntouch \"$(dirname \"$0\")/cli-ran\"\nexit 17\n"
         try script.write(to: helper, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
         return Engine(root: root, model: model, helper: helper)
@@ -328,6 +353,146 @@ struct WhisperLiveTests {
         #expect(final == "Amber kites rose over the quiet harbor")
         #expect(worker.languages.allSatisfy { $0 == "es" } && !worker.languages.isEmpty)
         #expect(worker.snapshot.stops >= 1)
+    }
+
+    private func cliRan(_ fake: Engine) -> Bool {
+        FileManager.default.fileExists(atPath: fake.root.appending(path: "cli-ran").path)
+    }
+
+    private func play48kStereo(_ transcriber: WhisperTranscriber, seconds: Double) {
+        let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
+        for chunk in stride(from: 0, to: Int(seconds * 48_000), by: 4_800) {
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4_800)!
+            buffer.frameLength = 4_800
+            for channel in 0..<2 {
+                for index in 0..<4_800 { buffer.floatChannelData![channel][index] = 0.3 * sin(Float(chunk + index) * 0.04) }
+            }
+            transcriber.feed(buffer)
+        }
+    }
+
+    @Test func loadedHelperMakesTheFinishedTextWithoutStartingWhisperCLI() async throws {
+        let fake = try engine(final: "From whisper-cli")
+        defer { try? FileManager.default.removeItem(at: fake.root) }
+        let worker = FakeLiveWorker()
+        worker.respond = { _, _ in [segment(" Amber kites rose")] }
+        let frames = Box<Int64>(0)
+        worker.finishText = { url, _, _ in
+            frames.update { $0 = (try? AVAudioFile(forReading: url).length) ?? -1 }
+            return "Amber kites rose over the quiet harbor\nand landed by the pier.\n"
+        }
+        let transcriber = WhisperTranscriber(modelURL: fake.model, executableURL: fake.helper,
+                                             temporaryDirectory: fake.root, liveWorker: { worker })
+        try await transcriber.begin(locale: Locale(identifier: "es-ES"), contextualStrings: [])
+        play(transcriber, seconds: 1.5)
+        await waitUntil { worker.snapshot.calls > 0 }
+        play(transcriber, seconds: 0.4)
+        let final = try await transcriber.finish()
+        #expect(final == "Amber kites rose over the quiet harbor\nand landed by the pier.")
+        #expect(worker.finishes.map(\.language) == ["es"])
+        #expect(worker.finishes.map(\.threads) == [WhisperTranscriber.finalThreads])
+        // The whole take, tail included, written before the pass started.
+        #expect(frames.value == Int64(1.9 * 16_000))
+        #expect(!cliRan(fake))
+        #expect(worker.snapshot.stops >= 1)
+    }
+
+    @Test func helperThatCannotFinishFallsBackToWhisperCLI() async throws {
+        let fake = try engine(final: "Silver geese crossed the marsh")
+        defer { try? FileManager.default.removeItem(at: fake.root) }
+        let worker = FakeLiveWorker()
+        worker.respond = { _, _ in [segment(" Silver geese")] }
+        let transcriber = WhisperTranscriber(modelURL: fake.model, executableURL: fake.helper,
+                                             temporaryDirectory: fake.root, liveWorker: { worker })
+        try await transcriber.begin(locale: .init(identifier: "en-US"), contextualStrings: [])
+        play(transcriber, seconds: 1.5)
+        await waitUntil { worker.snapshot.calls > 0 }
+        #expect(try await transcriber.finish() == "Silver geese crossed the marsh")
+        #expect(worker.finishes.count == 1 && cliRan(fake))
+    }
+
+    @Test func windowRunningAtStopFinishesBeforeTheFinishedTextPass() async throws {
+        let fake = try engine(final: "From whisper-cli")
+        defer { try? FileManager.default.removeItem(at: fake.root) }
+        let worker = FakeLiveWorker()
+        worker.respond = { _, _ in [segment(" Copper bells")] }
+        worker.finishText = { _, _, _ in "Copper bells rang twice" }
+        let transcriber = WhisperTranscriber(modelURL: fake.model, executableURL: fake.helper,
+                                             temporaryDirectory: fake.root, liveWorker: { worker })
+        try await transcriber.begin(locale: .init(identifier: "en-US"), contextualStrings: [])
+        worker.hold()
+        play(transcriber, seconds: 1.5)
+        await waitUntil { worker.snapshot.active == 1 }
+        let finishing = Task { try await transcriber.finish() }
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(worker.finishes.isEmpty)
+        worker.release()
+        #expect(try await finishing.value == "Copper bells rang twice")
+        #expect(worker.overlapped == 1)
+        #expect(!cliRan(fake))
+    }
+
+    @Test(.timeLimit(.minutes(1))) func cancellingDuringTheHelperPassEndsItWithoutWhisperCLI() async throws {
+        let fake = try engine(final: "From whisper-cli")
+        defer { try? FileManager.default.removeItem(at: fake.root) }
+        let worker = FakeLiveWorker()
+        worker.respond = { _, _ in [segment(" Lantern")] }
+        worker.finishText = { _, _, _ in "Lantern light" }
+        worker.holdFinish()
+        let transcriber = WhisperTranscriber(modelURL: fake.model, executableURL: fake.helper,
+                                             temporaryDirectory: fake.root, liveWorker: { worker })
+        try await transcriber.begin(locale: .init(identifier: "en-US"), contextualStrings: [])
+        play(transcriber, seconds: 1.5)
+        await waitUntil { worker.snapshot.calls > 0 }
+        let finishing = Task { try await transcriber.finish() }
+        await waitUntil { worker.finishes.count == 1 }
+        let started = ProcessInfo.processInfo.systemUptime
+        finishing.cancel()
+        await #expect(throws: CancellationError.self) { try await finishing.value }
+        #expect(ProcessInfo.processInfo.systemUptime - started < 2)
+        #expect(worker.snapshot.stops >= 1 && !cliRan(fake))
+    }
+
+    @Test func eachTakeUsesItsOwnHelperInItsOwnLanguage() async throws {
+        let fake = try engine(final: "From whisper-cli")
+        defer { try? FileManager.default.removeItem(at: fake.root) }
+        var made: [FakeLiveWorker] = []
+        for (locale, words) in [("es-ES", "Faro al amanecer"), ("fr-FR", "Phare à l'aube")] {
+            let worker = FakeLiveWorker()
+            worker.respond = { _, _ in [segment(" " + words)] }
+            worker.finishText = { _, _, _ in words }
+            made.append(worker)
+            let transcriber = WhisperTranscriber(modelURL: fake.model, executableURL: fake.helper,
+                                                 temporaryDirectory: fake.root, liveWorker: { worker })
+            try await transcriber.begin(locale: Locale(identifier: locale), contextualStrings: [])
+            play(transcriber, seconds: 1.5)
+            await waitUntil { worker.snapshot.calls > 0 }
+            #expect(try await transcriber.finish() == words)
+        }
+        #expect(made.map { $0.finishes.map(\.language) } == [["es"], ["fr"]])
+        #expect(made.allSatisfy { $0.languages.count == $0.snapshot.calls && $0.snapshot.stops >= 1 })
+        #expect(made[0].languages.allSatisfy { $0 == "es" } && made[1].languages.allSatisfy { $0 == "fr" })
+    }
+
+    @Test func microphoneSwitchMidTakeStillGivesTheHelperTheWholeRecording() async throws {
+        let fake = try engine(final: "From whisper-cli")
+        defer { try? FileManager.default.removeItem(at: fake.root) }
+        let worker = FakeLiveWorker()
+        worker.respond = { _, _ in [segment(" Harbor")] }
+        let frames = Box<Int64>(0)
+        worker.finishText = { url, _, _ in
+            frames.update { $0 = (try? AVAudioFile(forReading: url).length) ?? -1 }
+            return "Harbor gulls"
+        }
+        let transcriber = WhisperTranscriber(modelURL: fake.model, executableURL: fake.helper,
+                                             temporaryDirectory: fake.root, liveWorker: { worker })
+        try await transcriber.begin(locale: .init(identifier: "en-US"), contextualStrings: [])
+        play(transcriber, seconds: 1.5)
+        await waitUntil { worker.snapshot.calls > 0 }
+        play48kStereo(transcriber, seconds: 1.0)
+        #expect(try await transcriber.finish() == "Harbor gulls")
+        #expect(abs(frames.value - 2 * 16_000 - 8_000) <= 1_600)
+        #expect(!cliRan(fake))
     }
 
     @Test func finalFailureKeepsTheLiveWords() async throws {
