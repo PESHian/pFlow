@@ -47,7 +47,7 @@ final class DictationSession: DictationSessioning {
 
     private let capture: AudioCapturing
     private let whisperModel: URL
-    private let appleEngine: (Bool) -> StreamingTranscriber
+    private let appleEngine: () -> StreamingTranscriber
     private let relay = AudioBufferRelay()
     private var transcriber: StreamingTranscriber?
     private var feed: LiveTranscriptFeed?
@@ -78,7 +78,7 @@ final class DictationSession: DictationSessioning {
 
     init(locale: Locale = .current, capture: AudioCapturing = AudioCaptureService(),
          whisperModel: URL = WhisperModelStore.modelURL,
-         appleEngine: @escaping (_ live: Bool) -> StreamingTranscriber = { TranscriptionService(fastPreview: $0) }) {
+         appleEngine: @escaping () -> StreamingTranscriber = { TranscriptionService() }) {
         self.locale = locale
         self.capture = capture
         self.whisperModel = whisperModel
@@ -146,7 +146,7 @@ final class DictationSession: DictationSessioning {
         }
 
         let model = whisperModel
-        let engine: StreamingTranscriber = choice == .apple ? appleEngine(live)
+        let engine: StreamingTranscriber = choice == .apple ? appleEngine()
             : WhisperTranscriber(modelURL: model, liveWorker: live ? { WhisperLiveProcess(model: model) } : nil)
         engine.onTranscript = { text in feed.post(text) }
         engine.onLiveStopped = { [weak self] in
