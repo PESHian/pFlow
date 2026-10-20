@@ -19,7 +19,7 @@ internal sealed class LiveRecognizer
 
     internal LiveRecognizer(uint take, Whisper whisper, string language, Action<TranscriptUpdate> onUpdate, Action onFailure, TimeSpan? tick = null)
     {
-        session = new LiveSession(take); this.whisper = whisper; this.language = language;
+        session = new LiveSession(take, clock: () => Environment.TickCount64); this.whisper = whisper; this.language = language;
         this.onUpdate = onUpdate; this.onFailure = onFailure; this.tick = tick ?? TimeSpan.FromMilliseconds(250);
     }
 

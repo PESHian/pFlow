@@ -15,7 +15,7 @@ internal static class LiveTextChecks
     public static async Task<int> Run()
     {
         passed = 0;
-        TranscriptFixtures(); WindowFixtures(); Settings(); Scheduler(); Recovery(); PreviewText(); Placement();
+        TranscriptFixtures(); WindowFixtures(); Settings(); Scheduler(); Resting(); Recovery(); PreviewText(); Placement();
         await Framing();
         Console.WriteLine($"{passed} live text checks passed.");
         return passed;
@@ -156,6 +156,52 @@ internal static class LiveTextChecks
         failing.Append(Tone(1000)); var broken = failing.Next()!;
         failing.Fail();
         Check("after a live failure nothing more is planned and the words stay", failing.Next() == null && failing.Text == "Quiet harbor" && failing.Complete(broken, [new(0, 1000, " later", .05)]) == null);
+    }
+
+    /// Live recognition rests as long as each window took. Time comes from a
+    /// test clock; audio is appended as it would arrive.
+    static void Resting()
+    {
+        long now = 0;
+        var take = new LiveSession(20, clock: () => now);
+        take.Append(Tone(1000));
+        var slow = take.Next()!;
+        Check("the first window starts at once", slow != null && slow.Sequence == 0);
+        now = 900; take.Append(Tone(1000));
+        take.Complete(slow!, [new(0, 1000, " Copper", .05)]);
+        Check("after a 900 ms window nothing starts during the next 900 ms", take.Next() == null && !take.Busy);
+        now = 1799; Check("still resting 1 ms before the rest ends", take.Next() == null);
+        now = 1800; var next = take.Next();
+        Check("the next window starts when the rest ends and covers the newest audio", next != null && next.EndSample == 2000 * 16);
+
+        // A fast machine: a 100 ms window never holds the next one back.
+        now = 1900; take.Complete(next!, [new(0, 2000, " Copper kettle", .05)]);
+        now = 2900; take.Append(Tone(1000));
+        Check("a quick window is followed by the next one as soon as there is a second of new audio", take.Next() != null);
+
+        // Cancel: an abandoned slow window rests too, and stopping during a rest keeps the words.
+        long clock2 = 0; var canceled = new LiveSession(21, clock: () => clock2);
+        canceled.Append(Tone(1000)); var first = canceled.Next()!;
+        clock2 = 800; canceled.Abandon(first); canceled.Append(Tone(1000));
+        Check("a canceled slow window does not restart back to back", canceled.Next() == null && !canceled.Busy);
+        Check("stopping during a rest ends the take with its words", canceled.Close() == "" && canceled.Next() == null);
+        clock2 = 10_000; Check("nothing is planned after stop, even once the rest is over", canceled.Next() == null);
+
+        // Device change: the recorder pauses while the new microphone opens, then audio resumes.
+        long clock3 = 0; var device = new LiveSession(22, clock: () => clock3);
+        device.Append(Tone(1000)); var before = device.Next()!;
+        clock3 = 700; device.Complete(before, [new(0, 1000, " Harbor", .05)]);
+        clock3 = 4000; Check("no audio during the switch plans nothing", device.Next() == null);
+        device.Append(Tone(300)); device.Append(Tone(400)); device.Append(Tone(300));
+        var after = device.Next();
+        Check("audio from the new device is recognized once a second has arrived", after != null && after.EndSample == 2000 * 16 && after.Sequence == 1);
+
+        // Language change applies from the next take: a new take never waits for the last one's rest.
+        long clock4 = 0; var english = new LiveSession(23, clock: () => clock4);
+        english.Append(Tone(1000)); var englishWindow = english.Next()!;
+        clock4 = 1500; english.Complete(englishWindow, [new(0, 1000, " Lantern", .05)]); english.Close();
+        var spanish = new LiveSession(24, clock: () => clock4); spanish.Append(Tone(1000));
+        Check("the next take starts its first window at once", spanish.Next() is { Sequence: 0 } && english.Next() == null);
     }
 
     static void Recovery()

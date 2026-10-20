@@ -79,9 +79,20 @@ public sealed record LiveWindowRequest(uint Session, uint Sequence, long StartSa
 /// into a bounded ring from the recorder thread; `Next` hands out at most one
 /// window at a time, always over the newest audio, so pending work never queues.
 /// Results for another take, an older window, or a closed take are dropped.
-public sealed class LiveSession(uint session, LiveWindowPlanner? planner = null, int ringSeconds = 20)
+/// `clock` is milliseconds from any fixed start. Without one there is no rest
+/// between windows, which replays of recorded windows rely on.
+public sealed class LiveSession(uint session, LiveWindowPlanner? planner = null, int ringSeconds = 20, Func<long>? clock = null)
 {
+    /// After each window, live recognition rests as long as that window took,
+    /// so it keeps the processor busy at most half the time. A window that
+    /// finishes well inside the 1 s stride is never delayed by this. Measured on
+    /// the 6-core ARM64 test VM: windows took about 0.9 s back to back and kept
+    /// about 3.1 cores busy; resting cut that to about 2 (see the speed table).
+    public const double RestRatio = 1.0;
+
     readonly object sync = new();
+    readonly Func<long>? clock = clock;
+    long inFlightSince, restUntil;
     readonly LiveWindowPlanner planner = planner ?? new();
     readonly LiveAudioRing ring = new(ringSeconds);
     readonly WhisperLiveMerger merger = new();
@@ -107,12 +118,15 @@ public sealed class LiveSession(uint session, LiveWindowPlanner? planner = null,
     {
         lock (sync) {
             if (Closed || Failed || inFlight != null) return null;
+            long now = clock?.Invoke() ?? 0;
+            if (now < restUntil) return null;
             if (planner.Next(ring.Total, merger.CommittedEndMs, lastEndSample) is not var (start, end)) return null;
             var fresh = ring.Snapshot(lastEndSample, end);
             lastEndSample = end;
             var window = ring.Snapshot(start, end);
             if (!LiveAudioGate.HasSpeech(fresh) || window.Length == 0) { SilentWindows++; return null; }
             Inferences++;
+            inFlightSince = now;
             return inFlight = new LiveWindowRequest(Session, nextSequence++, end - window.Length, end, window);
         }
     }
@@ -124,13 +138,28 @@ public sealed class LiveSession(uint session, LiveWindowPlanner? planner = null,
         lock (sync) {
             if (!ReferenceEquals(request, inFlight) || request.Session != Session) return null;
             inFlight = null;
+            Rest();
             if (Closed || Failed) return null;
             return merger.Apply(request.Window(segments)) ? new TranscriptUpdate(Session.ToString(), request.Sequence, merger.Text, false) : null;
         }
     }
 
-    /// The window was abandoned (canceled); a later one may run.
-    public void Abandon(LiveWindowRequest request) { lock (sync) if (ReferenceEquals(request, inFlight)) inFlight = null; }
+    /// Called under `sync` when the window in flight ends, however it ended.
+    void Rest()
+    {
+        long now = clock?.Invoke() ?? 0;
+        restUntil = now + (long)(Math.Max(0, now - inFlightSince) * RestRatio);
+    }
+
+    /// The window was abandoned (canceled); a later one may run, after the same rest.
+    public void Abandon(LiveWindowRequest request)
+    {
+        lock (sync) {
+            if (!ReferenceEquals(request, inFlight)) return;
+            inFlight = null;
+            Rest();
+        }
+    }
 
     /// Live recognition stopped working for this take. The words shown stay.
     public void Fail() { lock (sync) { Failed = true; inFlight = null; } }
