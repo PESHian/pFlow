@@ -54,6 +54,13 @@ targets:
         ENABLE_HARDENED_RUNTIME: NO
         LD_RUNPATH_SEARCH_PATHS:
           - "@executable_path/../Frameworks"
+      configs:
+        # Release drops the debug map, which records each object file by its
+        # build-machine path (the builder's home folder) inside the app binary.
+        Release:
+          DEPLOYMENT_POSTPROCESSING: YES
+          STRIP_INSTALLED_PRODUCT: YES
+          STRIP_STYLE: debugging
 
   YapTests:
     type: bundle.unit-test
