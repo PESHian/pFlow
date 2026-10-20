@@ -8,22 +8,22 @@
       "version": "0.3.5"
     },
     "windows-arm64": {
-      "bytes": 92540453,
-      "sha256": "5f89466048685b2c19499a072a0bf4468b0a25aa5f3e25623193009d7c9e7136",
-      "url": "https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.19.5/pFlow-Windows-arm64-0.1.14-update.zip",
-      "version": "0.1.14"
+      "bytes": 92541245,
+      "sha256": "e2fd0d51e8687ce3b3ec48c6e859dccc00ecd749dadb818953fccd5ca2802434",
+      "url": "https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.19.6/pFlow-Windows-arm64-0.1.15-update.zip",
+      "version": "0.1.15"
     },
     "windows-x64": {
-      "bytes": 105164443,
-      "sha256": "0bac5be4c19528850a64632929dfda129d708bc4781fde41d4d3e46ddb2fb25b",
-      "url": "https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.19.5/pFlow-Windows-x64-0.1.14-update.zip",
-      "version": "0.1.14"
+      "bytes": 105165205,
+      "sha256": "b1eba0b53339556404a1f456cfdbaa2686b00e80598ce3fc0fda2c403d8e25a7",
+      "url": "https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.19.6/pFlow-Windows-x64-0.1.15-update.zip",
+      "version": "0.1.15"
     },
     "windows-x86": {
-      "bytes": 76422097,
-      "sha256": "8fee856c8b4568e70092812bce5ab3955a793486dce2b046eebe041141282711",
-      "url": "https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.19.5/pFlow-Windows-x86-0.1.14-update.zip",
-      "version": "0.1.14"
+      "bytes": 76422895,
+      "sha256": "cf1e63bcf2e627f6ce296e5557b1794674cef131db92a36b159a2e6a2c18dc05",
+      "url": "https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.19.6/pFlow-Windows-x86-0.1.15-update.zip",
+      "version": "0.1.15"
     }
   }
 }
