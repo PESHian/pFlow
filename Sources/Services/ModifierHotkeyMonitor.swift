@@ -92,10 +92,12 @@ final class ModifierHotkeyMonitor {
         }
     }
 
-    private func rightCommand(_ event: NSEvent) {
+    func rightCommand(_ event: NSEvent) {
         guard let down = CommandKey.rightCommandTransition(keyCode: Int64(event.keyCode), flags: UInt64(event.modifierFlags.rawValue)) else { return }
         NSLog("Yap: Right Command \(down ? "down" : "up"), flags=\(event.modifierFlags.rawValue)")
-        let now = ProcessInfo.processInfo.systemUptime
+        // Starting audio can delay delivery. Classify the physical key times,
+        // not the time the main thread finally handles their events.
+        let now = event.timestamp
         if down {
             activation.reconcileIdle(isBusy: recordingIsBusy())
             guard activation.state != .idle || !recordingIsBusy() else { return }

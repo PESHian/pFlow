@@ -17,6 +17,8 @@ These are testing builds. macOS and Windows may show an unsigned or unnotarized 
 
 Open the disk image and drag **pFlow by Pesh** into Applications. Open it and grant Microphone, Speech Recognition, Accessibility, and Automation permissions when asked. Hold **Right Command** to record, then release. Double-tap for continuous dictation; tap again to stop. Left Command stays available for shortcuts.
 
+If double-tapping opens Siri, change Siri's Keyboard Shortcut in System Settings so it does not use Command twice.
+
 The first use may need a checksum-verified Whisper model download. Apple Intelligence provides cleanup and report formatting when available. If it is unavailable, plain dictation remains available. This testing download is ad-hoc signed and not notarized. If macOS blocks it, use [Apple's Open Anyway steps](https://support.apple.com/en-us/102445) after checking the download.
 
 ### Windows
