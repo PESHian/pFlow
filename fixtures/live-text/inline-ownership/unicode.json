@@ -1,0 +1,93 @@
+{
+ "description": "Emoji, combining marks and Chinese around and inside the span keep their exact code units.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "Hi \ud83d\udc4b\ud83c\udffd \n\u2014 cafe\u0301 \u4e2d\u6587",
+   "selection": [
+    8,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "Merci \ud83d\ude4f \u00e0",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Merci \ud83d\ude4f \u00e0 bient\u00f4t",
+   "expect": {
+    "action": "write",
+    "range": [
+     8,
+     0
+    ],
+    "text": "Merci \ud83d\ude4f \u00e0",
+    "confirm": "ok"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Merci \ud83d\ude4f \u00e0 bient\u00f4t \u518d\u89c1",
+   "expect": {
+    "action": "write",
+    "range": [
+     18,
+     0
+    ],
+    "text": " bient\u00f4t",
+    "confirm": "ok"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Merci \ud83d\ude4f \u00e0 bient\u00f4t \u518d\u89c1",
+   "expect": {
+    "action": "write",
+    "range": [
+     26,
+     0
+    ],
+    "text": " \u518d\u89c1",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Hi \ud83d\udc4b\ud83c\udffd Merci \ud83d\ude4f \u00e0 bient\u00f4t \u518d\u89c1\n\u2014 cafe\u0301 \u4e2d\u6587",
+    "selection": [
+     29,
+     0
+    ]
+   }
+  },
+  {
+   "op": "final",
+   "text": "Merci \ud83d\ude4f, \u00e0 bient\u00f4t \u518d\u89c1\u3002",
+   "expect": {
+    "action": "write",
+    "range": [
+     16,
+     13
+    ],
+    "text": ", \u00e0 bient\u00f4t \u518d\u89c1\u3002",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Hi \ud83d\udc4b\ud83c\udffd Merci \ud83d\ude4f, \u00e0 bient\u00f4t \u518d\u89c1\u3002\n\u2014 cafe\u0301 \u4e2d\u6587",
+    "selection": [
+     31,
+     0
+    ]
+   }
+  }
+ ]
+}

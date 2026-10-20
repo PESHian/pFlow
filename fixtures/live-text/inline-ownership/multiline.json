@@ -1,0 +1,67 @@
+{
+ "description": "Line endings around the span stay as they were; the final may hold new lines.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "Line one\r\nLine three",
+   "selection": [
+    8,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "and",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "and a half",
+   "expect": {
+    "action": "write",
+    "range": [
+     8,
+     0
+    ],
+    "text": " and",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Line one and\r\nLine three",
+    "selection": [
+     12,
+     0
+    ]
+   }
+  },
+  {
+   "op": "final",
+   "text": "and a half.\nLine two.",
+   "expect": {
+    "action": "write",
+    "range": [
+     12,
+     0
+    ],
+    "text": " a half.\nLine two.",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Line one and a half.\nLine two.\r\nLine three",
+    "selection": [
+     30,
+     0
+    ]
+   }
+  }
+ ]
+}

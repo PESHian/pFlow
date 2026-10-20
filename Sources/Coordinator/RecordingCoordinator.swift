@@ -34,6 +34,9 @@ final class RecordingCoordinator {
     // Read once per take, so changing the setting mid-take waits for the next one.
     private(set) var takeLiveTextMode: LiveTextMode = .off
     private var transcript = LiveTranscriptReconciler()
+    private var take: String?
+    // "Type in the current app" is typing into the destination this take.
+    private var typingLive = false
 
     private var startedAt: TimeInterval?
     private var recordingDevice: String?
@@ -49,6 +52,12 @@ final class RecordingCoordinator {
     func begin() {
         guard state == .idle, !updateInProgress else { return }
         injector.captureTarget()
+        guard !injector.targetIsSecure else {
+            hud.show(device: nil, livePreview: false)
+            hud.setPhase(.passwordField)
+            hud.hide(after: 2)
+            return
+        }
         applicationName = injector.targetApplicationName
         applicationBundleID = injector.targetApplicationBundleID
         recordingTemplate = activeTemplate()
@@ -58,17 +67,32 @@ final class RecordingCoordinator {
         recordingDevice = deviceName()
         takeLiveTextMode = liveTextMode()
         let take = UUID().uuidString
+        self.take = take
         transcript.begin(session: take)
+        // Checked before pFlow shows anything, against the field just captured.
+        var liveNote: String?
+        typingLive = false
+        if takeLiveTextMode == .typeInApp {
+            switch injector.beginLive(session: take) {
+            case .typing:
+                typingLive = true
+                liveNote = "Typing in \(applicationName ?? "this app")"
+            case .preview(let stop):
+                liveNote = stop.previewNote
+            }
+        }
         pauseCapture(false)
         sounds.playStart()
         hud.show(device: recordingDevice, livePreview: takeLiveTextMode.showsPreview)
         hud.setPhase(.listening)
+        if let liveNote { hud.setLiveNote(liveNote) }
         startTask = Task { [weak self] in
             guard let self else { return }
             do { try await self.session.start(take: take, live: self.takeLiveTextMode.showsPreview) }
             catch {
                 NSLog("Yap: failed to start recording: \(error)")
                 self.transcript.cancel()
+                self.leaveLiveTyping()
                 _ = try? await self.session.stop()
                 self.hud.setPhase(.failed)
                 self.hud.hide(after: 2)
@@ -94,8 +118,34 @@ final class RecordingCoordinator {
     }
 
     private func receive(_ update: TranscriptUpdate) {
-        guard transcript.apply(update), takeLiveTextMode.showsPreview else { return }
-        hud.setPartial(transcript.text)
+        let accepted = transcript.lastSequence
+        let changed = transcript.apply(update)
+        guard takeLiveTextMode.showsPreview, transcript.lastSequence != accepted else { return }
+        if changed { hud.setPartial(transcript.text) }
+        // A repeat of the same words still goes to typing: it is how the last words settle.
+        guard typingLive, state == .recording, let take else { return }
+        if let stop = injector.reconcileLive(session: take, transcript: transcript.text) {
+            hud.setLiveNote(stop.stoppedNote)
+        }
+    }
+
+    /// Takes provisional typed words back out when the take ends with no text.
+    /// Returns false when they had to be left in place.
+    @discardableResult
+    private func leaveLiveTyping() -> Bool {
+        guard typingLive, let take else { return true }
+        typingLive = false
+        if case .left = injector.cancelLive(session: take) { return false }
+        return true
+    }
+
+    private func hideAfterLiveTyping() {
+        if leaveLiveTyping() {
+            hud.hide(after: 0)
+        } else {
+            hud.setPhase(.typedTextLeft)
+            hud.hide(after: 4)
+        }
     }
 
     /// Live words stopped mid-take. Say so; the words shown stay, and stopping
@@ -160,7 +210,7 @@ final class RecordingCoordinator {
         transcript.cancel()
         state = .transcribing
         sounds.playStop()
-        hud.hide(after: 0)
+        hideAfterLiveTyping()
         pauseCapture(true)
         await startTask?.value
         await session.cancel()
@@ -235,7 +285,7 @@ final class RecordingCoordinator {
             }
 
             guard !text.isEmpty else {
-                hud.hide(after: 0)
+                hideAfterLiveTyping()
                 state = .idle
                 return
             }
@@ -252,7 +302,7 @@ final class RecordingCoordinator {
 
             // Removing fillers can empty a transcript that was only "um uh".
             guard !text.isEmpty else {
-                hud.hide(after: 0)
+                hideAfterLiveTyping()
                 state = .idle
                 return
             }
@@ -281,7 +331,22 @@ final class RecordingCoordinator {
                 text = DictionaryCorrection.applyReplacements(in: text, rules: rules)
             }
             state = .inserting
-            let outcome = await injector.deliver(text, formatted: formattedText)
+            let outcome: InjectionOutcome
+            var typingStopped = false
+            if typingLive, let take {
+                typingLive = false
+                // Plain text replaces the provisional words once. Accessibility
+                // cannot set styles, so template formatting arrives as plain text.
+                switch injector.finalizeLive(session: take, text: text) {
+                case .applied: outcome = .pasted
+                case .notTyped: outcome = await injector.deliver(text, formatted: formattedText)
+                case .kept:
+                    outcome = .savedToHistory
+                    typingStopped = true
+                }
+            } else {
+                outcome = await injector.deliver(text, formatted: formattedText)
+            }
             lastOutcome = outcome
             NSLog("Yap: insertion result: \(outcome)")
             if case .blockedBySecureInput(let holder) = outcome {
@@ -292,6 +357,12 @@ final class RecordingCoordinator {
                          spokenWordCount: spokenWordCount, applicationName: applicationName,
                          applicationBundleID: applicationBundleID)
 
+            if typingStopped {
+                hud.setPhase(.typingStopped)
+                hud.hide(after: 4)
+                state = .idle
+                return
+            }
             switch outcome {
             case .pasted:
                 hud.hide(after: 0)
@@ -315,6 +386,8 @@ final class RecordingCoordinator {
     /// words in History instead of dropping them, and say so. Nothing is
     /// typed: the text never finished, so it is not treated as a success.
     private func keepRecoverableText(after error: Error, duration: Double?) {
+        // Words already typed stay where they are; nothing more is typed.
+        typingLive = false
         var kept = transcript.text
         if case TranscriptionError.interrupted(let recovered) = error, !recovered.isEmpty { kept = recovered }
         transcript.cancel()

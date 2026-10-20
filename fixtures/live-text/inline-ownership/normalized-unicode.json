@@ -1,0 +1,55 @@
+{
+ "description": "An app that rewrites the text into another Unicode form is an uncertain write: positions are counted in UTF-16 code units, never by canonical equivalence.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "",
+   "selection": [
+    0,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "Cafe\u0301 opens",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Cafe\u0301 opens now",
+   "expect": {
+    "action": "write",
+    "range": [
+     0,
+     0
+    ],
+    "text": "Cafe\u0301 opens",
+    "confirm": "uncertain"
+   },
+   "apply": {
+    "value": "Caf\u00e9 opens",
+    "selection": [
+     10,
+     0
+    ]
+   }
+  },
+  {
+   "op": "final",
+   "text": "Cafe\u0301 opens now.",
+   "expect": {
+    "action": "stop",
+    "reason": "uncertain"
+   }
+  }
+ ]
+}

@@ -1,0 +1,67 @@
+{
+ "description": "A character later swapped for a canonically equivalent one of the same length (U+212B for U+00C5) is a change to pFlow's text.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "",
+   "selection": [
+    0,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "\u212bngstr\u00f6m units",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "\u212bngstr\u00f6m units are",
+   "expect": {
+    "action": "write",
+    "range": [
+     0,
+     0
+    ],
+    "text": "\u212bngstr\u00f6m units",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "\u212bngstr\u00f6m units",
+    "selection": [
+     14,
+     0
+    ]
+   }
+  },
+  {
+   "op": "edit",
+   "range": [
+    0,
+    1
+   ],
+   "text": "\u00c5",
+   "caret": [
+    14,
+    0
+   ]
+  },
+  {
+   "op": "update",
+   "text": "\u212bngstr\u00f6m units are small",
+   "expect": {
+    "action": "stop",
+    "reason": "text"
+   }
+  }
+ ]
+}

@@ -63,6 +63,18 @@ struct RecordingHUDView: View {
                 Label("Kept in History", systemImage: "clock.arrow.circlepath")
                     .font(.system(size: 11, weight: .medium))
                     .help("Speech recognition stopped early. The words so far are saved in History.")
+            } else if model.phase == .passwordField {
+                Label("Password field", systemImage: "lock")
+                    .font(.system(size: 11, weight: .medium))
+                    .help(title)
+            } else if model.phase == .typingStopped {
+                Label("Saved in History", systemImage: "clock.arrow.circlepath")
+                    .font(.system(size: 11, weight: .medium))
+                    .help(title)
+            } else if model.phase == .typedTextLeft {
+                Label("Typed words kept", systemImage: "info.circle")
+                    .font(.system(size: 11, weight: .medium))
+                    .help(title)
             } else {
                 ProgressView().controlSize(.small).tint(Theme.accent)
             }
@@ -92,6 +104,9 @@ struct RecordingHUDView: View {
         case .savedToHistory: return "Text saved in History. Clipboard unchanged."
         case .restarting: return "Restarting pFlow"
         case .liveTextKept: return "Speech recognition stopped early. The words so far are saved in History."
+        case .passwordField: return "Dictation is off in password fields."
+        case .typingStopped: return "Typing stopped, so the finished text is saved in History. Check the words already typed."
+        case .typedTextLeft: return "Cancelled. The app changed, so words pFlow already typed are still there."
         }
     }
 }
@@ -114,7 +129,7 @@ private struct LivePreviewCard<Status: View>: View {
                 if model.phase == .confirmCancel || model.phase == .transcribing || model.phase == .cleaning {
                     Text(title).font(.caption).foregroundStyle(.secondary)
                 } else if isRecordingPhase, let note = model.liveNote {
-                    Text(note).font(.caption).foregroundStyle(.secondary)
+                    Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         .help("pFlow still finishes your words when you stop.")
                         .accessibilityLabel("\(note). pFlow still finishes your words when you stop.")
                 }

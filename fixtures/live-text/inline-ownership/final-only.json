@@ -1,0 +1,47 @@
+{
+ "description": "A take with no settled live words still gets its finished text, once.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "",
+   "selection": [
+    0,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "Short",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "final",
+   "text": "Short note.",
+   "expect": {
+    "action": "write",
+    "range": [
+     0,
+     0
+    ],
+    "text": "Short note.",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Short note.",
+    "selection": [
+     11,
+     0
+    ]
+   }
+  }
+ ]
+}

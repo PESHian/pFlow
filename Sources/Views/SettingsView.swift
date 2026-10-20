@@ -406,7 +406,7 @@ struct LiveTextPicker: View {
         case .preview:
             note = "Shows your words in a small pFlow window while you talk. Your app gets the finished text once you stop."
         case .typeInApp:
-            note = "Typing straight into your app is not ready yet. For now pFlow shows the preview and types the finished text once you stop."
+            note = "Types your words into the app as you talk, a little behind, and puts in the finished text when you stop. If you move the cursor, type, or switch apps, typing stops and the finished text is saved in History. Apps that don't allow this show the preview instead. Template styles such as bold arrive as plain text."
         }
         if engine == .whisper {
             note += " With Whisper, words show about a second behind, and the finished text can differ a little from the preview."

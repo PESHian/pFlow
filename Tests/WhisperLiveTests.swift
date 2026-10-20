@@ -456,11 +456,13 @@ struct WhisperLiveTests {
             session.emit("Gentle rain")
             session.onLiveStopped?()
             await coordinator.finish()
-            #expect(hud.notes == (mode.showsPreview ? ["Live words stopped"] : []), "\(mode)")
+            // A field that cannot be typed into says so first, then the take is Preview.
+            let first: [String?] = mode == .typeInApp ? ["Can't type in this app"] : []
+            #expect(hud.notes == first + (mode.showsPreview ? ["Live words stopped"] : []), "\(mode)")
             #expect(injector.delivered == ["Gentle rain tapped the window"], "\(mode)")
             // Late: after the take, nothing more is shown.
             session.onLiveStopped?()
-            #expect(hud.notes.count == (mode.showsPreview ? 1 : 0))
+            #expect(hud.notes.count == first.count + (mode.showsPreview ? 1 : 0))
         }
     }
 }

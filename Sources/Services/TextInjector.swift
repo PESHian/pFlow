@@ -21,10 +21,27 @@ protocol TextInjecting {
     func captureTarget()
     func deliver(_ text: String) async -> InjectionOutcome
     func deliver(_ text: String, formatted: NSAttributedString?) async -> InjectionOutcome
+    /// The captured field is a password field. Dictation does not start there.
+    var targetIsSecure: Bool { get }
+
+    // Live typing ("Type in the current app") for one take. `beginLive` uses
+    // the field captured by `captureTarget`, so it runs right after it,
+    // before any pFlow UI. The final-only `deliver` above is unchanged and is
+    // what Off and Preview use.
+    func beginLive(session: String) -> LiveInlineStart
+    /// Returns the reason when live typing stops with this update.
+    func reconcileLive(session: String, transcript: String) -> LiveInlineOwnership.Stop?
+    func finalizeLive(session: String, text: String) -> LiveInlineFinal
+    func cancelLive(session: String) -> LiveInlineCancel
 }
 
 extension TextInjecting {
     func deliver(_ text: String, formatted: NSAttributedString?) async -> InjectionOutcome { await deliver(text) }
+    var targetIsSecure: Bool { false }
+    func beginLive(session: String) -> LiveInlineStart { .preview(.unsupported) }
+    func reconcileLive(session: String, transcript: String) -> LiveInlineOwnership.Stop? { nil }
+    func finalizeLive(session: String, text: String) -> LiveInlineFinal { .notTyped }
+    func cancelLive(session: String) -> LiveInlineCancel { .nothingTyped }
 }
 
 @MainActor
@@ -52,7 +69,9 @@ final class TextInjector: TextInjecting {
     private var targetField: AXUIElement?
     private var originalValue: String?
     private var originalSelection: CFRange?
+    private(set) var targetIsSecure = false
     private var delivering = false
+    private var live = LiveInlineSlot()
 
     private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
         var value: CFTypeRef?
@@ -93,6 +112,24 @@ final class TextInjector: TextInjecting {
         targetField = targetApp.flatMap(focusedField)
         originalValue = targetField.flatMap { attribute($0, kAXValueAttribute) as? String }
         originalSelection = targetField.flatMap(selection)
+        targetIsSecure = targetField.map { attribute($0, kAXSubroleAttribute) as? String == kAXSecureTextFieldSubrole } ?? false
+    }
+
+    func beginLive(session: String) -> LiveInlineStart {
+        guard !delivering, let targetApp, let targetField else { return live.begin(id: session, field: nil) }
+        return live.begin(id: session, field: AXLiveTextField(pid: targetApp.processIdentifier, element: targetField))
+    }
+
+    func reconcileLive(session: String, transcript: String) -> LiveInlineOwnership.Stop? {
+        live.reconcile(session: session, transcript: transcript)
+    }
+
+    func finalizeLive(session: String, text: String) -> LiveInlineFinal {
+        live.finalize(session: session, text: text)
+    }
+
+    func cancelLive(session: String) -> LiveInlineCancel {
+        live.cancel(session: session)
     }
 
     func deliver(_ text: String) async -> InjectionOutcome {

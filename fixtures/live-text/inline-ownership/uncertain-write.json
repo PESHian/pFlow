@@ -1,0 +1,76 @@
+{
+ "description": "A write that does not read back exactly ends typing; it is not retried, and cancel leaves the field alone.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "",
+   "selection": [
+    0,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "Rain",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Rain soon",
+   "expect": {
+    "action": "write",
+    "range": [
+     0,
+     0
+    ],
+    "text": "Rain",
+    "confirm": "uncertain"
+   },
+   "apply": {
+    "value": "Rain ",
+    "selection": [
+     5,
+     0
+    ]
+   }
+  },
+  {
+   "op": "update",
+   "text": "Rain soon then sun",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "final",
+   "text": "Rain soon, then sun.",
+   "expect": {
+    "action": "stop",
+    "reason": "uncertain"
+   }
+  },
+  {
+   "op": "cancel",
+   "expect": {
+    "action": "stop",
+    "reason": "uncertain"
+   },
+   "field": {
+    "value": "Rain ",
+    "selection": [
+     5,
+     0
+    ]
+   }
+  }
+ ]
+}

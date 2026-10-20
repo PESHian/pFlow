@@ -1,0 +1,74 @@
+{
+ "description": "Editing pFlow's own words stops typing; cancel leaves the edit alone.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "",
+   "selection": [
+    0,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "Meet me",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Meet me at noon",
+   "expect": {
+    "action": "write",
+    "range": [
+     0,
+     0
+    ],
+    "text": "Meet me",
+    "confirm": "ok"
+   }
+  },
+  {
+   "op": "edit",
+   "range": [
+    0,
+    4
+   ],
+   "text": "Greet",
+   "caret": [
+    8,
+    0
+   ]
+  },
+  {
+   "op": "update",
+   "text": "Meet me at noon today",
+   "expect": {
+    "action": "stop",
+    "reason": "text"
+   }
+  },
+  {
+   "op": "cancel",
+   "expect": {
+    "action": "stop",
+    "reason": "text"
+   },
+   "field": {
+    "value": "Greet me",
+    "selection": [
+     8,
+     0
+    ]
+   }
+  }
+ ]
+}

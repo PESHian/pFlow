@@ -48,6 +48,19 @@ Windows on/off controls show **On** or **Off** and a contrasting thumb. Settings
 - Password fields are excluded. Focus changes and unsupported fields can prevent insertion; the transcript remains in local history.
 - Optional per-user launch at login.
 
+### Live text: Type in the current app (Mac)
+
+pFlow types words into the field you started in while you talk. It types only words two updates in a row agree on, so it runs a little behind. When you stop, it puts in the finished text (cleanup, dictionary, template) once. It writes with Accessibility text ranges, never keystrokes or the clipboard, and reads every write back.
+
+Typing stops for the rest of the take if you move the cursor, type, switch apps or fields, the field becomes a password field, permission is removed, or a write does not read back exactly. The preview says why, and the finished text goes to History only. Cancel removes pFlow's words only if the field is still exactly as pFlow left it. Dictation does not start in password fields. Template styles such as bold arrive as plain text in this mode. The rules and their shared test cases are in `fixtures/live-text/inline-ownership`.
+
+| Destination | Checked behavior |
+|---|---|
+| AppKit text view and text field in a test window (Unicode, CRLF, styled text, selection, cancel, edits) | Inline, through AppKit's own accessibility methods in the same process |
+| Same, through real Accessibility calls | Not run: the test Mac has not granted Accessibility to a test build |
+| TextEdit, Safari text box, Electron editors (VS Code, Cursor) | Not run, same reason |
+| Field whose text or range cannot be read or set | Preview for the take (test field only) |
+
 ## Privacy
 
 Whisper transcribes audio on your device. Mac AI defaults to on-device processing. Source builds with Apple’s required entitlement can opt into Apple Private Cloud Compute, which sends text and formatting instructions to Apple; the supplied Mac testing download has no cloud entitlement. Windows AI runs locally. Model downloads contact their hosting services. History and settings stay in your user account, outside the app. Delete history entries when they are no longer needed.

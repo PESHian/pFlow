@@ -20,7 +20,7 @@ struct LiveTranscriptReconciler {
     private(set) var session: String?
     private(set) var phase: Phase = .idle
     private(set) var text = ""
-    private var lastSequence: Int?
+    private(set) var lastSequence: Int?
 
     mutating func begin(session: String) {
         self = LiveTranscriptReconciler()

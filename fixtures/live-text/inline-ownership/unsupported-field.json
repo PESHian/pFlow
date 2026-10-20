@@ -1,0 +1,19 @@
+{
+ "description": "A field whose text range cannot be set uses Preview.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "Notes",
+   "selection": [
+    5,
+    0
+   ]
+  },
+  "writable": false
+ },
+ "beginResult": "unsupported",
+ "steps": []
+}

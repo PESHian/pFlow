@@ -1,0 +1,59 @@
+{
+ "description": "Losing Accessibility permission stops typing.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "",
+   "selection": [
+    0,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "Sunny",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Sunny today",
+   "expect": {
+    "action": "write",
+    "range": [
+     0,
+     0
+    ],
+    "text": "Sunny",
+    "confirm": "ok"
+   }
+  },
+  {
+   "op": "trust",
+   "trusted": false
+  },
+  {
+   "op": "update",
+   "text": "Sunny today and",
+   "expect": {
+    "action": "stop",
+    "reason": "permission"
+   }
+  },
+  {
+   "op": "cancel",
+   "expect": {
+    "action": "stop",
+    "reason": "permission"
+   }
+  }
+ ]
+}

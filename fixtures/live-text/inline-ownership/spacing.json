@@ -1,0 +1,81 @@
+{
+ "description": "Spaces are added only where the surroundings need them, using the same rule as final insertion.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "Hi,Sam",
+   "selection": [
+    3,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "please",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "please call",
+   "expect": {
+    "action": "write",
+    "range": [
+     3,
+     0
+    ],
+    "text": " please ",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Hi, please Sam",
+    "selection": [
+     11,
+     0
+    ]
+   }
+  },
+  {
+   "op": "update",
+   "text": "please call me",
+   "expect": {
+    "action": "write",
+    "range": [
+     11,
+     0
+    ],
+    "text": "call ",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Hi, please call Sam",
+    "selection": [
+     16,
+     0
+    ]
+   }
+  },
+  {
+   "op": "final",
+   "text": "please call",
+   "expect": {
+    "action": "none"
+   },
+   "field": {
+    "value": "Hi, please call Sam",
+    "selection": [
+     16,
+     0
+    ]
+   }
+  }
+ ]
+}

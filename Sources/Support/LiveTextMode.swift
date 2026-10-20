@@ -18,8 +18,8 @@ enum LiveTextMode: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Typing into the app is not built yet, so that choice shows the pFlow
-    /// preview and inserts the finished text once, exactly like Preview.
+    /// Typing into the app also shows the preview, which says when typing is
+    /// not possible or has stopped and the take continues as Preview.
     var showsPreview: Bool { self != .off }
 
     /// Missing or unknown saved values are Off, so existing installs keep

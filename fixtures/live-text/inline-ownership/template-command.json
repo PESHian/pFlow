@@ -1,0 +1,80 @@
+{
+ "description": "A spoken template command may show provisionally; the finished template text replaces it once.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "",
+   "selection": [
+    0,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "Use email template",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Use email template hi Sam",
+   "expect": {
+    "action": "write",
+    "range": [
+     0,
+     0
+    ],
+    "text": "Use email template",
+    "confirm": "ok"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Use email template hi Sam thanks",
+   "expect": {
+    "action": "write",
+    "range": [
+     18,
+     0
+    ],
+    "text": " hi Sam",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Use email template hi Sam",
+    "selection": [
+     25,
+     0
+    ]
+   }
+  },
+  {
+   "op": "final",
+   "text": "Hi Sam,\n\nThanks.",
+   "expect": {
+    "action": "write",
+    "range": [
+     0,
+     25
+    ],
+    "text": "Hi Sam,\n\nThanks.",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Hi Sam,\n\nThanks.",
+    "selection": [
+     16,
+     0
+    ]
+   }
+  }
+ ]
+}
