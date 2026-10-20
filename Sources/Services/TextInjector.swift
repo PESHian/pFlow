@@ -31,6 +31,8 @@ protocol TextInjecting {
     func beginLive(session: String) -> LiveInlineStart
     /// Returns the reason when live typing stops with this update.
     func reconcileLive(session: String, transcript: String) -> LiveInlineOwnership.Stop?
+    /// pFlow's words may be in the destination for this take.
+    func typedLive(session: String) -> Bool
     func finalizeLive(session: String, text: String) -> LiveInlineFinal
     func cancelLive(session: String) -> LiveInlineCancel
 }
@@ -40,6 +42,7 @@ extension TextInjecting {
     var targetIsSecure: Bool { false }
     func beginLive(session: String) -> LiveInlineStart { .preview(.unsupported) }
     func reconcileLive(session: String, transcript: String) -> LiveInlineOwnership.Stop? { nil }
+    func typedLive(session: String) -> Bool { false }
     func finalizeLive(session: String, text: String) -> LiveInlineFinal { .notTyped }
     func cancelLive(session: String) -> LiveInlineCancel { .nothingTyped }
 }
@@ -117,15 +120,29 @@ final class TextInjector: TextInjecting {
 
     func beginLive(session: String) -> LiveInlineStart {
         guard !delivering, let targetApp, let targetField else { return live.begin(id: session, field: nil) }
-        return live.begin(id: session, field: AXLiveTextField(pid: targetApp.processIdentifier, element: targetField))
+        return beginLive(session: session, field: AXLiveTextField(pid: targetApp.processIdentifier, element: targetField))
+    }
+
+    /// The same live typing over a given field; tests pass one they own.
+    func beginLive(session: String, field: LiveTextField) -> LiveInlineStart {
+        live.begin(id: session, field: field)
     }
 
     func reconcileLive(session: String, transcript: String) -> LiveInlineOwnership.Stop? {
         live.reconcile(session: session, transcript: transcript)
     }
 
+    func typedLive(session: String) -> Bool { live.typed(session: session) }
+
     func finalizeLive(session: String, text: String) -> LiveInlineFinal {
-        live.finalize(session: session, text: text)
+        let result = live.finalize(session: session, text: text)
+        // "Copy dictation to clipboard": the finished words, once, after they
+        // went in. Live words never touch the clipboard.
+        if result == .applied, copyToClipboard(),
+           placeOnClipboard(Self.clipboardItem(text: text, formatted: nil, sessionID: UUID().uuidString)) == nil {
+            NSLog("pFlow: the finished text could not be copied to the clipboard")
+        }
+        return result
     }
 
     func cancelLive(session: String) -> LiveInlineCancel {
@@ -158,15 +175,6 @@ final class TextInjector: TextInjecting {
         let sessionID = UUID().uuidString
         var saved: [[NSPasteboard.PasteboardType: Data]]?
 
-        func placeOnClipboard(_ prepared: NSPasteboardItem?) -> Int? {
-            guard let item = prepared else { return nil }
-            let cleared = pasteboard.clearContents()
-            guard pasteboard.writeObjects([item]) else {
-                if let saved, pasteboard.changeCount == cleared { PasteboardSnapshot.restore(saved, to: pasteboard) }
-                return nil
-            }
-            return pasteboard.changeCount
-        }
         func unavailable(_ outcome: InjectionOutcome = .leftOnClipboard) -> InjectionOutcome {
             guard keepCopy,
                   placeOnClipboard(Self.clipboardItem(text: text, formatted: formatted, sessionID: sessionID)) != nil else { return .savedToHistory }
@@ -193,7 +201,7 @@ final class TextInjector: TextInjecting {
             }
             saved = snapshot
         }
-        guard let change = placeOnClipboard(prepared) else { return .savedToHistory }
+        guard let change = placeOnClipboard(prepared, restoring: saved) else { return .savedToHistory }
         defer {
             if let saved {
                 _ = PasteboardSnapshot.restoreIfOwned(saved, to: pasteboard, change: change, session: sessionID)
@@ -226,6 +234,20 @@ final class TextInjector: TextInjecting {
         if let field = targetField, let expected,
            attribute(field, kAXValueAttribute) as? String == expected { return .pasted }
         return .unconfirmed
+    }
+
+    /// Replaces the clipboard with `prepared`. Returns the new change count, or
+    /// nil when it could not be written; then `saved`, if given, is put back
+    /// unless something else changed the clipboard meanwhile.
+    private func placeOnClipboard(_ prepared: NSPasteboardItem?,
+                                  restoring saved: [[NSPasteboard.PasteboardType: Data]]? = nil) -> Int? {
+        guard let item = prepared else { return nil }
+        let cleared = pasteboard.clearContents()
+        guard pasteboard.writeObjects([item]) else {
+            if let saved, pasteboard.changeCount == cleared { PasteboardSnapshot.restore(saved, to: pasteboard) }
+            return nil
+        }
+        return pasteboard.changeCount
     }
 
     /// System Events (via Apple Events) is the only route that proved reliable

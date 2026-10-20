@@ -92,6 +92,23 @@ internal static partial class Program
                 }
             }
             {
+                // "Copy dictation to clipboard" on: the finished words go there once, after they were typed; live words never do.
+                uint calibrate = Native.GetClipboardSequenceNumber();
+                ClipboardLease.KeepCopy(IntPtr.Zero, "Calibration fictional copy");
+                uint perCopy = Native.GetClipboardSequenceNumber() - calibrate;
+                store.Preferences.CopyDictationToClipboard = true;
+                Clipboard.SetText("Older fictional copy");
+                var target = new RecordingTarget(); var field = new OwnedField("Log: "); var slot = new LiveInlineSlot(); slot.Begin("t", field);
+                uint before = Native.GetClipboardSequenceNumber();
+                slot.Reconcile("t", "um senten met"); slot.Reconcile("t", "um senten met us");
+                Check("copy on: live words are typed but never touch the clipboard", field.Value == "Log: um senten met" && Native.GetClipboardSequenceNumber() == before && Clipboard.GetText() == "Older fictional copy");
+                var result = Wait(pipeline.Deliver(plain, 3, target, IntPtr.Zero, (_, _) => { }, CancellationToken.None,
+                    new LiveTyping(text => slot.Finalize("t", text), () => slot.Typed("t"), () => slot.Cancel("t"))));
+                Check("copy on: the finished text is typed once and reported inserted", result.Status == "Inserted" && field.Value == "Log: " + LiveInlineText.LineBreaks(plain.Text, "\r\n") && target.Inserted.Count == 0);
+                Check("copy on: the clipboard holds the finished text, copied exactly once", perCopy > 0 && Clipboard.GetText() == plain.Text && Native.GetClipboardSequenceNumber() - before == perCopy);
+                store.Preferences.CopyDictationToClipboard = false;
+            }
+            {
                 // The person moves the caret after the first words: the finished text stays in History only.
                 var target = new RecordingTarget(); var phases = new List<Phase>(); var field = new OwnedField(""); var slot = new LiveInlineSlot(); slot.Begin("t", field);
                 slot.Reconcile("t", "um senten"); slot.Reconcile("t", "um senten met");

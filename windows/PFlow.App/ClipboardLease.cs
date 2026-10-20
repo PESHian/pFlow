@@ -108,6 +108,13 @@ internal sealed class ClipboardLease : IDisposable
         } finally { Native.CloseClipboard(); }
     }
     public void Keep() => restored = true;
+    /// "Copy dictation to clipboard" after the text already went in another way:
+    /// the copy stays, and nothing is restored over it.
+    internal static void KeepCopy(IntPtr owner, string text)
+    {
+        using var lease = new ClipboardLease(owner, false);
+        lease.Put(text); lease.Keep();
+    }
     public void DispatchPaste()
     {
         Open();

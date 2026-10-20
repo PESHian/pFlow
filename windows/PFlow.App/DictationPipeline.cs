@@ -13,6 +13,7 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         try { return await action(); } finally { Timing?.Invoke(name, clock.Elapsed.TotalMilliseconds); }
     }
     internal TimeSpan CleanupBudget { get; init; } = TimeSpan.FromSeconds(8);
+    internal const string CopyFailed = "Inserted, but it could not be copied to the clipboard. Copy it from History.";
     internal readonly record struct Result(string Status, string? Notice);
     internal readonly record struct Prepared(string Text, string? Rtf, int SpokenWords, bool ReportUnavailable, bool CleanupIncomplete, bool CleanupTimedOut);
     internal async Task<Prepared> Prepare(string audio, double seconds, string folder, Action<Phase, string?> state, CancellationToken cancel)
@@ -94,7 +95,14 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         if (typing != null) {
             // Plain text replaces the provisional words once; styles cannot be set through a text range.
             var clock = Stopwatch.StartNew(); var (final, stop) = typing.Finalize(text); Timing?.Invoke("insertionMs", clock.Elapsed.TotalMilliseconds);
-            if (final == LiveFinal.Applied) result = rtf != null ? InsertionTarget.PlainOnly : "Inserted";
+            if (final == LiveFinal.Applied) {
+                result = rtf != null ? InsertionTarget.PlainOnly : "Inserted";
+                // The finished words only, once; the live words never touch the clipboard.
+                if (preferences.CopyDictationToClipboard) {
+                    try { ClipboardLease.KeepCopy(owner, text); }
+                    catch (Exception error) when (error is InvalidOperationException or OutOfMemoryException) { result = CopyFailed; }
+                }
+            }
             else if (final == LiveFinal.Kept) { result = LiveInlineText.Kept(stop ?? LiveStop.Uncertain); kept = true; }
         }
         if (result == null) {
