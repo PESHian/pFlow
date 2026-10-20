@@ -6,10 +6,20 @@ ready for users until the checks below pass on its exact downloaded bytes.
 
 ## Signing access
 
+**Public signing is on hold.** Do not sign a production candidate, submit it to
+Apple or upload it until the owner lifts the hold. Pesh is the public identity;
+the owner's personal name and email must stay out of public work, including
+certificates, commit metadata, build logs and release assets. Use Pesh and a
+GitHub noreply address for commit credit. Keep Apple account email addresses in
+Keychain or protected secrets only.
+
 Use a paid Apple Developer Program team and a usable Developer ID Application
-certificate with its private key. The owner must approve the publisher name on
-that certificate before a public upload. An individual membership exposes the
-certificate holder's name; an app name does not replace it.
+certificate with its private key. Before signing, the owner must approve the
+certificate's exact Pesh organization name. Inspect its full public contents
+privately for personal names and email addresses; checking its display name
+alone is insufficient. Do not use a personal-name certificate or relabel one as
+Pesh. Apple's certificate carries the team name and Team ID; the app's name
+does not change that identity.
 
 On the Mac, use Xcode Settings > Accounts > the team > Manage Certificates > + >
 Developer ID Application. Store notarization credentials interactively:
@@ -32,6 +42,9 @@ Production packaging requires these nonsecret selections in the environment:
 - `PFLOW_APPROVED_PUBLISHER`: the approved publisher portion of its common name.
 - `YAP_NOTARY_PROFILE`: the Keychain profile; defaults to `yap-notary`.
 - `PFLOW_SIGNING_KEYCHAIN`: optional explicit Keychain path.
+
+Leave `PFLOW_APPROVED_PUBLISHER` unset while signing is held. A matching
+certificate alone is not permission to release it.
 
 From a clean committed checkout of reviewed main, run `bash release.sh`. It builds
 with the approved update team embedded in the sealed Info.plist. `--app PATH`
@@ -123,5 +136,7 @@ Update the public download instructions only after those checks pass.
 [Apple notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)
 
 [Apple code signing](https://developer.apple.com/library/archive/technotes/tn2206/_index.html)
+
+[Apple certificate identities](https://developer.apple.com/help/account/certificates/certificates-overview/)
 
 [GitHub Actions security](https://docs.github.com/en/actions/reference/security/secure-use)
