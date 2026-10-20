@@ -104,6 +104,17 @@ static void read_requests() {
     state_changed.notify_one();
 }
 
+// Live windows run on their own whisper_state over the same loaded model; the
+// finished-text pass only ever uses the context's own state, exactly as with
+// Live text off. A shared state let live windows change the finished text: a
+// live window's shorter audio context lays the cross-attention cache out
+// differently, and a full 30 s pass reads the padding after its 1500 frames
+// (flash attention, no mask), where those windows had left their values.
+// The live state is made by the first live window and then kept, so later
+// takes neither wait for it nor pay to free it before their finished text.
+using State = std::unique_ptr<whisper_state, decltype(&whisper_free_state)>;
+static State live_state(nullptr, whisper_free_state);
+
 static void live_error(const Job & job, const char * message) {
     put(kLiveError); put(kVersion); put(job.session); put(job.sequence); put(std::string(message)); fflush(stdout);
 }
@@ -119,19 +130,22 @@ static void recognize_live(whisper_context * ctx, int threads, const Job & job) 
     params.audio_ctx = job.samples.size() <= 8 * 16000 ? 512 : job.samples.size() <= 18 * 16000 ? 1024 : 0;
     params.abort_callback = [](void *) { return abort_live.load(); };
     auto start = Clock::now();
-    if (whisper_full(ctx, params, job.samples.data(), static_cast<int>(job.samples.size())) != 0) {
+    if (!live_state) live_state.reset(whisper_init_state(ctx));
+    if (!live_state) { live_error(job, "Whisper could not read this audio."); return; }
+    whisper_state * state = live_state.get();
+    if (whisper_full_with_state(ctx, state, params, job.samples.data(), static_cast<int>(job.samples.size())) != 0) {
         live_error(job, abort_live ? "Canceled." : "Whisper could not read this audio."); return;
     }
     if (abort_live) { live_error(job, "Canceled."); return; }
     struct Segment { int32_t from, to; float no_speech; std::string text; };
     std::vector<Segment> segments; size_t total = 0;
-    int count = whisper_full_n_segments(ctx);
+    int count = whisper_full_n_segments_from_state(state);
     for (int i = 0; i < count && segments.size() < kMaxSegments; i++) {
-        auto value = bounded(whisper_full_get_segment_text(ctx, i), kMaxSegmentText);
+        auto value = bounded(whisper_full_get_segment_text_from_state(state, i), kMaxSegmentText);
         if (total + value.size() > kMaxLiveText) break;
         total += value.size();
-        segments.push_back({ static_cast<int32_t>(whisper_full_get_segment_t0(ctx, i) * 10), static_cast<int32_t>(whisper_full_get_segment_t1(ctx, i) * 10),
-            whisper_full_get_segment_no_speech_prob(ctx, i), std::move(value) });
+        segments.push_back({ static_cast<int32_t>(whisper_full_get_segment_t0_from_state(state, i) * 10), static_cast<int32_t>(whisper_full_get_segment_t1_from_state(state, i) * 10),
+            whisper_full_get_segment_no_speech_prob_from_state(state, i), std::move(value) });
     }
     put(kLiveResult); put(kVersion); put(job.session); put(job.sequence); put(static_cast<uint32_t>(segments.size()));
     for (auto & segment : segments) { put_i32(segment.from); put_i32(segment.to); put_f32(segment.no_speech); put(segment.text); }

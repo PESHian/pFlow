@@ -189,6 +189,26 @@ internal static partial class Program
             using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
             await whisper.Prewarm();
             int? worker = whisper.WorkerId;
+            var bytes = File.ReadAllBytes(audio); int data = bytes.AsSpan().IndexOf("data"u8) + 8;
+            // Live windows must not change the finished text. These recordings are long enough for the
+            // full 30 s context; the live windows use shorter ones on the same loaded model. When they
+            // shared one state, 13 of 21 such pairs changed (S6b).
+            var all = MemoryMarshal.Cast<byte, short>(bytes.AsSpan(data, (bytes.Length - data) & ~1)).ToArray();
+            uint sequence = 0;
+            foreach (var (name, pcmLong, windows) in new[] { ("three-times", all.Concat(all).Concat(all).ToArray(), new[] { (0, 3), (0, 6), (0, 10) }),
+                                                             ("part-then-whole", all[..(9 * 16000)].Concat(all).ToArray(), new[] { (2, 7), (1, 9) }) }) {
+                string path = Path.Combine(directory, "public-sample-" + name + ".wav"); var file = new byte[data + pcmLong.Length * 2];
+                bytes.AsSpan(0, data).CopyTo(file); MemoryMarshal.AsBytes(pcmLong.AsSpan()).CopyTo(file.AsSpan(data));
+                BitConverter.TryWriteBytes(file.AsSpan(4), file.Length - 8); BitConverter.TryWriteBytes(file.AsSpan(data - 4), pcmLong.Length * 2);
+                File.WriteAllBytes(path, file);
+                string alone = await whisper.Transcribe(path, "en", [], deadline.Token);
+                foreach (var (start, end) in windows) {
+                    var samples = all[(start * 16000)..(end * 16000)].Select(x => x / 32768f).ToArray();
+                    await whisper.RecognizeLive(new LiveWindowRequest(7, ++sequence, 0, samples.Length, samples), "en", deadline.Token);
+                }
+                string afterLive = await whisper.Transcribe(path, "en", [], deadline.Token);
+                Check($"live windows leave the finished text unchanged ({name})", afterLive == alone && alone.Length > 0 && whisper.WorkerId == worker);
+            }
             string first = await whisper.Transcribe(audio, "en", [], deadline.Token);
             string words = string.Join(" ", first.ToLowerInvariant().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
             Check("native CPU transcription retains public JFK words", words.Contains("ask not what your country can do for you") && words.Contains("ask what you can do for your country"));
@@ -199,13 +219,12 @@ internal static partial class Program
             catch (IOException) { locked = true; }
             Check("model stays protected while resident", locked);
             // Live text: one bounded window through the same resident worker, versioned framing on this architecture.
-            var bytes = File.ReadAllBytes(audio); int data = bytes.AsSpan().IndexOf("data"u8) + 8;
             var pcm = MemoryMarshal.Cast<byte, short>(bytes.AsSpan(data, Math.Min(5 * 32000, bytes.Length - data)));
             var live = new LiveSession(42); live.Append(pcm);
             var window = live.Next();
             var segments = window == null ? null : await whisper.RecognizeLive(window, "en", deadline.Token);
             var update = segments == null ? null : live.Complete(window!, segments);
-            Check("live window is recognized by the resident worker on this architecture", update != null && update.Text.Contains("Americans", StringComparison.OrdinalIgnoreCase) && whisper.WorkerId == worker && whisper.LiveRequests == 1);
+            Check("live window is recognized by the resident worker on this architecture", update != null && update.Text.Contains("Americans", StringComparison.OrdinalIgnoreCase) && whisper.WorkerId == worker && whisper.LiveRequests == 6);
             Console.WriteLine($"{passed} architecture speech checks passed ({RuntimeInformation.ProcessArchitecture}).");
             return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }
