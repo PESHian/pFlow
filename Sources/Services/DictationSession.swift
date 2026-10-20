@@ -72,9 +72,11 @@ final class DictationSession: DictationSessioning {
         case unsupported
     }
 
-    /// Resolved once — querying supported locales is slow enough to be felt on
-    /// the first keypress.
-    private static var cachedResolution: Resolution?
+    /// Resolved once per language — querying supported locales is slow enough
+    /// to be felt on the first keypress. Keyed by the language asked for, so a
+    /// resolution is never used for another language, whatever order a
+    /// launch prewarm and a language change finish in.
+    private static var resolutions: [String: Resolution] = [:]
 
     init(locale: Locale = .current, capture: AudioCapturing = AudioCaptureService(),
          whisperModel: URL = WhisperModelStore.modelURL,
@@ -85,11 +87,10 @@ final class DictationSession: DictationSessioning {
         self.appleEngine = appleEngine
     }
 
-    /// Switch dictation language while idle. Clears the resolved cache so the
-    /// next recording re-resolves for the new locale.
+    /// Switch dictation language while idle. The next recording uses the new
+    /// language's own resolution.
     func setLocale(_ newLocale: Locale) {
         locale = newLocale
-        Self.cachedResolution = nil
     }
 
     static func resolve(for locale: Locale) async -> Resolution {
@@ -101,7 +102,7 @@ final class DictationSession: DictationSessioning {
 
     static func prewarm(locale: Locale = .current) async {
         let resolution = await resolve(for: locale)
-        cachedResolution = resolution
+        resolutions[locale.identifier] = resolution
         guard case .supported(let resolved) = resolution else { return }
         await TranscriptionService.prepareModel(for: resolved)
     }
@@ -130,11 +131,12 @@ final class DictationSession: DictationSessioning {
         let resolution: Resolution
         if choice == .whisper {
             resolution = .supported(locale)
-        } else if let cached = Self.cachedResolution {
+        } else if let cached = Self.resolutions[locale.identifier] {
             resolution = cached
         } else {
-            resolution = await Self.resolve(for: locale)
-            Self.cachedResolution = resolution
+            let asked = locale
+            resolution = await Self.resolve(for: asked)
+            Self.resolutions[asked.identifier] = resolution
         }
 
         guard case .supported(let engineLocale) = resolution else {
