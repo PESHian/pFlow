@@ -11,8 +11,8 @@ import Testing
 //
 // Runs only when PFLOW_SPEED_AUDIO names a folder of recordings, each with a
 // .txt reference beside it. PFLOW_SPEED_RUN picks what to measure:
-//   apple, apple-fast        Apple Speech with Live text Preview (fast = .fastResults)
-//   apple-off                Apple Speech with Live text Off
+//   apple, apple-off         Apple Speech with Live text Preview / Off
+//   apple-final-only         Preview without the fast live recognizer (the code before it)
 //   whisper-on, whisper-off  Whisper (needs PFLOW_WHISPER_MODEL)
 //   locale                   locale resolution, cold/warm and after a language change
 //   cleanup                  on-device cleanup of each reference text
@@ -41,6 +41,9 @@ final class FileCapture: AudioCapturing, @unchecked Sendable {
     private var paused = false
     private(set) var startedAt: Double?
     private(set) var endedAt: Double?
+    /// From this many seconds in, buffers arrive as 48 kHz stereo, as when the
+    /// person switches to another microphone partway through a take.
+    var switchFormatAt: Double?
 
     init(url: URL) { self.url = url }
 
@@ -58,6 +61,8 @@ final class FileCapture: AudioCapturing, @unchecked Sendable {
         let chunk = AVAudioFrameCount(rate * 2048 / 44_100)
         var played = 0.0
         var clock = now()
+        let switched = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 2)!
+        let converter = AVAudioConverter(from: file.processingFormat, to: switched)
         while file.framePosition < file.length {
             let (live, hold) = lock.withLock { (running, paused) }
             guard live else { return }
@@ -67,8 +72,21 @@ final class FileCapture: AudioCapturing, @unchecked Sendable {
             played += Double(buffer.frameLength) / rate
             let ahead = played - (now() - clock)
             if ahead > 0 { Thread.sleep(forTimeInterval: ahead) }
-            onBuffer?(buffer)
-            onLevel?(AudioLevel.normalized(from: buffer))
+            var delivered = buffer
+            if let at = switchFormatAt, played > at, let converter,
+               let out = AVAudioPCMBuffer(pcmFormat: switched,
+                                          frameCapacity: AVAudioFrameCount(Double(buffer.frameLength) * 48_000 / rate) + 64) {
+                var given = false
+                _ = converter.convert(to: out, error: nil) { _, status in
+                    if given { status.pointee = .noDataNow; return nil }
+                    given = true
+                    status.pointee = .haveData
+                    return buffer
+                }
+                delivered = out
+            }
+            onBuffer?(delivered)
+            onLevel?(AudioLevel.normalized(from: delivered))
         }
         lock.withLock { endedAt = now() }
     }
@@ -246,7 +264,7 @@ struct SpeedHarnessTests {
         let run = speedRun
         var report: [String: Any] = ["run": run, "takesPerFile": speedTakes]
         switch run {
-        case "apple", "apple-fast", "apple-off":
+        case "apple", "apple-final-only", "apple-off":
             let locale = try await english()
             let started = now()
             await DictationSession.prewarm(locale: locale)
@@ -255,9 +273,9 @@ struct SpeedHarnessTests {
             for url in try recordings() {
                 for index in 1...speedTakes {
                     let capture = FileCapture(url: url)
-                    let fast = run == "apple-fast"
+                    let finalOnly = run == "apple-final-only"
                     let session = DictationSession(locale: locale, capture: capture,
-                                                   appleEngine: { TranscriptionService(fastResults: fast) })
+                                                   appleEngine: { TranscriptionService(fastPreview: $0 && !finalOnly) })
                     session.selectedEngine = { .apple }
                     takes.append(try await take(url, session: session, capture: capture,
                                                 live: run == "apple-off" ? .off : .preview, index: index))
@@ -265,6 +283,21 @@ struct SpeedHarnessTests {
             }
             report["takes"] = takes
             #expect(takes.allSatisfy { ($0["final"] as? String)?.isEmpty == false })
+        case "apple-device":
+            // Halfway through each recording the audio switches to 48 kHz stereo.
+            let locale = try await english()
+            var takes: [[String: Any]] = []
+            for url in try recordings() {
+                let capture = FileCapture(url: url)
+                capture.switchFormatAt = 3
+                let session = DictationSession(locale: locale, capture: capture)
+                session.selectedEngine = { .apple }
+                takes.append(try await take(url, session: session, capture: capture, live: .preview, index: 1))
+            }
+            report["takes"] = takes
+            #expect(takes.allSatisfy { ($0["lastWordKept"] as? Bool) == true })
+        case "apple-cancel":
+            report["cancel"] = try await measureCancel()
         case "whisper-on", "whisper-off":
             let model = URL(fileURLWithPath: try #require(speedModel))
             var takes: [[String: Any]] = []
@@ -301,6 +334,40 @@ struct SpeedHarnessTests {
             Issue.record("unknown PFLOW_SPEED_RUN \(run)")
         }
         try write(report)
+    }
+
+    /// Escape partway through a take with live words: nothing is typed or kept,
+    /// no live words arrive afterwards, and the next take works.
+    private func measureCancel() async throws -> [[String: Any]] {
+        let locale = try await english()
+        var rows: [[String: Any]] = []
+        for url in try recordings() {
+            let capture = FileCapture(url: url)
+            let session = DictationSession(locale: locale, capture: capture)
+            session.selectedEngine = { .apple }
+            let hud = TimedHUD()
+            let injector = TimedInjector()
+            let history = FakeHistory()
+            let coordinator = RecordingCoordinator(
+                session: session, injector: injector, history: history, hud: hud, sounds: FakeSounds(),
+                cleaner: FakeCleaner(), cleanupEnabled: { false }, vocabulary: { [] }, deviceName: { nil },
+                liveTextMode: { .preview })
+            coordinator.begin()
+            while hud.partials.filter({ !$0.text.isEmpty }).isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+            try await Task.sleep(for: .milliseconds(500))
+            let canceled = now()
+            await coordinator.cancel()
+            let cancelMs = ms(canceled, now())
+            let after = hud.partials.count
+            try await Task.sleep(for: .seconds(2))
+            let next = try await take(url, session: session, capture: capture, live: .preview, index: 2)
+            rows.append(["file": url.lastPathComponent, "cancelMs": cancelMs,
+                         "partialsAfterCancel": hud.partials.count - after, "delivered": injector.delivered.count,
+                         "history": history.saved.count, "nextTakeWordErrorRate": next["wordErrorRate"] ?? -1])
+            #expect(hud.partials.count == after && injector.delivered.isEmpty && history.saved.isEmpty)
+            #expect((next["lastWordKept"] as? Bool) == true)
+        }
+        return rows
     }
 
     /// Locale resolution as DictationSession does it, plus the start of a take

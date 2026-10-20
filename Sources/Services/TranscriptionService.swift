@@ -3,11 +3,13 @@ import AVFoundation
 
 final class TranscriptionService: StreamingTranscriber {
     var onTranscript: ((String) -> Void)?
+    var onLiveStopped: (() -> Void)?
 
     private var transcriber: SpeechTranscriber?
     private var analyzer: SpeechAnalyzer?
     private var inputBuilder: AsyncStream<AnalyzerInput>.Continuation?
     private var recognizerTask: Task<Void, Never>?
+    private var previewTask: Task<Void, Never>?
     private let converter = BufferConverter()
     private var analyzerFormat: AVAudioFormat?
     // Written by the results task, read by finish(); the lock keeps them consistent.
@@ -15,12 +17,26 @@ final class TranscriptionService: StreamingTranscriber {
     private var finalized = ""
     private var volatile = ""
     private var recognitionFailed = false
-    private let reportingOptions: Set<SpeechTranscriber.ReportingOption>
+    private var previewFinalized = ""
+    private let fastPreview: Bool
 
-    /// `fastResults` asks Apple Speech for quicker, less settled live words.
-    /// Timing runs compare it with the default; see the speed table in the ledger.
-    init(fastResults: Bool = false) {
-        reportingOptions = fastResults ? [.volatileResults, .fastResults] : [.volatileResults]
+    /// With `fastPreview` (Live text on) a second, quicker recognizer on the
+    /// same audio supplies the live words: first words in about 1.1 s instead
+    /// of about 4 s. Its finished words are less accurate, so the finished text
+    /// still comes only from the default recognizer, exactly as with Live text
+    /// Off. Measured on fixed fictional recordings; see the speed table in the
+    /// ledger.
+    init(fastPreview: Bool = false) {
+        self.fastPreview = fastPreview
+    }
+
+    private static func makeTranscriber(locale: Locale, fast: Bool) -> SpeechTranscriber {
+        SpeechTranscriber(
+            locale: locale,
+            transcriptionOptions: [],
+            reportingOptions: fast ? [.volatileResults, .fastResults] : [.volatileResults],
+            attributeOptions: [.audioTimeRange]
+        )
     }
 
     /// The supported locale to transcribe `locale` with, or nil if this engine
@@ -42,18 +58,16 @@ final class TranscriptionService: StreamingTranscriber {
         textLock.withLock {
             finalized = ""
             volatile = ""
+            previewFinalized = ""
             recognitionFailed = false
         }
 
-        let transcriber = SpeechTranscriber(
-            locale: locale,
-            transcriptionOptions: [],
-            reportingOptions: reportingOptions,
-            attributeOptions: [.audioTimeRange]
-        )
+        let transcriber = Self.makeTranscriber(locale: locale, fast: false)
         self.transcriber = transcriber
+        let preview = fastPreview ? Self.makeTranscriber(locale: locale, fast: true) : nil
+        let modules: [any SpeechModule] = [transcriber] + (preview.map { [$0] } ?? [])
 
-        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        let analyzer = SpeechAnalyzer(modules: modules)
         self.analyzer = analyzer
 
         // Bias recognition toward the user's dictionary so names and jargon come
@@ -66,7 +80,7 @@ final class TranscriptionService: StreamingTranscriber {
 
         try await Self.ensureModel(for: transcriber, locale: locale)
 
-        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: modules) else {
             throw TranscriptionError.invalidFormat
         }
         analyzerFormat = format
@@ -90,12 +104,34 @@ final class TranscriptionService: StreamingTranscriber {
                         }
                         return self.finalized + self.volatile
                     }
-                    self.onTranscript?(snapshot)
+                    if !self.fastPreview { self.onTranscript?(snapshot) }
                 }
             } catch {
                 if !Task.isCancelled {
                     NSLog("pFlow: live recognition stopped: \(error.localizedDescription)")
                     self.textLock.withLock { self.recognitionFailed = true }
+                }
+            }
+        }
+        if let preview {
+            // Live words only. If this recognizer fails, the take still
+            // finishes from the default one; the preview just stops changing.
+            previewTask = Task { [weak self] in
+                do {
+                    for try await result in preview.results {
+                        guard let self else { return }
+                        let text = String(result.text.characters)
+                        let snapshot = self.textLock.withLock { () -> String in
+                            if result.isFinal {
+                                self.previewFinalized += text
+                                return self.previewFinalized
+                            }
+                            return self.previewFinalized + text
+                        }
+                        self.onTranscript?(snapshot)
+                    }
+                } catch {
+                    if !Task.isCancelled { self?.onLiveStopped?() }
                 }
             }
         }
@@ -118,6 +154,8 @@ final class TranscriptionService: StreamingTranscriber {
         try? await analyzer?.finalizeAndFinishThroughEndOfInput()
         recognizerTask?.cancel()
         recognizerTask = nil
+        previewTask?.cancel()
+        previewTask = nil
 
         let (text, kept, failed) = textLock.withLock { (finalized, finalized + volatile, recognitionFailed) }
         transcriber = nil
@@ -132,13 +170,7 @@ final class TranscriptionService: StreamingTranscriber {
 
     /// Reserve the model ahead of time at launch so the first dictation isn't held up by it.
     static func prepareModel(for locale: Locale) async {
-        let transcriber = SpeechTranscriber(
-            locale: locale,
-            transcriptionOptions: [],
-            reportingOptions: [.volatileResults],
-            attributeOptions: [.audioTimeRange]
-        )
-        try? await ensureModel(for: transcriber, locale: locale)
+        try? await ensureModel(for: makeTranscriber(locale: locale, fast: false), locale: locale)
     }
 
     private static func ensureModel(for transcriber: SpeechTranscriber, locale: Locale) async throws {

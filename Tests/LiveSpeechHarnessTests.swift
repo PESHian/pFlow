@@ -55,7 +55,7 @@ private final class FileFedSession: DictationSessioning {
     func start(take: String, live: Bool) async throws {
         let feed = LiveTranscriptFeed(session: take) { [weak self] in self?.onTranscript?($0) }
         self.feed = feed
-        let engine = TranscriptionService()
+        let engine = TranscriptionService(fastPreview: live)
         engine.onTranscript = { feed.post($0) }
         try await engine.begin(locale: locale, contextualStrings: [])
         self.engine = engine
