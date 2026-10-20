@@ -211,7 +211,8 @@ struct SpeedHarnessTests {
         let selfCPU = cpuSeconds(RUSAGE_SELF), childCPU = cpuSeconds(RUSAGE_CHILDREN)
         let key = now()
         keys.press(at: key).forEach(coordinator.handle)
-        while !capture.finished { try await Task.sleep(for: .milliseconds(5)) }
+        // The same capture can serve several takes: wait for this take's playback.
+        while (capture.startedAt ?? 0) < key || !capture.finished { try await Task.sleep(for: .milliseconds(5)) }
         let audioEnd = capture.endedAt
         let release = now()
         keys.release(at: release).forEach(coordinator.handle)
