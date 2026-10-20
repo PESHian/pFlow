@@ -105,9 +105,13 @@ int main() {
         auto model = text(32768);
         auto start = Clock::now();
         // Default context options keep Metal on, as the whole-take pass does.
+        // Live windows get their own state; the finished-text pass frees it
+        // first, so the helper never holds two states at once.
         std::unique_ptr<whisper_context, decltype(&whisper_free)> ctx(
-            whisper_init_from_file_with_params(model.c_str(), whisper_context_default_params()), whisper_free);
-        if (!ctx) { put<uint32_t>(3); put(std::string("Speech model could not load.")); fflush(stdout); return 3; }
+            whisper_init_from_file_with_params_no_state(model.c_str(), whisper_context_default_params()), whisper_free);
+        using State = std::unique_ptr<whisper_state, decltype(&whisper_free_state)>;
+        State live(ctx ? whisper_init_state(ctx.get()) : nullptr, whisper_free_state);
+        if (!ctx || !live) { put<uint32_t>(3); put(std::string("Speech model could not load.")); fflush(stdout); return 3; }
         put<uint32_t>(1); put(elapsed(start)); fflush(stdout);
         std::vector<float> samples;
         for (;;) {
@@ -122,6 +126,7 @@ int main() {
                     put<uint32_t>(3); put(id); put(std::string("Unsupported language.")); fflush(stdout); continue;
                 }
                 start = Clock::now();
+                live.reset();
                 std::string result;
                 if (!finish_take(ctx.get(), path, language, final_threads, result)) {
                     put<uint32_t>(3); put(id); put(std::string("Whisper could not read this recording.")); fflush(stdout); continue;
@@ -148,16 +153,17 @@ int main() {
             // Short windows use a shorter encoder context, as on Windows.
             params.audio_ctx = count <= 8 * 16000 ? 512 : count <= 18 * 16000 ? 1024 : 0;
             start = Clock::now();
-            if (whisper_full(ctx.get(), params, samples.data(), static_cast<int>(count)) != 0) {
+            if (!live) live.reset(whisper_init_state(ctx.get()));
+            if (!live || whisper_full_with_state(ctx.get(), live.get(), params, samples.data(), static_cast<int>(count)) != 0) {
                 put<uint32_t>(3); put(id); put(std::string("Whisper could not read this audio.")); fflush(stdout); continue;
             }
-            auto segments = whisper_full_n_segments(ctx.get());
+            auto segments = whisper_full_n_segments_from_state(live.get());
             put<uint32_t>(2); put(id); put(static_cast<uint32_t>(std::clamp(segments, 0, 512)));
             for (int i = 0; i < std::min(segments, 512); i++) {
-                put(static_cast<int32_t>(whisper_full_get_segment_t0(ctx.get(), i) * 10));
-                put(static_cast<int32_t>(whisper_full_get_segment_t1(ctx.get(), i) * 10));
-                put(whisper_full_get_segment_no_speech_prob(ctx.get(), i));
-                put(std::string(whisper_full_get_segment_text(ctx.get(), i)));
+                put(static_cast<int32_t>(whisper_full_get_segment_t0_from_state(live.get(), i) * 10));
+                put(static_cast<int32_t>(whisper_full_get_segment_t1_from_state(live.get(), i) * 10));
+                put(whisper_full_get_segment_no_speech_prob_from_state(live.get(), i));
+                put(std::string(whisper_full_get_segment_text_from_state(live.get(), i)));
             }
             put(elapsed(start)); fflush(stdout);
         }
