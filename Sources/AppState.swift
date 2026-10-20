@@ -24,6 +24,11 @@ final class AppState {
         }
     }
 
+    /// Read at the start of each take; a change applies to the next one.
+    var liveTextMode: LiveTextMode {
+        didSet { liveTextMode.save() }
+    }
+
     var currentInputName: String?
     var soundsEnabled: Bool {
         didSet { UserDefaults.standard.set(soundsEnabled, forKey: "soundsEnabled") }
@@ -106,6 +111,7 @@ final class AppState {
 
         soundsEnabled = (UserDefaults.standard.object(forKey: "soundsEnabled") as? Bool) ?? true
         transcriptionEngine = TranscriptionEngine.saved()
+        liveTextMode = LiveTextMode.saved()
         showInDock = (UserDefaults.standard.object(forKey: "showInDock") as? Bool) ?? false
         showInMenuBar = (UserDefaults.standard.object(forKey: "showInMenuBar") as? Bool) ?? true
         cleanupEnabled = (UserDefaults.standard.object(forKey: "cleanupEnabled") as? Bool) ?? true
@@ -145,7 +151,8 @@ final class AppState {
             formatter: templateFormatter,
             activeTemplate: { [weak self] in self?.templates.active },
             availableTemplates: { [weak self] in self?.templates.templates ?? [] },
-            selectTemplate: { [weak self] in self?.templates.activeID = $0.id }
+            selectTemplate: { [weak self] in self?.templates.activeID = $0.id },
+            liveTextMode: { [weak self] in self?.liveTextMode ?? .off }
         )
 
         dictation.contextualStrings = { [weak self] in self?.vocabulary.recognitionTerms ?? [] }
@@ -171,15 +178,10 @@ final class AppState {
         modifierHotkeys.recordingIsBusy = { [weak self] in self?.coordinator.state != .idle }
         modifierHotkeys.onRightCommand = { [weak self] effect in
             guard let self else { return }
-            switch effect {
-            case .start:
+            if effect == .start {
                 NSLog("Yap: recording requested; microphone=\(self.permissions.microphone), speech=\(self.permissions.speech), accessibility=\(self.permissions.accessibility), automation=\(self.permissions.automation)")
-                self.coordinator.begin()
-            case .pause: self.coordinator.pauseCapture(true)
-            case .resume: self.coordinator.pauseCapture(false)
-            case .finish: Task { await self.coordinator.finish() }
-            case .cancel: Task { await self.coordinator.cancel() }
             }
+            self.coordinator.handle(effect)
         }
         modifierHotkeys.trigger = .rightCommand
         modifierHotkeys.start()

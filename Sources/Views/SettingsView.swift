@@ -266,6 +266,8 @@ struct SettingsView: View {
                     .disabled(app.coordinator.state != .idle)
                     Text("Both run on this Mac. Apple Intelligence handles cleanup with either engine.")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
+                    Divider()
+                    LiveTextPicker(mode: $app.liveTextMode, engine: app.transcriptionEngine)
                     if app.transcriptionEngine == .whisper {
                         if model.isReady {
                             Label("Whisper is ready · works offline", systemImage: "checkmark.circle")
@@ -377,5 +379,38 @@ private struct SettingsToggleRow: View {
         }
         .padding(.horizontal, Theme.s3)
         .padding(.vertical, Theme.s2 + 2)
+    }
+}
+
+/// The Live text choice and a plain note on what it does.
+struct LiveTextPicker: View {
+    @Binding var mode: LiveTextMode
+    let engine: TranscriptionEngine
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.s2) {
+            Picker("Live text", selection: $mode) {
+                ForEach(LiveTextMode.allCases) { mode in Text(mode.title).tag(mode) }
+            }
+            Text(note)
+                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var note: String {
+        var note: String
+        switch mode {
+        case .off:
+            return "Words appear in your app after you stop talking."
+        case .preview:
+            note = "Shows your words in a small pFlow window while you talk. Your app gets the finished text once you stop."
+        case .typeInApp:
+            note = "Typing straight into your app is not ready yet. For now pFlow shows the preview and types the finished text once you stop."
+        }
+        if engine == .whisper {
+            note += " With Whisper, words show only after you stop, for now."
+        }
+        return note
     }
 }

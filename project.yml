@@ -62,6 +62,9 @@ targets:
       - path: Tests
       - path: updates/test-vectors.json
         buildPhase: resources
+      - path: fixtures/live-text/transcript-updates
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: Yap
     settings:

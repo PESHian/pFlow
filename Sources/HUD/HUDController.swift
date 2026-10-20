@@ -2,7 +2,7 @@ import AppKit
 
 @MainActor
 final class HUDController: HUDControlling {
-    private let model = HUDModel()
+    let model = HUDModel()
     private var panel: HUDPanel?
     private var hideTask: Task<Void, Never>?
 
@@ -23,12 +23,14 @@ final class HUDController: HUDControlling {
         self.panel = panel
     }
 
-    func show(device: String?) {
+    func show(device: String?, livePreview: Bool) {
         hideTask?.cancel()
 
         // Reset state BEFORE the panel is on screen, so no stale frame from the previous session is ever visible.
         model.device = device
         model.partial = ""
+        model.livePreview = livePreview
+        model.colorScheme = AppearanceSettings.shared.mode.colorScheme
         model.level = 0
         model.levels = Array(repeating: 0, count: HUDModel.waveformSampleCount)
         model.phase = .listening
@@ -38,7 +40,7 @@ final class HUDController: HUDControlling {
         guard let panel else { return }
 
         panel.alphaValue = 0
-        panel.reposition()
+        panel.reposition(avoidingCaret: livePreview)
         panel.orderFrontRegardless()
 
         // Short fade covers any residual first-frame layout settling.
@@ -64,19 +66,29 @@ final class HUDController: HUDControlling {
     }
 
     func setPartial(_ text: String) {
-        model.partial = text
+        guard model.livePreview else { return }
+        let shown = LivePreviewText.tail(of: text)
+        if model.partial != shown { model.partial = shown }
     }
 
     func hide(after seconds: Double) {
         hideTask?.cancel()
         guard seconds > 0 else {
-            panel?.orderOut(nil)
+            close()
             return
         }
         hideTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard !Task.isCancelled else { return }
-            self?.panel?.orderOut(nil)
+            self?.close()
         }
     }
+
+    // Dictated words do not stay on screen or in memory after the take.
+    private func close() {
+        panel?.orderOut(nil)
+        model.partial = ""
+    }
+
+    var panelForTesting: HUDPanel? { panel }
 }

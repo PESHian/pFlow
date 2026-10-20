@@ -3,9 +3,12 @@ import AVFoundation
 @MainActor
 protocol DictationSessioning: AnyObject {
     var onLevel: ((Float) -> Void)? { get set }
-    var onPartial: ((String) -> Void)? { get set }
-    func start() async throws
-    func stop() async throws -> String
+    /// Transcript revisions for the take started with `start(take:)`, on the
+    /// main thread. Bursts are coalesced, so not every revision arrives.
+    var onTranscript: ((TranscriptUpdate) -> Void)? { get set }
+    func start(take: String) async throws
+    /// Ends the take and returns its final update, numbered after every partial.
+    func stop() async throws -> TranscriptUpdate
     func cancel() async
     func setCapturePaused(_ paused: Bool) throws
 }
@@ -17,11 +20,12 @@ extension DictationSessioning {
 @MainActor
 final class DictationSession: DictationSessioning {
     var onLevel: ((Float) -> Void)?
-    var onPartial: ((String) -> Void)?
+    var onTranscript: ((TranscriptUpdate) -> Void)?
 
     private let capture = AudioCaptureService()
     private let relay = AudioBufferRelay()
     private var transcriber: StreamingTranscriber?
+    private var feed: LiveTranscriptFeed?
     private var locale: Locale
     private var capturePaused = false
 
@@ -72,7 +76,10 @@ final class DictationSession: DictationSessioning {
         await TranscriptionService.prepareModel(for: resolved)
     }
 
-    func start() async throws {
+    func start(take: String) async throws {
+        feed?.close()
+        let feed = LiveTranscriptFeed(session: take) { [weak self] update in self?.onTranscript?(update) }
+        self.feed = feed
         let choice = selectedEngine()
         if choice == .whisper, !WhisperModelStore.hasModel(at: WhisperModelStore.modelURL) {
             throw WhisperError.modelNeeded
@@ -109,9 +116,7 @@ final class DictationSession: DictationSessioning {
         }
 
         let engine: StreamingTranscriber = choice == .apple ? TranscriptionService() : WhisperTranscriber()
-        engine.onPartial = { [weak self] text in
-            Task { @MainActor in self?.onPartial?(text) }
-        }
+        engine.onTranscript = { text in feed.post(text) }
         transcriber = engine
 
         do {
@@ -126,17 +131,24 @@ final class DictationSession: DictationSessioning {
         relay.attach { buffer in engine.feed(buffer) }
     }
 
-    func stop() async throws -> String {
+    func stop() async throws -> TranscriptUpdate {
         capture.stop()
         relay.reset()
-        defer { transcriber = nil }
+        let feed = self.feed ?? LiveTranscriptFeed(session: "", deliver: { _ in })
+        defer {
+            transcriber = nil
+            feed.close()
+            self.feed = nil
+        }
         let text = try await transcriber?.finish() ?? ""
-        return text
+        return feed.finish(text)
     }
 
     func cancel() async {
         capture.stop()
         relay.reset()
+        feed?.close()
+        feed = nil
         await transcriber?.cancel()
         transcriber = nil
     }

@@ -1,0 +1,30 @@
+{
+  "description": "Nothing is shown before a take begins.",
+  "events": [
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 0,
+      "text": "Early words",
+      "isFinal": false
+    },
+    {
+      "op": "begin",
+      "session": "take-a"
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 1,
+      "text": "Quiet river",
+      "isFinal": false
+    }
+  ],
+  "expected": {
+    "shown": [
+      "Quiet river"
+    ],
+    "text": "Quiet river",
+    "phase": "open"
+  }
+}

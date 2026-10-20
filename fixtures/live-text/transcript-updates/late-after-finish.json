@@ -1,0 +1,45 @@
+{
+  "description": "Updates that arrive after the final one are ignored, even with a higher number.",
+  "events": [
+    {
+      "op": "begin",
+      "session": "take-a"
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 0,
+      "text": "Seven blue",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 1,
+      "text": "Seven blue kites.",
+      "isFinal": true
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 2,
+      "text": "Seven blue kites. Extra",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 0,
+      "text": "Seven blue",
+      "isFinal": false
+    }
+  ],
+  "expected": {
+    "shown": [
+      "Seven blue",
+      "Seven blue kites."
+    ],
+    "text": "Seven blue kites.",
+    "phase": "final"
+  }
+}

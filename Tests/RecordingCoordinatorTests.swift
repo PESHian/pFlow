@@ -4,10 +4,14 @@ import Foundation
 
 @MainActor
 final class FakeSession: DictationSessioning {
-    enum Failure: Error { case start }
+    enum Failure: Error { case start, stop }
     var onLevel: ((Float) -> Void)?
-    var onPartial: ((String) -> Void)?
+    var onTranscript: ((TranscriptUpdate) -> Void)?
     var textToReturn = "hello world"
+    var stopError: Error?
+    private(set) var take: String?
+    private var nextSequence = 0
+    var onStop: (() -> Void)?
     var startCalled = 0
     var stopCalled = 0
     var paused = false
@@ -16,12 +20,27 @@ final class FakeSession: DictationSessioning {
     var startError: Error?
     func setCapturePaused(_ paused: Bool) throws { self.paused = paused }
 
-    func start() async throws {
+    func start(take: String) async throws {
+        self.take = take
+        nextSequence = 0
         startCalled += 1
         if suspendStart { await withCheckedContinuation { startGate = $0 } }
         if let startError { throw startError }
     }
-    func stop() async throws -> String { stopCalled += 1; return textToReturn }
+    func stop() async throws -> TranscriptUpdate {
+        stopCalled += 1
+        onStop?()
+        if let stopError { throw stopError }
+        return update(textToReturn, isFinal: true)
+    }
+
+    /// A live revision for the current take, as the engine would send it.
+    func emit(_ text: String) { onTranscript?(update(text, isFinal: false)) }
+
+    func update(_ text: String, isFinal: Bool) -> TranscriptUpdate {
+        defer { nextSequence += 1 }
+        return TranscriptUpdate(session: take ?? "", sequence: nextSequence, text: text, isFinal: isFinal)
+    }
 }
 
 @MainActor
@@ -62,15 +81,17 @@ final class FakeHistory: HistoryStoring {
 final class FakeHUD: HUDControlling {
     var phases: [HUDPhase] = []
     var shown = 0
+    var previews: [Bool] = []
+    var partials: [String] = []
     var hidden = 0
     var hideDelays: [Double] = []
     var onConfirm: (() -> Void)?
     var onCancel: (() -> Void)?
 
-    func show(device: String?) { shown += 1 }
+    func show(device: String?, livePreview: Bool) { shown += 1; previews.append(livePreview) }
     func setPhase(_ phase: HUDPhase) { phases.append(phase) }
     func setLevel(_ level: Float) {}
-    func setPartial(_ text: String) {}
+    func setPartial(_ text: String) { partials.append(text) }
     func hide(after seconds: Double) { hidden += 1; hideDelays.append(seconds) }
     func setActions(onConfirm: @escaping () -> Void, onCancel: @escaping () -> Void) {
         self.onConfirm = onConfirm
@@ -109,6 +130,7 @@ func makeCoordinator(
     activeTemplate: @escaping () -> DictationTemplate? = { nil },
     availableTemplates: @escaping () -> [DictationTemplate] = { [] },
     selectTemplate: @escaping (DictationTemplate) -> Void = { _ in },
+    liveTextMode: @escaping () -> LiveTextMode = { .off },
     clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
 ) -> RecordingCoordinator {
     RecordingCoordinator(
@@ -126,6 +148,7 @@ func makeCoordinator(
         activeTemplate: activeTemplate,
         availableTemplates: availableTemplates,
         selectTemplate: selectTemplate,
+        liveTextMode: liveTextMode,
         clock: clock
     )
 }

@@ -4,7 +4,7 @@ import Foundation
 /// Only the optional Whisper path writes audio. Files stay in a private,
 /// short-lived directory and the existing capture/level pipeline is shared.
 final class WhisperTranscriber: StreamingTranscriber {
-    var onPartial: ((String) -> Void)?
+    var onTranscript: ((String) -> Void)?
     private let queue = DispatchQueue(label: "com.pesh.whisper.audio", qos: .userInitiated)
     private var writer: AVAudioFile?
     private var converter = BufferConverter()

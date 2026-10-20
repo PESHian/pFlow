@@ -30,6 +30,10 @@ final class RecordingCoordinator {
     private var recordingTemplates: [DictationTemplate] = []
     private let deviceName: () -> String?
     private let clock: () -> TimeInterval
+    private let liveTextMode: () -> LiveTextMode
+    // Read once per take, so changing the setting mid-take waits for the next one.
+    private(set) var takeLiveTextMode: LiveTextMode = .off
+    private var transcript = LiveTranscriptReconciler()
 
     private var startedAt: TimeInterval?
     private var recordingDevice: String?
@@ -52,15 +56,19 @@ final class RecordingCoordinator {
         state = .recording
         startedAt = clock()
         recordingDevice = deviceName()
+        takeLiveTextMode = liveTextMode()
+        let take = UUID().uuidString
+        transcript.begin(session: take)
         pauseCapture(false)
         sounds.playStart()
-        hud.show(device: recordingDevice)
+        hud.show(device: recordingDevice, livePreview: takeLiveTextMode.showsPreview)
         hud.setPhase(.listening)
         startTask = Task { [weak self] in
             guard let self else { return }
-            do { try await self.session.start() }
+            do { try await self.session.start(take: take) }
             catch {
                 NSLog("Yap: failed to start recording: \(error)")
+                self.transcript.cancel()
                 _ = try? await self.session.stop()
                 self.hud.setPhase(.failed)
                 self.hud.hide(after: 2)
@@ -72,6 +80,22 @@ final class RecordingCoordinator {
     func finish() async {
         guard state == .recording else { return }
         await stopRecording()
+    }
+
+    /// The one place Right Command effects become recording actions.
+    func handle(_ effect: RightCommandActivation.Effect) {
+        switch effect {
+        case .start: begin()
+        case .pause: pauseCapture(true)
+        case .resume: pauseCapture(false)
+        case .finish: Task { await finish() }
+        case .cancel: Task { await cancel() }
+        }
+    }
+
+    private func receive(_ update: TranscriptUpdate) {
+        guard transcript.apply(update), takeLiveTextMode.showsPreview else { return }
+        hud.setPartial(transcript.text)
     }
 
     private var cancelArmed = false
@@ -93,6 +117,7 @@ final class RecordingCoordinator {
         activeTemplate: @escaping () -> DictationTemplate? = { nil },
         availableTemplates: @escaping () -> [DictationTemplate] = { [] },
         selectTemplate: @escaping (DictationTemplate) -> Void = { _ in },
+        liveTextMode: @escaping () -> LiveTextMode = { .off },
         clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         self.session = session
@@ -110,9 +135,10 @@ final class RecordingCoordinator {
         self.selectTemplate = selectTemplate
         self.deviceName = deviceName
         self.clock = clock
+        self.liveTextMode = liveTextMode
 
         session.onLevel = { [weak self] level in self?.hud.setLevel(level) }
-        session.onPartial = { [weak self] text in self?.hud.setPartial(text) }
+        session.onTranscript = { [weak self] update in self?.receive(update) }
 
         hud.setActions(
             onConfirm: { [weak self] in Task { await self?.toggle() } },
@@ -123,6 +149,7 @@ final class RecordingCoordinator {
     func cancel() async {
         guard state == .recording else { return }
         disarmCancel()
+        transcript.cancel()
         state = .transcribing
         sounds.playStop()
         hud.hide(after: 0)
@@ -186,7 +213,10 @@ final class RecordingCoordinator {
         startTask = nil
 
         do {
-            let raw = try await session.stop()
+            // The final update carries the last words. Partials still on their
+            // way to the main thread are older, so they are dropped from here on.
+            transcript.apply(try await session.stop())
+            let raw = transcript.text
             let spokenWordCount = raw.split(whereSeparator: \.isWhitespace).count
             var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -268,8 +298,27 @@ final class RecordingCoordinator {
             }
         } catch {
             NSLog("Yap: failed to finish recording: \(error.localizedDescription)")
-            hud.hide(after: 0)
+            keepRecoverableText(after: error, duration: duration)
         }
         state = .idle
+    }
+
+    /// Recognition failed after words were already recognized. Keep those
+    /// words in History instead of dropping them, and say so. Nothing is
+    /// typed: the text never finished, so it is not treated as a success.
+    private func keepRecoverableText(after error: Error, duration: Double?) {
+        var kept = transcript.text
+        if case TranscriptionError.interrupted(let recovered) = error, !recovered.isEmpty { kept = recovered }
+        transcript.cancel()
+        kept = kept.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !kept.isEmpty else {
+            hud.hide(after: 0)
+            return
+        }
+        history.save(text: kept, duration: duration, device: recordingDevice,
+                     spokenWordCount: kept.split(whereSeparator: \.isWhitespace).count,
+                     applicationName: applicationName, applicationBundleID: applicationBundleID)
+        hud.setPhase(.liveTextKept)
+        hud.hide(after: 4)
     }
 }

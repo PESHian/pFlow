@@ -1,0 +1,48 @@
+{
+  "description": "Cancel clears the text; anything that arrives afterwards is ignored.",
+  "events": [
+    {
+      "op": "begin",
+      "session": "take-a"
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 0,
+      "text": "Copper",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 1,
+      "text": "Copper kettle",
+      "isFinal": false
+    },
+    {
+      "op": "cancel"
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 2,
+      "text": "Copper kettle song",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 3,
+      "text": "Copper kettle song",
+      "isFinal": true
+    }
+  ],
+  "expected": {
+    "shown": [
+      "Copper",
+      "Copper kettle"
+    ],
+    "text": "",
+    "phase": "cancelled"
+  }
+}

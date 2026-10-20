@@ -1,0 +1,46 @@
+{
+  "description": "An update older than one already applied is ignored.",
+  "events": [
+    {
+      "op": "begin",
+      "session": "take-a"
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 0,
+      "text": "Orchard",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 2,
+      "text": "Orchard lanterns glow",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 1,
+      "text": "Orchard lanterns",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 3,
+      "text": "Orchard lanterns glow softly.",
+      "isFinal": true
+    }
+  ],
+  "expected": {
+    "shown": [
+      "Orchard",
+      "Orchard lanterns glow",
+      "Orchard lanterns glow softly."
+    ],
+    "text": "Orchard lanterns glow softly.",
+    "phase": "final"
+  }
+}

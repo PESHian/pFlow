@@ -1,0 +1,21 @@
+{
+  "description": "A take with no speech ends with empty text and shows nothing.",
+  "events": [
+    {
+      "op": "begin",
+      "session": "take-a"
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 0,
+      "text": "",
+      "isFinal": true
+    }
+  ],
+  "expected": {
+    "shown": [],
+    "text": "",
+    "phase": "final"
+  }
+}

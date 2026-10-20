@@ -5,28 +5,16 @@ struct RecordingHUDView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
-        Group {
-            if isRecordingPhase {
-                RecordingWaveform(levels: Array(model.levels.suffix(25)),
-                                  style: AppearanceSettings.shared.waveformStyle)
-            } else if model.phase == .pasteUnconfirmed {
-                Label("Check paste", systemImage: "info.circle")
-                    .font(.system(size: 12, weight: .medium))
-                    .help("The app could not verify the paste. Check your text before pasting again.")
-            } else if model.phase == .copied {
-                Label("Press ⌘V", systemImage: "doc.on.clipboard")
-                    .font(.system(size: 12, weight: .medium))
-            } else if model.phase == .savedToHistory {
-                Label("Saved in History", systemImage: "clock.arrow.circlepath")
-                    .font(.system(size: 11, weight: .medium))
-            } else if model.phase == .failed {
-                Label("Dictation failed", systemImage: "exclamationmark.triangle")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.orange)
-            } else {
-                ProgressView().controlSize(.small).tint(Theme.accent)
-            }
+        if model.livePreview {
+            LivePreviewCard(model: model, title: title, isRecordingPhase: isRecordingPhase) { status }
+        } else {
+            compact
         }
+    }
+
+    // Live text Off: the waveform capsule, unchanged.
+    private var compact: some View {
+        status
         .foregroundStyle(.white.opacity(0.9))
         .frame(width: 120, height: 32)
         .contentShape(Rectangle())
@@ -52,6 +40,35 @@ struct RecordingHUDView: View {
         .accessibilityLabel(title)
     }
 
+    private var status: some View {
+        Group {
+            if isRecordingPhase {
+                RecordingWaveform(levels: Array(model.levels.suffix(25)),
+                                  style: AppearanceSettings.shared.waveformStyle)
+            } else if model.phase == .pasteUnconfirmed {
+                Label("Check paste", systemImage: "info.circle")
+                    .font(.system(size: 12, weight: .medium))
+                    .help("The app could not verify the paste. Check your text before pasting again.")
+            } else if model.phase == .copied {
+                Label("Press ⌘V", systemImage: "doc.on.clipboard")
+                    .font(.system(size: 12, weight: .medium))
+            } else if model.phase == .savedToHistory {
+                Label("Saved in History", systemImage: "clock.arrow.circlepath")
+                    .font(.system(size: 11, weight: .medium))
+            } else if model.phase == .failed {
+                Label("Dictation failed", systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.orange)
+            } else if model.phase == .liveTextKept {
+                Label("Kept in History", systemImage: "clock.arrow.circlepath")
+                    .font(.system(size: 11, weight: .medium))
+                    .help("Speech recognition stopped early. The words so far are saved in History.")
+            } else {
+                ProgressView().controlSize(.small).tint(Theme.accent)
+            }
+        }
+    }
+
     static let shadowInsets = EdgeInsets()
 
     private var isRecordingPhase: Bool {
@@ -74,7 +91,91 @@ struct RecordingHUDView: View {
         case .copied: return "Text copied. Press Command V to paste."
         case .savedToHistory: return "Text saved in History. Clipboard unchanged."
         case .restarting: return "Restarting pFlow"
+        case .liveTextKept: return "Speech recognition stopped early. The words so far are saved in History."
         }
+    }
+}
+
+/// Live text: the newest words in a readable card. It never takes focus
+/// (the panel cannot become key) and keeps the same size for the whole take.
+private struct LivePreviewCard<Status: View>: View {
+    @Bindable var model: HUDModel
+    let title: String
+    let isRecordingPhase: Bool
+    @ViewBuilder let status: () -> Status
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var systemScheme
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.s2) {
+            HStack(spacing: Theme.s2) {
+                status()
+                if model.phase == .confirmCancel || model.phase == .transcribing || model.phase == .cleaning {
+                    Text(title).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(minHeight: 20)
+            // Three lines of space, filled from the bottom: the newest words
+            // stay in view and older lines scroll off the top.
+            Text(verbatim: "\n\n")
+                .font(textFont)
+                .hidden()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .bottomLeading) {
+                    Text(shownText)
+                        .font(textFont)
+                        .foregroundStyle(model.partial.isEmpty ? .secondary : .primary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .clipped()
+        }
+        .padding(Theme.s3)
+        .frame(width: model.previewMaxWidth)
+        .contentShape(Rectangle())
+        .background {
+            let shape = RoundedRectangle(cornerRadius: Theme.radius)
+            if reduceTransparency {
+                shape.fill(Color(nsColor: .windowBackgroundColor))
+                    .overlay(shape.strokeBorder(Theme.hairlineStrong, lineWidth: 0.75))
+            } else {
+                shape.fill(.regularMaterial)
+                    .overlay(shape.strokeBorder(Theme.gradient.opacity(0.45), lineWidth: 0.75))
+            }
+        }
+        .environment(\.colorScheme, model.colorScheme ?? systemScheme)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(model.partial)
+    }
+
+    // macOS text styles do not grow with the text size setting on their own,
+    // so the preview scales its own body size.
+    private var textFont: Font {
+        let scale: CGFloat = switch typeSize {
+        case .xSmall: 0.85
+        case .small: 0.92
+        case .medium: 0.96
+        case .large: 1
+        case .xLarge: 1.12
+        case .xxLarge: 1.24
+        case .xxxLarge: 1.36
+        case .accessibility1: 1.6
+        case .accessibility2: 1.9
+        case .accessibility3: 2.2
+        case .accessibility4: 2.6
+        case .accessibility5: 3
+        @unknown default: 1
+        }
+        return .system(size: NSFont.systemFontSize * scale)
+    }
+
+    private var shownText: String {
+        if !model.partial.isEmpty { return model.partial }
+        return isRecordingPhase ? "Listening…" : ""
     }
 }
 
