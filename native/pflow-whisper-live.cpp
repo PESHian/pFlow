@@ -39,10 +39,12 @@ static void put(const std::string & value) {
 static void quiet(enum ggml_log_level, const char *, void *) {}
 
 // The finished text, decoded exactly as `whisper-cli -m model -f audio -l
-// language -t threads -otxt -nt -np` does in whisper.cpp 1.9.5: beam search 5,
-// best of 5, temperature fallback, no timestamps, full audio context, on a
-// fresh state so nothing from the live windows carries over. Lines are
-// whisper-cli's text output: each segment without leading blanks, then "\n".
+// language -t threads -otxt -np` does in whisper.cpp 1.9.5: beam search 5,
+// best of 5, temperature fallback, timestamps on (so each 30 s window resumes
+// at the last finished segment; without them words past about a minute were
+// lost), full audio context, on a fresh state so nothing from the live windows
+// carries over. Lines are whisper-cli's text output: each segment without
+// leading blanks, then "\n"; the timestamps are never part of the text.
 static bool finish_take(whisper_context * ctx, const std::string & path, const std::string & language, int threads, std::string & out) {
     std::vector<float> pcmf32;
     std::vector<std::vector<float>> pcmf32s;
@@ -78,7 +80,7 @@ static bool finish_take(whisper_context * ctx, const std::string & path, const s
     wparams.entropy_thold = 2.40f;
     wparams.logprob_thold = -1.00f;
     wparams.no_speech_thold = 0.6f;
-    wparams.no_timestamps = true;
+    wparams.no_timestamps = false;
     wparams.suppress_nst = false;
     wparams.vad = false;
     std::unique_ptr<whisper_state, decltype(&whisper_free_state)> state(whisper_init_state(ctx), whisper_free_state);

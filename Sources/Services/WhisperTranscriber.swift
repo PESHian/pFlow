@@ -156,20 +156,32 @@ final class WhisperTranscriber: StreamingTranscriber {
 
     static func transcribe(audio: URL, model: URL, executable: URL, output: URL, locale: Locale) async throws -> String {
         let runner = WhisperProcess()
-        try await runner.run(executable: executable, arguments: [
-            "-m", model.path, "-f", audio.path, "-l", language(for: locale),
-            "-t", "\(finalThreads)", "-otxt", "-of", output.path, "-np", "-nt"
-        ])
+        try await runner.run(executable: executable, arguments: arguments(audio: audio, model: model, output: output,
+                                                                      language: language(for: locale)))
         try Task.checkCancellation()
         return finishedText(try String(contentsOf: output.appendingPathExtension("txt"), encoding: .utf8))
+    }
+
+    /// whisper-cli's options for the whole-recording pass. Timestamps stay on:
+    /// with `-nt` whisper.cpp jumps a full 30 s after each window instead of
+    /// resuming at the last finished sentence, so words at a window's edge, or
+    /// after a window it ended early, were lost on takes over about a minute.
+    /// The text file never contains the timestamps.
+    static func arguments(audio: URL, model: URL, output: URL, language: String) -> [String] {
+        ["-m", model.path, "-f", audio.path, "-l", language,
+         "-t", "\(finalThreads)", "-otxt", "-of", output.path, "-np"]
     }
 
     /// Threads for the whole-recording pass, whichever process runs it.
     static let finalThreads = 4
 
-    /// whisper-cli's text output as the take's finished text.
+    /// whisper-cli's text output (one line per segment) as the take's finished
+    /// text: the segments joined by single spaces, as one paragraph.
     static func finishedText(_ output: String) -> String {
-        output.trimmingCharacters(in: .whitespacesAndNewlines)
+        output.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     static func language(for locale: Locale) -> String {

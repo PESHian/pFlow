@@ -319,24 +319,8 @@ struct SpeedHarnessTests {
         var rows: [[String: Any]] = []
         let files = try recordings() + [folder.appending(path: "long.aiff")]
         for url in files {
-            // The recording exactly as a take writes it: 16 kHz mono 16-bit.
             let wav = scratch.appending(path: url.deletingPathExtension().lastPathComponent + ".wav")
-            let source = try AVAudioFile(forReading: url)
-            let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true)!
-            let converter = BufferConverter()
-            var samples: [Float] = []
-            do {
-                let writer = try AVAudioFile(forWriting: wav, settings: format.settings)
-                while source.framePosition < source.length {
-                    let buffer = AVAudioPCMBuffer(pcmFormat: source.processingFormat, frameCapacity: 4096)!
-                    try source.read(into: buffer, frameCount: 4096)
-                    let converted = try converter.convertBuffer(buffer, to: writer.processingFormat)
-                    try writer.write(from: converted)
-                    if let data = converted.floatChannelData, samples.count < 15 * 16_000 {
-                        samples += UnsafeBufferPointer(start: data[0], count: Int(converted.frameLength))
-                    }
-                }
-            }
+            let samples = try takeRecording(from: url, to: wav, keep: 15 * 16_000)
             let worker = WhisperLiveProcess(model: model)
             try worker.load()
             // Dirty the helper first, as a take does.

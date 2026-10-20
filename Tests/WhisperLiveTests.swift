@@ -388,7 +388,8 @@ struct WhisperLiveTests {
         await waitUntil { worker.snapshot.calls > 0 }
         play(transcriber, seconds: 0.4)
         let final = try await transcriber.finish()
-        #expect(final == "Amber kites rose over the quiet harbor\nand landed by the pier.")
+        // One line per segment comes back as one paragraph.
+        #expect(final == "Amber kites rose over the quiet harbor and landed by the pier.")
         #expect(worker.finishes.map(\.language) == ["es"])
         #expect(worker.finishes.map(\.threads) == [WhisperTranscriber.finalThreads])
         // The whole take, tail included, written before the pass started.
