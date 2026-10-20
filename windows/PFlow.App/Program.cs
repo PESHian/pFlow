@@ -210,7 +210,7 @@ internal sealed partial class Program : Application
                 var speech = whisper.LastMetrics;
                 timing["warmModelReused"] = speech.Reused ? 1 : 0; timing["modelInitializationMs"] = speech.InitializationMs;
                 timing["nativeRecognitionMs"] = speech.RecognitionMs; timing["audioContextFrames"] = speech.AudioContext;
-                // The worker sends 0 for stages it cannot measure (each finished pass has its own state).
+                // The worker sends 0 for stages whisper.cpp does not report for its finished-text state.
                 if (speech.EncodeMs > 0) timing["encoderMs"] = speech.EncodeMs;
                 if (speech.DecodeMs > 0) timing["decoderMs"] = speech.DecodeMs;
             }
