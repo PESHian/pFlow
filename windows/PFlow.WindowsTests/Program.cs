@@ -64,6 +64,7 @@ internal static partial class Program
     }
     [STAThread] static int Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--update-helper") return RunUpdateHelper(args[1]);
         if (args.Length > 0 && args[0] == "--architecture-speech") return ArchitectureSpeech(args[1], args[2]).GetAwaiter().GetResult();
         if (args.Length > 0 && args[0] == "--model") return ModelChecks(args[1], args.Contains("--cleanup-only"));
         if (args.Length == 0 || args[0] is "--updates-only" or "--controls-only" or "--learn-keys-only" or "--insertion-only") { try { return LaunchPrivate(args.Length > 0 ? args[0] : ""); } catch (Exception error) { Console.Error.WriteLine(error); return 1; } }

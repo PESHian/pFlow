@@ -14,7 +14,7 @@ try {
         dotnet publish "$root\fixtures\UpdaterApp" -c Release -r $rid --self-contained true -p:RuntimeFrameworkVersion=10.0.13 -p:Version=$version -o "$fixture\binaries\$version" > "$root\dist\stub-$version-$Architecture.log"
         if($LASTEXITCODE){throw 'Could not build the controlled updater fixture.'}
     }
-    foreach($scenario in @('success','cancel','corrupt','startup-failure')) {
+    foreach($scenario in @('success','legacy-cwd','cancel','corrupt','startup-failure')) {
         $case=Join-Path $fixture $scenario
         $env:LOCALAPPDATA=Join-Path $case 'Local';$env:APPDATA=Join-Path $case 'Roaming'
         $env:PFLOW_UPDATER_TEST_STARTED=Join-Path $case 'started-';$env:PFLOW_UPDATER_TEST_STOP=Join-Path $case 'stop-'
@@ -37,8 +37,16 @@ try {
         $old=Start-Process "$installed\pFlow.exe" -PassThru
         Wait-File ($env:PFLOW_UPDATER_TEST_STARTED+'0.1.10')
         @{package=$package;destination=$installed;version='0.1.11';processId=$old.Id;startedTicks=$old.StartTime.ToUniversalTime().Ticks}|ConvertTo-Json|Set-Content "$job\plan.json" -Encoding UTF8
-        $arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$job+'\update-install.ps1" -Plan "'+$job+'\plan.json"'
-        $helper=Start-Process "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList $arguments -PassThru -RedirectStandardError "$job\stderr.txt" -RedirectStandardOutput "$job\stdout.txt"
+        if($scenario -eq 'legacy-cwd') {
+            # The released 0.1.13 app inherited this folder, where System.dll is a
+            # .NET forwarder rather than Windows PowerShell's framework assembly.
+            $executable="$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+            $arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$job+'\update-install.ps1" -Plan "'+$job+'\plan.json"'
+        } else {
+            $executable="$root\dist\checks-$Architecture\PFlow.WindowsTests.exe"
+            $arguments='--update-helper "'+$job+'\plan.json"'
+        }
+        $helper=Start-Process $executable -ArgumentList $arguments -WorkingDirectory $installed -PassThru -RedirectStandardError "$job\stderr.txt" -RedirectStandardOutput "$job\stdout.txt"
         try {
             if($scenario -eq 'corrupt') {
                 Check ($helper.WaitForExit(45000) -and $helper.ExitCode -ne 0 -and !$old.HasExited) 'damaged staged file keeps original process running'
@@ -48,7 +56,7 @@ try {
                 if($scenario -eq 'cancel'){Set-Content "$job\cancel" 'cancel'}
                 else {Set-Content ($env:PFLOW_UPDATER_TEST_STOP+'0.1.10') 'stop';Check ($old.WaitForExit(10000)) "$scenario old application exits normally"}
                 Check ($helper.WaitForExit(45000)) "$scenario helper finishes without killing any process"
-                if($scenario -eq 'success') {
+                if($scenario -in @('success','legacy-cwd')) {
                     Check ($helper.ExitCode -eq 0) 'verified update installed and restarted'
                     Wait-File ($env:PFLOW_UPDATER_TEST_STARTED+'0.1.11')
                     Check ([Diagnostics.FileVersionInfo]::GetVersionInfo("$installed\pFlow.exe").FileBuildPart -eq 11) 'new application version installed'

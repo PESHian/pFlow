@@ -2,7 +2,7 @@ pFlow by Pesh: Windows and Mac installation
 
 WINDOWS: x64 (Intel/AMD), ARM64, or x86 (32-bit)
 
-Use pFlow-Windows-Universal-0.1.14-testing.zip. It contains all three builds.
+Use pFlow-Windows-Universal-0.1.15-testing.zip. It contains all three builds.
 Windows 11 and Windows 10 version 1607 or later are required. Older Windows
 cannot run the included .NET 10 runtime. Microsoft's supported Windows 10
 editions are LTSC/Enterprise; Windows 10/older hardware is not fully tested here.

@@ -3,6 +3,9 @@ $ErrorActionPreference='Stop'
 $job=Split-Path -Parent $Plan
 $installed=$false; $previous=$null; $new=$null; $old=$null
 try {
+    # Self-contained .NET DLLs beside pFlow.exe break Windows PowerShell's compiler.
+    Set-Location -LiteralPath $job
+    [Environment]::CurrentDirectory=$job
     $data=Get-Content -LiteralPath $Plan -Raw | ConvertFrom-Json
     $expected=Join-Path $env:LOCALAPPDATA 'Programs\pFlow'
     if([IO.Path]::GetFullPath($data.destination) -ne $expected){throw 'Unexpected update destination.'}
