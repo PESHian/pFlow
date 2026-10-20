@@ -7,6 +7,8 @@ final class FakeSession: DictationSessioning {
     enum Failure: Error { case start, stop }
     var onLevel: ((Float) -> Void)?
     var onTranscript: ((TranscriptUpdate) -> Void)?
+    var onLiveStopped: (() -> Void)?
+    private(set) var live: Bool?
     var textToReturn = "hello world"
     var stopError: Error?
     private(set) var take: String?
@@ -20,8 +22,9 @@ final class FakeSession: DictationSessioning {
     var startError: Error?
     func setCapturePaused(_ paused: Bool) throws { self.paused = paused }
 
-    func start(take: String) async throws {
+    func start(take: String, live: Bool) async throws {
         self.take = take
+        self.live = live
         nextSequence = 0
         startCalled += 1
         if suspendStart { await withCheckedContinuation { startGate = $0 } }
@@ -83,6 +86,7 @@ final class FakeHUD: HUDControlling {
     var shown = 0
     var previews: [Bool] = []
     var partials: [String] = []
+    var notes: [String?] = []
     var hidden = 0
     var hideDelays: [Double] = []
     var onConfirm: (() -> Void)?
@@ -92,6 +96,7 @@ final class FakeHUD: HUDControlling {
     func setPhase(_ phase: HUDPhase) { phases.append(phase) }
     func setLevel(_ level: Float) {}
     func setPartial(_ text: String) { partials.append(text) }
+    func setLiveNote(_ note: String?) { notes.append(note) }
     func hide(after seconds: Double) { hidden += 1; hideDelays.append(seconds) }
     func setActions(onConfirm: @escaping () -> Void, onCancel: @escaping () -> Void) {
         self.onConfirm = onConfirm

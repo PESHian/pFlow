@@ -29,6 +29,7 @@ final class HUDController: HUDControlling {
         // Reset state BEFORE the panel is on screen, so no stale frame from the previous session is ever visible.
         model.device = device
         model.partial = ""
+        model.liveNote = nil
         model.livePreview = livePreview
         model.colorScheme = AppearanceSettings.shared.mode.colorScheme
         model.level = 0
@@ -71,6 +72,11 @@ final class HUDController: HUDControlling {
         if model.partial != shown { model.partial = shown }
     }
 
+    func setLiveNote(_ note: String?) {
+        guard model.livePreview else { return }
+        model.liveNote = note
+    }
+
     func hide(after seconds: Double) {
         hideTask?.cancel()
         guard seconds > 0 else {
@@ -88,6 +94,7 @@ final class HUDController: HUDControlling {
     private func close() {
         panel?.orderOut(nil)
         model.partial = ""
+        model.liveNote = nil
     }
 
     var panelForTesting: HUDPanel? { panel }

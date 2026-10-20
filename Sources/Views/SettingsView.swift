@@ -409,7 +409,7 @@ struct LiveTextPicker: View {
             note = "Typing straight into your app is not ready yet. For now pFlow shows the preview and types the finished text once you stop."
         }
         if engine == .whisper {
-            note += " With Whisper, words show only after you stop, for now."
+            note += " With Whisper, words show about a second behind, and the finished text can differ a little from the preview."
         }
         return note
     }

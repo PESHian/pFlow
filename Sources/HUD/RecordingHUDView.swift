@@ -113,6 +113,10 @@ private struct LivePreviewCard<Status: View>: View {
                 status()
                 if model.phase == .confirmCancel || model.phase == .transcribing || model.phase == .cleaning {
                     Text(title).font(.caption).foregroundStyle(.secondary)
+                } else if isRecordingPhase, let note = model.liveNote {
+                    Text(note).font(.caption).foregroundStyle(.secondary)
+                        .help("pFlow still finishes your words when you stop.")
+                        .accessibilityLabel("\(note). pFlow still finishes your words when you stop.")
                 }
                 Spacer(minLength: 0)
             }

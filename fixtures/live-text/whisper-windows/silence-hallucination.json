@@ -1,0 +1,107 @@
+{
+  "description": "Whisper output over silence is not shown: high no-speech probability ('Thank you.'), bracketed labels, parenthesized sounds and music symbols.",
+  "language": "en",
+  "windows": [
+    {
+      "startMs": 0,
+      "endMs": 3000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 3000,
+          "text": " Thank you.",
+          "noSpeechProbability": 0.91
+        }
+      ]
+    },
+    {
+      "startMs": 0,
+      "endMs": 4000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 2000,
+          "text": " [BLANK_AUDIO]",
+          "noSpeechProbability": 0.2
+        },
+        {
+          "fromMs": 2000,
+          "toMs": 4000,
+          "text": " (soft music)",
+          "noSpeechProbability": 0.3
+        }
+      ]
+    },
+    {
+      "startMs": 0,
+      "endMs": 6000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 4000,
+          "text": " ♪",
+          "noSpeechProbability": 0.4
+        },
+        {
+          "fromMs": 4000,
+          "toMs": 6000,
+          "text": " Quietly the snow",
+          "noSpeechProbability": 0.05
+        }
+      ]
+    },
+    {
+      "startMs": 0,
+      "endMs": 8000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 4000,
+          "text": " Thank you.",
+          "noSpeechProbability": 0.88
+        },
+        {
+          "fromMs": 4000,
+          "toMs": 6500,
+          "text": " Quietly the snow settled.",
+          "noSpeechProbability": 0.04
+        },
+        {
+          "fromMs": 6500,
+          "toMs": 8000,
+          "text": " The owls woke",
+          "noSpeechProbability": 0.05
+        }
+      ]
+    },
+    {
+      "startMs": 6500,
+      "endMs": 10000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 1500,
+          "text": " The owls woke.",
+          "noSpeechProbability": 0.05
+        },
+        {
+          "fromMs": 1500,
+          "toMs": 3500,
+          "text": " Thank you.",
+          "noSpeechProbability": 0.93
+        }
+      ]
+    }
+  ],
+  "expected": {
+    "afterEach": [
+      "",
+      "",
+      "Quietly the snow",
+      "Quietly the snow settled. The owls woke",
+      "Quietly the snow settled. The owls woke."
+    ],
+    "text": "Quietly the snow settled. The owls woke.",
+    "committedEndMs": 6500
+  }
+}

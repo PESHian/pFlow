@@ -12,6 +12,8 @@ final class HUDModel {
     var levels: [Float] = Array(repeating: 0, count: HUDModel.waveformSampleCount)
     /// Display text only: the end of a long transcript. History keeps it all.
     var partial: String = ""
+    /// Live words stopped early, for example; shown in the preview header.
+    var liveNote: String?
     /// Set for a whole take when Live text is on. Off keeps the waveform capsule.
     var livePreview = false
     /// Widest the preview may be on the current screen.

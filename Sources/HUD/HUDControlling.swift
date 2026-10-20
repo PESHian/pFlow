@@ -24,10 +24,13 @@ protocol HUDControlling: AnyObject {
     func setPhase(_ phase: HUDPhase)
     func setLevel(_ level: Float)
     func setPartial(_ text: String)
+    /// A short status under the live words, or nil. Cleared by `show` and hide.
+    func setLiveNote(_ note: String?)
     func hide(after seconds: Double)
     func setActions(onConfirm: @escaping () -> Void, onCancel: @escaping () -> Void)
 }
 
 extension HUDControlling {
     func show(device: String?) { show(device: device, livePreview: false) }
+    func setLiveNote(_ note: String?) {}
 }

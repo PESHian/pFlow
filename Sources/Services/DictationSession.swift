@@ -6,7 +6,10 @@ protocol DictationSessioning: AnyObject {
     /// Transcript revisions for the take started with `start(take:)`, on the
     /// main thread. Bursts are coalesced, so not every revision arrives.
     var onTranscript: ((TranscriptUpdate) -> Void)? { get set }
-    func start(take: String) async throws
+    /// Live words stopped during the current take; the take still finishes.
+    var onLiveStopped: (() -> Void)? { get set }
+    /// `live` is the take's Live text choice. Off adds no live recognition work.
+    func start(take: String, live: Bool) async throws
     /// Ends the take and returns its final update, numbered after every partial.
     func stop() async throws -> TranscriptUpdate
     func cancel() async
@@ -15,12 +18,17 @@ protocol DictationSessioning: AnyObject {
 
 extension DictationSessioning {
     func cancel() async { _ = try? await stop() }
+    var onLiveStopped: (() -> Void)? {
+        get { nil }
+        set {}
+    }
 }
 
 @MainActor
 final class DictationSession: DictationSessioning {
     var onLevel: ((Float) -> Void)?
     var onTranscript: ((TranscriptUpdate) -> Void)?
+    var onLiveStopped: (() -> Void)?
 
     private let capture = AudioCaptureService()
     private let relay = AudioBufferRelay()
@@ -76,7 +84,7 @@ final class DictationSession: DictationSessioning {
         await TranscriptionService.prepareModel(for: resolved)
     }
 
-    func start(take: String) async throws {
+    func start(take: String, live: Bool) async throws {
         feed?.close()
         let feed = LiveTranscriptFeed(session: take) { [weak self] update in self?.onTranscript?(update) }
         self.feed = feed
@@ -115,8 +123,15 @@ final class DictationSession: DictationSessioning {
             throw TranscriptionError.unsupportedLocale
         }
 
-        let engine: StreamingTranscriber = choice == .apple ? TranscriptionService() : WhisperTranscriber()
+        let engine: StreamingTranscriber = choice == .apple ? TranscriptionService()
+            : WhisperTranscriber(liveWorker: live ? { WhisperLiveProcess() } : nil)
         engine.onTranscript = { text in feed.post(text) }
+        engine.onLiveStopped = { [weak self] in
+            Task { @MainActor in
+                guard let self, self.feed === feed else { return }
+                self.onLiveStopped?()
+            }
+        }
         transcriber = engine
 
         do {

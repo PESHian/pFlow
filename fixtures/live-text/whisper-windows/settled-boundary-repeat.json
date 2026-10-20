@@ -1,0 +1,44 @@
+{
+  "description": "Whisper ends a kept segment a little early, so the next window, starting there, hears the boundary word again ('the'). It is shown once.",
+  "language": "en",
+  "windows": [
+    {
+      "startMs": 0,
+      "endMs": 4000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 2500,
+          "text": " By evening, the",
+          "noSpeechProbability": 0.03
+        },
+        {
+          "fromMs": 2500,
+          "toMs": 4000,
+          "text": " children sang",
+          "noSpeechProbability": 0.04
+        }
+      ]
+    },
+    {
+      "startMs": 2500,
+      "endMs": 5000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 2500,
+          "text": " the children sang old songs",
+          "noSpeechProbability": 0.03
+        }
+      ]
+    }
+  ],
+  "expected": {
+    "afterEach": [
+      "By evening, the children sang",
+      "By evening, the children sang old songs"
+    ],
+    "text": "By evening, the children sang old songs",
+    "committedEndMs": 2500
+  }
+}

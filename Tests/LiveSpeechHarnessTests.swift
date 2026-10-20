@@ -52,7 +52,7 @@ private final class FileFedSession: DictationSessioning {
 
     func setCapturePaused(_ isPaused: Bool) throws { paused.set(isPaused) }
 
-    func start(take: String) async throws {
+    func start(take: String, live: Bool) async throws {
         let feed = LiveTranscriptFeed(session: take) { [weak self] in self?.onTranscript?($0) }
         self.feed = feed
         let engine = TranscriptionService()
@@ -200,7 +200,7 @@ struct LiveSpeechHarnessTests {
             let url = URL(fileURLWithPath: audioFolder!).appending(path: narration.file)
             for attempt in 1...4 {
                 let session = FileFedSession(url: url, locale: locale, paced: false)
-                try await session.start(take: "ordering-\(attempt)")
+                try await session.start(take: "ordering-\(attempt)", live: true)
                 await session.waitForAudioEnd()
                 let started = ProcessInfo.processInfo.systemUptime
                 let final = try await session.stop()

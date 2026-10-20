@@ -1,0 +1,76 @@
+{
+  "description": "A segment that ends a second before the window end is kept; the next window starts after it and replaces only the words still in progress.",
+  "language": "en",
+  "windows": [
+    {
+      "startMs": 0,
+      "endMs": 2000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 1900,
+          "text": " The lighthouse keeper",
+          "noSpeechProbability": 0.02
+        }
+      ]
+    },
+    {
+      "startMs": 0,
+      "endMs": 3000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 2000,
+          "text": " The lighthouse keeper",
+          "noSpeechProbability": 0.02
+        },
+        {
+          "fromMs": 2000,
+          "toMs": 3000,
+          "text": " wound the",
+          "noSpeechProbability": 0.03
+        }
+      ]
+    },
+    {
+      "startMs": 2000,
+      "endMs": 4000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 2000,
+          "text": " wound the brass clock.",
+          "noSpeechProbability": 0.02
+        }
+      ]
+    },
+    {
+      "startMs": 2000,
+      "endMs": 6000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 1900,
+          "text": " wound the brass clock.",
+          "noSpeechProbability": 0.02
+        },
+        {
+          "fromMs": 1900,
+          "toMs": 4000,
+          "text": " Gulls circled",
+          "noSpeechProbability": 0.04
+        }
+      ]
+    }
+  ],
+  "expected": {
+    "afterEach": [
+      "The lighthouse keeper",
+      "The lighthouse keeper wound the",
+      "The lighthouse keeper wound the brass clock.",
+      "The lighthouse keeper wound the brass clock. Gulls circled"
+    ],
+    "text": "The lighthouse keeper wound the brass clock. Gulls circled",
+    "committedEndMs": 3900
+  }
+}

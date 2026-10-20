@@ -20,9 +20,21 @@ cmake -S "$SOURCE" -B "$CACHE/compiled" -DCMAKE_BUILD_TYPE=Release \
   -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON \
   -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DWHISPER_CURL=OFF
 cmake --build "$CACHE/compiled" --config Release --target whisper-cli -j 4
+# The live-preview worker links the same Metal-enabled libraries as whisper-cli.
+LIBRARIES="$CACHE/compiled"
+xcrun --sdk macosx clang++ -std=c++17 -O3 -DNDEBUG -arch arm64 -mmacosx-version-min=27.0 \
+  -ffile-prefix-map="$ROOT"=/_/pflow \
+  -I"$SOURCE/include" -I"$SOURCE/ggml/include" "$ROOT/native/pflow-whisper-live.cpp" \
+  "$LIBRARIES/src/libwhisper.a" "$LIBRARIES/ggml/src/libggml.a" "$LIBRARIES/ggml/src/libggml-cpu.a" \
+  "$LIBRARIES/ggml/src/ggml-blas/libggml-blas.a" "$LIBRARIES/ggml/src/ggml-metal/libggml-metal.a" \
+  "$LIBRARIES/ggml/src/libggml-base.a" \
+  -framework Accelerate -framework Foundation -framework Metal -framework MetalKit \
+  -o "$CACHE/compiled/bin/pflow-whisper-live"
 DESTINATION="${TARGET_BUILD_DIR:-$ROOT/build}/${CONTENTS_FOLDER_PATH:-Whisper.app/Contents}/Helpers"
 mkdir -p "$DESTINATION"
-cp "$CACHE/compiled/bin/whisper-cli" "$DESTINATION/whisper-cli"
-if [ "${CODE_SIGNING_ALLOWED:-YES}" != NO ] && [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
-  codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$DESTINATION/whisper-cli"
-fi
+for HELPER in whisper-cli pflow-whisper-live; do
+  cp "$CACHE/compiled/bin/$HELPER" "$DESTINATION/$HELPER"
+  if [ "${CODE_SIGNING_ALLOWED:-YES}" != NO ] && [ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" ]; then
+    codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$DESTINATION/$HELPER"
+  fi
+done

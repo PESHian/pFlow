@@ -5,6 +5,7 @@ import Foundation
 /// short-lived directory and the existing capture/level pipeline is shared.
 final class WhisperTranscriber: StreamingTranscriber {
     var onTranscript: ((String) -> Void)?
+    var onLiveStopped: (() -> Void)?
     private let queue = DispatchQueue(label: "com.pesh.whisper.audio", qos: .userInitiated)
     private var writer: AVAudioFile?
     private var converter = BufferConverter()
@@ -15,13 +16,19 @@ final class WhisperTranscriber: StreamingTranscriber {
     private let modelURL: URL
     private let executableURL: URL
     private let temporaryDirectory: URL
+    /// Live text only. Off starts no live worker and runs no extra inference.
+    private let liveWorker: (() -> WhisperLiveWorking)?
+    /// Touched only on `queue` once recording starts.
+    private var live: WhisperLiveRecognizer?
 
     init(modelURL: URL = WhisperModelStore.modelURL,
          executableURL: URL = Bundle.main.bundleURL.appending(path: "Contents/Helpers/whisper-cli"),
-         temporaryDirectory: URL = FileManager.default.temporaryDirectory) {
+         temporaryDirectory: URL = FileManager.default.temporaryDirectory,
+         liveWorker: (() -> WhisperLiveWorking)? = nil) {
         self.modelURL = modelURL
         self.executableURL = executableURL
         self.temporaryDirectory = temporaryDirectory
+        self.liveWorker = liveWorker
     }
 
     func begin(locale: Locale, contextualStrings: [String]) async throws {
@@ -41,6 +48,15 @@ final class WhisperTranscriber: StreamingTranscriber {
             removeRecording()
             throw error
         }
+        if let liveWorker {
+            // The take's own language, every window. The helper keeps no text
+            // between windows, so nothing carries over from another take.
+            let recognizer = WhisperLiveRecognizer(worker: liveWorker(), language: Self.language(for: locale),
+                onText: { [weak self] in self?.onTranscript?($0) },
+                onFailure: { [weak self] in self?.onLiveStopped?() })
+            queue.sync { live = recognizer }
+            recognizer.start()
+        }
     }
 
     func feed(_ buffer: AVAudioPCMBuffer) {
@@ -59,29 +75,49 @@ final class WhisperTranscriber: StreamingTranscriber {
                     converter = BufferConverter()
                     inputFormat = copy.format
                 }
-                try writer.write(from: converter.convertBuffer(copy, to: writer.processingFormat))
+                let converted = try converter.convertBuffer(copy, to: writer.processingFormat)
+                try writer.write(from: converted)
+                if let live, let samples = converted.floatChannelData {
+                    live.append(UnsafeBufferPointer(start: samples[0], count: Int(converted.frameLength)))
+                }
             } catch { recordingError = error }
         }
     }
 
+    /// The finished text always comes from one pass over the whole recording,
+    /// the same as with Live text Off, so it includes the last words. Live
+    /// windows only feed the preview; their words are kept if that pass fails.
     func finish() async throws -> String {
         defer { removeRecording() }
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        let (shown, failure) = await withCheckedContinuation { (continuation: CheckedContinuation<(String, Error?), Never>) in
             queue.async { [self] in
                 writer = nil
-                if let recordingError { continuation.resume(throwing: recordingError) }
-                else { continuation.resume() }
+                let shown = live?.stop() ?? ""
+                live = nil
+                continuation.resume(returning: (shown, recordingError))
             }
         }
-        guard let directory else { return "" }
-        try Task.checkCancellation()
-        return try await Self.transcribe(audio: directory.appending(path: "audio.wav"), model: modelURL,
-            executable: executableURL, output: directory.appending(path: "result"), locale: locale)
+        do {
+            if let failure { throw failure }
+            guard let directory else { return "" }
+            try Task.checkCancellation()
+            return try await Self.transcribe(audio: directory.appending(path: "audio.wav"), model: modelURL,
+                executable: executableURL, output: directory.appending(path: "result"), locale: locale)
+        } catch {
+            let kept = shown.trimmingCharacters(in: .whitespacesAndNewlines)
+            if kept.isEmpty || error is CancellationError { throw error }
+            throw TranscriptionError.interrupted(kept: kept)
+        }
     }
 
     func cancel() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            queue.async { [self] in writer = nil; continuation.resume() }
+            queue.async { [self] in
+                writer = nil
+                live?.stop()
+                live = nil
+                continuation.resume()
+            }
         }
         removeRecording()
     }

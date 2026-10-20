@@ -65,7 +65,7 @@ final class RecordingCoordinator {
         hud.setPhase(.listening)
         startTask = Task { [weak self] in
             guard let self else { return }
-            do { try await self.session.start(take: take) }
+            do { try await self.session.start(take: take, live: self.takeLiveTextMode.showsPreview) }
             catch {
                 NSLog("Yap: failed to start recording: \(error)")
                 self.transcript.cancel()
@@ -96,6 +96,13 @@ final class RecordingCoordinator {
     private func receive(_ update: TranscriptUpdate) {
         guard transcript.apply(update), takeLiveTextMode.showsPreview else { return }
         hud.setPartial(transcript.text)
+    }
+
+    /// Live words stopped mid-take. Say so; the words shown stay, and stopping
+    /// still runs the normal final recognition.
+    private func liveStopped() {
+        guard state == .recording, takeLiveTextMode.showsPreview else { return }
+        hud.setLiveNote("Live words stopped")
     }
 
     private var cancelArmed = false
@@ -139,6 +146,7 @@ final class RecordingCoordinator {
 
         session.onLevel = { [weak self] level in self?.hud.setLevel(level) }
         session.onTranscript = { [weak self] update in self?.receive(update) }
+        session.onLiveStopped = { [weak self] in self?.liveStopped() }
 
         hud.setActions(
             onConfirm: { [weak self] in Task { await self?.toggle() } },
