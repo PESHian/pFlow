@@ -1,0 +1,58 @@
+{
+  "enabled": true,
+  "activationKey": "rightControl",
+  "copyDictationToClipboard": true,
+  "sounds": false,
+  "paragraphs": false,
+  "useLocalAI": true,
+  "cleanup": true,
+  "useAICleanup": false,
+  "theme": "light",
+  "palette": "aurora",
+  "accent": "4EE5B3",
+  "customAccent": "FF9DC4",
+  "waveBlend": "3DFF85",
+  "waveform": "lines",
+  "language": "es",
+  "capsulePositionVersion": 1,
+  "capsuleX": 412,
+  "capsuleY": 690,
+  "dictionaryTerms": [
+    "Marigold",
+    "Quillfeather"
+  ],
+  "dictionaryReplacements": [
+    {
+      "id": "6f1d1f0e-3b7a-4c55-9a2e-1d6c0b7f4a10",
+      "heard": "quill feather",
+      "replacement": "Quillfeather"
+    }
+  ],
+  "templates": [
+    {
+      "id": "0b9e6c43-5d2f-4b8e-a1f0-7c3d2e9b5a61",
+      "name": "Garden log",
+      "title": "Garden log",
+      "instructions": "Keep the speaker\u0027s words.",
+      "headingStyle": "uppercase",
+      "boldHeadings": true,
+      "missingText": "Not provided.",
+      "sections": [
+        {
+          "id": "9a7c5e31-2f4d-4b6a-8e1c-3d5f7a9b1c20",
+          "title": "Narrative",
+          "instructions": "",
+          "bullets": false,
+          "summarize": false,
+          "includeFullDictation": true
+        }
+      ],
+      "voiceTriggers": [
+        "garden log"
+      ],
+      "needsAI": false
+    }
+  ],
+  "templateCatalogVersion": 1,
+  "activeTemplateId": "0b9e6c43-5d2f-4b8e-a1f0-7c3d2e9b5a61"
+}

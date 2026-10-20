@@ -1,5 +1,8 @@
 namespace PFlow.Windows;
 
+/// The whole-recording recognition failed; the message is the one shown to the person.
+internal sealed class RecognitionFailure(string message, Exception? inner) : IOException(message, inner);
+
 // One path for a stopped microphone recording and the native fictional-audio fixture.
 internal sealed class DictationPipeline(StateStore store, Whisper whisper, LocalTextModel textModel)
 {
@@ -19,7 +22,8 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         using (var transcription = CancellationTokenSource.CreateLinkedTokenSource(cancel)) {
             transcription.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(seconds * 2 + 30, 30, 3600)));
             try { raw = await Measure("recognitionMs", () => whisper.Transcribe(audio, store.Preferences.Language, store.Preferences.DictionaryTerms, transcription.Token)); }
-            catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { throw new IOException("Transcription took too long. Try a shorter recording."); }
+            catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { throw new RecognitionFailure("Transcription took too long. Try a shorter recording.", null); }
+            catch (Exception error) when (error is not OperationCanceledException) { throw new RecognitionFailure(error.Message, error); }
         }
         var preferences = store.Preferences;
         string text = TextProcessing.Replace(raw, preferences.DictionaryReplacements);
@@ -54,9 +58,17 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
             aiCleanup && (cleanupSkipped || textModel.LastIssue != null), cleanupSkipped);
     }
     internal async Task<Result> Run(string audio, double seconds, InsertionTarget originalTarget, string folder,
-        IntPtr owner, Action<Phase, string?> state, CancellationToken cancel)
+        IntPtr owner, Action<Phase, string?> state, CancellationToken cancel, string? liveWords = null)
     {
-        var prepared = await Prepare(audio, seconds, folder, state, cancel);
+        Prepared prepared;
+        try { prepared = await Prepare(audio, seconds, folder, state, cancel); }
+        catch (RecognitionFailure error) when (LiveTake.Recoverable(liveWords) is { } kept) {
+            // Recognition of the whole take failed after live words appeared: keep them, say so, type nothing.
+            store.Add(new Transcript(Guid.NewGuid(), kept, DateTimeOffset.Now, seconds, "Windows default microphone", TextProcessing.WordCount(kept),
+                originalTarget.ApplicationName, originalTarget.ApplicationId, LiveTake.KeptStatus));
+            state(Phase.Failed, LiveTake.KeptStatus);
+            return new Result(LiveTake.KeptStatus, LiveTake.KeptStatus + " " + error.Message);
+        }
         cancel.ThrowIfCancellationRequested();
         var preferences = store.Preferences;
         string text = prepared.Text; string? rtf = prepared.Rtf; bool unavailable = prepared.ReportUnavailable;

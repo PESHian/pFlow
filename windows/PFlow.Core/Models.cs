@@ -63,6 +63,8 @@ public sealed class Preferences
     public string WaveBlend { get; set; } = "3DFF85";
     public string Waveform { get; set; } = "wave";
     public string Language { get; set; } = "en";
+    /// Live text choice, read once when a take starts. Same saved values as the Mac app.
+    public string LiveTextMode { get; set; } = LiveTextModes.Off;
     public int CapsulePositionVersion { get; set; }
     public double CapsuleX { get; set; } = -1;
     public double CapsuleY { get; set; } = -1;
@@ -89,6 +91,7 @@ public sealed class Preferences
             if (ActiveTemplateId.HasValue && removed.Contains(ActiveTemplateId.Value) && !Templates.Any(template => template?.Id == ActiveTemplateId)) ActiveTemplateId = null;
             TemplateCatalogVersion = 1;
         }
+        LiveTextMode = LiveTextModes.Resolve(LiveTextMode);
         Language = string.IsNullOrWhiteSpace(Language) || Language.Equals("auto", StringComparison.OrdinalIgnoreCase) ? "en" : Language.Trim().ToLowerInvariant();
     }
 }

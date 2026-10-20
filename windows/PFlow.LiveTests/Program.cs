@@ -58,8 +58,9 @@ internal static partial class Program
         compactFixOnly = args.Contains("--compact-fix-only");
         waveCaptureOnly = args.Contains("--wave-capture-only"); waveformsOnly = args.Contains("--waveforms-only") || waveCaptureOnly; payloadSpacingOnly = args.Contains("--payload-spacing-only"); payloadOnly = args.Contains("--payload-only") || payloadSpacingOnly;
         optionalAIOnly = args.Contains("--optional-ai-only");
+        liveTextOnly = args.Contains("--live-text-only"); liveFocusOnly = args.Contains("--live-focus-only");
         workerSafetyOnly = args.Contains("--worker-safety-only"); extendedLatencyOnly = args.Contains("--extended-latency-only"); insertionLatencyOnly = args.Contains("--insertion-latency-only"); warmLatencyOnly = args.Contains("--warm-latency-only"); speechOnly = args.Contains("--speech-only") || optionalAIOnly;
-        if (statisticsOnly || templateCatalogOnly || appearanceOnly || appearanceRenderOnly || appearanceColorsOnly || fallbackOnly || settingsOnly || capsuleOnly || compactOnly || compactFixOnly || waveformsOnly || payloadOnly) _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        if (statisticsOnly || templateCatalogOnly || appearanceOnly || appearanceRenderOnly || appearanceColorsOnly || fallbackOnly || settingsOnly || capsuleOnly || compactOnly || compactFixOnly || waveformsOnly || payloadOnly || liveTextOnly || liveFocusOnly) _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
         if (waveformsOnly) {
             var application = Application.Current;
@@ -149,6 +150,8 @@ internal static partial class Program
     }
     static async Task Run()
     {
+        if (liveTextOnly) { await LiveText(); return; }
+        if (liveFocusOnly) { await LiveFocus(); return; }
         if (statisticsOnly) { await StatisticsPage(); return; }
         if (templateCatalogOnly) { await CustomTemplates(); return; }
         if (workerSafetyOnly) { await WorkerSafety(); return; }

@@ -166,6 +166,16 @@ internal sealed partial class SettingsWindow : Window
         Check(p, "Quiet start and stop sounds", store.Preferences.Sounds, x => store.Preferences.Sounds = x);
         Check(p, "Group long narrations into paragraphs", store.Preferences.Paragraphs, x => store.Preferences.Paragraphs = x);
         Check(p, "Clean up dictation (English)", store.Preferences.Cleanup, x => store.Preferences.Cleanup = x);
+        // Read when the next recording starts; a recording in progress keeps its choice.
+        p.Children.Add(Text("Live text"));
+        var liveText = new ComboBox { ItemsSource = LiveTextModes.All, SelectedValuePath = "Id", SelectedValue = LiveTextModes.Resolve(store.Preferences.LiveTextMode), Margin = new Thickness(0, 0, 0, 4) };
+        System.Windows.Automation.AutomationProperties.SetName(liveText, "Live text");
+        var liveNote = Text(LiveTextModes.Note(store.Preferences.LiveTextMode)); liveNote.FontSize = 12; liveNote.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted");
+        liveText.SelectionChanged += (_, _) => {
+            if (liveText.SelectedValue is not string value) return;
+            store.Preferences.LiveTextMode = value; store.SavePreferences(); liveNote.Text = LiveTextModes.Note(value);
+        };
+        p.Children.Add(liveText); p.Children.Add(liveNote);
         p = Section(root, "Local intelligence");
         if (LocalTextModel.IsSupported) {
         Check(p, "Use the local text model for reports and optional AI cleanup", store.Preferences.UseLocalAI, x => store.Preferences.UseLocalAI = x);

@@ -33,11 +33,12 @@ internal sealed class SpeechWorker : IDisposable
             worker = new(lease, Process.Start(info) ?? throw new IOException("The speech engine could not start."));
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancel); timeout.CancelAfter(TimeSpan.FromSeconds(30));
             using var kill = timeout.Token.Register(worker.Abort);
-            await worker.Send(writer => { writer.Write(0x31574650u); writer.Write(Math.Clamp(Environment.ProcessorCount - 1, 1, 8)); WriteText(writer, model, 32768); }, timeout.Token);
+            await worker.Send(writer => { writer.Write(LiveWorkerProtocol.Hello); writer.Write(Math.Clamp(Environment.ProcessorCount - 1, 1, 8)); WriteText(writer, model, 32768); }, timeout.Token);
             uint kind = await worker.Number(timeout.Token);
             if (kind == 3) throw new IOException(await worker.Text(timeout.Token));
             if (kind != 1) throw new IOException("The speech engine sent an invalid response.");
             worker.LoadMs = await worker.Metric(timeout.Token);
+            if (await worker.Number(timeout.Token) != LiveWorkerProtocol.Version) throw new IOException("The speech engine is from another pFlow version. Install a complete pFlow package.");
             timeout.Token.ThrowIfCancellationRequested(); return worker;
         } catch { if (worker != null) worker.Dispose(); else lease.Dispose(); throw; }
     }
@@ -50,7 +51,14 @@ internal sealed class SpeechWorker : IDisposable
     async Task Send(Action<BinaryWriter> prepare, CancellationToken cancel)
     {
         using var data = new MemoryStream(); using (var writer = new BinaryWriter(data, Encoding.UTF8, true)) prepare(writer);
-        await input.WriteAsync(data.GetBuffer().AsMemory(0, (int)data.Length), cancel); await input.FlushAsync(cancel);
+        await Write(data.GetBuffer().AsMemory(0, (int)data.Length), cancel);
+    }
+    // A late cancel frame must never land inside another request's bytes.
+    readonly SemaphoreSlim writing = new(1);
+    async Task Write(ReadOnlyMemory<byte> data, CancellationToken cancel)
+    {
+        await writing.WaitAsync(cancel);
+        try { await input.WriteAsync(data, cancel); await input.FlushAsync(cancel); } finally { writing.Release(); }
     }
     async Task<byte[]> Read(int size, CancellationToken cancel) { var bytes = new byte[size]; await output.ReadExactlyAsync(bytes, cancel); return bytes; }
     async Task<uint> Number(CancellationToken cancel) => BitConverter.ToUInt32(await Read(4, cancel));
@@ -72,6 +80,24 @@ internal sealed class SpeechWorker : IDisposable
         int context = checked((int)await Number(cancel)); cancel.ThrowIfCancellationRequested();
         return (text, new(false, 0, recognition, encode, decode, context));
     }
+    /// One live window. A cancel asks the worker to stop this window and still
+    /// waits for its reply, so the pipe stays in step and the warm model is kept.
+    /// The reply has a hard deadline; a worker that misses it is ended.
+    internal async Task<LiveWorkerProtocol.Response> RecognizeLive(LiveWindowRequest request, string language, TimeSpan limit, CancellationToken cancel)
+    {
+        byte[] frame = LiveWorkerProtocol.EncodeRequest(request.Session, request.Sequence, language, request.Samples);
+        using var deadline = new CancellationTokenSource(limit);
+        using var kill = deadline.Token.Register(Abort);
+        await Write(frame, deadline.Token);
+        byte[] stop = LiveWorkerProtocol.EncodeCancel(request.Session, request.Sequence);
+        int cancelSent = 0;
+        void SendCancel() { if (Interlocked.Exchange(ref cancelSent, 1) == 0) _ = Task.Run(async () => { try { await Write(stop, CancellationToken.None); } catch (IOException) { } catch (ObjectDisposedException) { } }); }
+        using var canceled = cancel.Register(SendCancel);
+        var (response, discarded) = await LiveWorkerProtocol.ReadReply(output, request.Session, request.Sequence, deadline.Token);
+        StaleLiveReplies += discarded;
+        return response;
+    }
+    internal int StaleLiveReplies { get; private set; }
     internal void Abort() { try { if (!process.HasExited) process.Kill(true); } catch (InvalidOperationException) { } }
     public void Dispose() { Abort(); input.Dispose(); output.Dispose(); process.Dispose(); modelLease.Dispose(); }
 }

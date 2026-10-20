@@ -198,6 +198,14 @@ internal static partial class Program
             try { using var change = new FileStream(whisper.ModelPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite); }
             catch (IOException) { locked = true; }
             Check("model stays protected while resident", locked);
+            // Live text: one bounded window through the same resident worker, versioned framing on this architecture.
+            var bytes = File.ReadAllBytes(audio); int data = bytes.AsSpan().IndexOf("data"u8) + 8;
+            var pcm = MemoryMarshal.Cast<byte, short>(bytes.AsSpan(data, Math.Min(5 * 32000, bytes.Length - data)));
+            var live = new LiveSession(42); live.Append(pcm);
+            var window = live.Next();
+            var segments = window == null ? null : await whisper.RecognizeLive(window, "en", deadline.Token);
+            var update = segments == null ? null : live.Complete(window!, segments);
+            Check("live window is recognized by the resident worker on this architecture", update != null && update.Text.Contains("Americans", StringComparison.OrdinalIgnoreCase) && whisper.WorkerId == worker && whisper.LiveRequests == 1);
             Console.WriteLine($"{passed} architecture speech checks passed ({RuntimeInformation.ProcessArchitecture}).");
             return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }

@@ -10,6 +10,10 @@ internal sealed partial class Program : Application
     Whisper whisper = null!;
     LocalTextModel textModel = null!;
     Capsule capsule = null!;
+    LivePreview preview = null!;
+    // Live text for the current take only; the setting is read once when a take starts.
+    LiveRecognizer? live;
+    readonly LiveTranscriptReconciler transcript = new();
     KeyboardHook keyboard = null!;
     Forms.NotifyIcon tray = null!;
     System.Drawing.Icon? trayIcon;
@@ -43,6 +47,7 @@ internal sealed partial class Program : Application
             foreach (var stale in Directory.EnumerateDirectories(directory, "recording-*")) Directory.Delete(stale, true);
             capsule = new Capsule(store); capsule.OpenSettings += OpenSettings; capsule.Cancel += Cancel; capsule.ToggleRecording += ToggleRecording; capsule.OpenHistory += OpenHistory;
             capsule.AudioLevel = () => recorder?.Level ?? 0;
+            preview = new LivePreview(store);
             _ = new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Background, (_, _) => ClipboardLease.RestorePending(), Dispatcher);
             keyboard = new KeyboardHook(OnTrigger, store.Preferences.ActivationKey) { Enabled = store.Preferences.Enabled };
             var menu = new Forms.ContextMenuStrip();
@@ -75,7 +80,26 @@ internal sealed partial class Program : Application
         if (recorder != null) OnTrigger(TriggerAction.Stop);
         else if (!operations.Busy) OnTrigger(TriggerAction.Continuous);
     }
-    void Set(Phase value, string? detail = null) { phase = value; capsule?.Set(value, detail); }
+    void Set(Phase value, string? detail = null)
+    {
+        phase = value; capsule?.Set(value, detail);
+        if (preview == null) return;
+        if (live != null && value is Phase.Recording or Phase.Continuous or Phase.Processing or Phase.Inserting) {
+            if (value == Phase.Processing) preview.Finishing();
+            preview.Reveal(capsule!.Handle);
+        } else preview.Clear();
+    }
+    void ShowLive(LiveRecognizer owner, TranscriptUpdate update)
+    {
+        // Updates from an earlier take, or after this one ended, are ignored.
+        if (ReferenceEquals(live, owner) && transcript.Apply(update)) preview.ShowText(transcript.Text);
+    }
+    void LiveStopped(LiveRecognizer owner) { if (ReferenceEquals(live, owner)) preview.SetNote("Live words stopped"); }
+    void EndLive()
+    {
+        var ending = live; live = null; transcript.Cancel(); preview.Clear();
+        if (ending != null) _ = ending.Stop();
+    }
     void Cue(bool start)
     {
         if (!store.Preferences.Sounds) return;
@@ -103,7 +127,15 @@ internal sealed partial class Program : Application
                 sessionId = operations.Start();
                 session = new CancellationTokenSource(TimeSpan.FromHours(2));
                 sessionDirectory = Path.Combine(store.DirectoryPath, "recording-" + Guid.NewGuid()); Directory.CreateDirectory(sessionDirectory);
-                Cue(true); recorder = new WaveRecorder(Path.Combine(sessionDirectory, "audio.wav"));
+                Cue(true);
+                if (LiveTextModes.ShowsPreview(store.Preferences.LiveTextMode)) {
+                    LiveRecognizer recognizer = null!;
+                    recognizer = new LiveRecognizer(unchecked((uint)sessionId), whisper, store.Preferences.Language,
+                        update => Dispatcher.InvokeAsync(() => ShowLive(recognizer, update)), () => Dispatcher.InvokeAsync(() => LiveStopped(recognizer)));
+                    live = recognizer; transcript.Begin(recognizer.SessionName); preview.Begin();
+                }
+                recorder = new WaveRecorder(Path.Combine(sessionDirectory, "audio.wav"), live == null ? null : live.Append);
+                live?.Start();
                 Set(action == TriggerAction.Continuous ? Phase.Continuous : Phase.Recording);
             } catch (Exception error) {
                 Cancel();
@@ -128,18 +160,25 @@ internal sealed partial class Program : Application
     {
         if (recorder == null || target == null || session == null) return;
         var active = recorder; recorder = null; var originalTarget = target; var cancellation = session; string folder = sessionDirectory!; long owner = sessionId;
+        var takeLive = live; string? liveWords = null;
         double seconds = 0; bool processing = false;
         var timing = new Dictionary<string, double> { ["releaseDelayMs"] = elapsed.Elapsed.TotalMilliseconds };
         try {
             var stop = Stopwatch.StartNew(); string path = active.Path; seconds = active.Stop(); timing["microphoneStopMs"] = stop.Elapsed.TotalMilliseconds;
+            if (takeLive != null) {
+                // Live windows end before the final pass, so it never waits behind them.
+                stop.Restart(); liveWords = await takeLive.Stop(); timing["liveStopMs"] = stop.Elapsed.TotalMilliseconds;
+                timing["liveWindows"] = takeLive.Session.Inferences;
+            }
             if (seconds < 0.3) { Set(Phase.Canceled); return; }
             Cue(false);
             processing = true; var pipeline = new DictationPipeline(store, whisper, textModel) { Timing = (name, ms) => timing[name] = ms };
-            var result = await pipeline.Run(path, seconds, originalTarget, folder, capsule.Handle, Set, cancellation.Token);
+            var result = await pipeline.Run(path, seconds, originalTarget, folder, capsule.Handle, Set, cancellation.Token, liveWords);
             if (result.Notice != null) Notify(result.Notice);
         } catch (OperationCanceledException) { Set(Phase.Canceled); }
         catch (Exception error) { Failure(error); }
         finally {
+            if (ReferenceEquals(live, takeLive)) EndLive();
             active.Dispose(); cancellation.Dispose(); if (ReferenceEquals(session, cancellation)) session = null;
             if (Directory.Exists(folder)) Directory.Delete(folder, true);
             if (operations.Complete(owner)) { sessionDirectory = null; sessionId = 0; keyboard.Reset(); }
@@ -162,14 +201,14 @@ internal sealed partial class Program : Application
             sessionDirectory = null; session?.Dispose(); session = null;
             operations.Complete(sessionId); sessionId = 0;
         }
-        keyboard?.Reset(); if (phase != Phase.Inserting) Set(Phase.Canceled);
+        EndLive(); keyboard?.Reset(); if (phase != Phase.Inserting) Set(Phase.Canceled);
     }
     void Failure(Exception error) { Set(Phase.Failed, error.Message); Notify(error.Message); }
     void Notify(string text) { if (tray != null) { tray.BalloonTipTitle = "pFlow by Pesh"; tray.BalloonTipText = text; tray.ShowBalloonTip(6000); } }
     void OpenSettings()
     {
         if (settings != null) { settings.Activate(); return; }
-        settings = new SettingsWindow(store, whisper, textModel, keyboard, () => capsule.ApplyTheme(), () => operations.Busy || updateApplying, OpenUpdates);
+        settings = new SettingsWindow(store, whisper, textModel, keyboard, () => { capsule.ApplyTheme(); preview.ApplyTheme(); }, () => operations.Busy || updateApplying, OpenUpdates);
         settings.Closed += (_, _) => settings = null; settings.Show();
     }
     void OpenHistory() { OpenSettings(); settings?.OpenHistoryPage(); }

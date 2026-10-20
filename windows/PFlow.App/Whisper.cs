@@ -75,6 +75,35 @@ internal sealed class Whisper : IAsyncDisposable
         catch { ResetWorker(); throw; }
         finally { modelLock.Release(); }
     }
+    /// Live windows sent to the worker; Off never sends any.
+    internal int LiveRequests => Volatile.Read(ref liveRequests);
+    int liveRequests;
+    /// Recognizes one live window with the same verified, warm worker as the
+    /// final pass. Returns null when canceled; the final pass waits for the
+    /// lock, so a live window can never run alongside or after it unnoticed.
+    /// A worker that fails here is ended, so the final pass starts a fresh one.
+    internal async Task<IReadOnlyList<WhisperWindowSegment>?> RecognizeLive(LiveWindowRequest request, string language, CancellationToken cancel)
+    {
+        using (var waiting = CancellationTokenSource.CreateLinkedTokenSource(cancel, lifetime.Token)) {
+            try { await modelLock.WaitAsync(waiting.Token); } catch (OperationCanceledException) { return null; }
+        }
+        bool answered = false;
+        try {
+            if (cancel.IsCancellationRequested) return null;
+            if (!File.Exists(Executable)) throw new FileNotFoundException("The Windows speech engine is missing. Install a complete pFlow package.");
+            await EnsureWorker(lifetime.Token);
+            Interlocked.Increment(ref liveRequests);
+            // A 15 s window took about a second on the ARM64 test VM; 30 s means the worker is stuck.
+            var response = await worker!.RecognizeLive(request, language, TimeSpan.FromSeconds(30), cancel);
+            answered = true;
+            if (response.Segments != null) return response.Segments;
+            if (cancel.IsCancellationRequested) return null;
+            throw new IOException(response.Error ?? "Live recognition failed.");
+        } catch when (!answered) { ResetWorker(); throw; }
+        finally { modelLock.Release(); }
+    }
+    /// Ends a stuck worker without waiting for the lock; the next request starts a new one.
+    internal void EndWorker() => worker?.Abort();
     internal void Abort() { lifetime.Cancel(); worker?.Abort(); }
     public async ValueTask DisposeAsync()
     {
