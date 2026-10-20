@@ -47,7 +47,7 @@ internal static partial class Program
         try {
             failed.Show(); failed.UpdateLayout(); Drain(); var button = Descendants<Button>(failed).Single();
             Invoke(button); Until(() => button.Content as string == "Install and restart" && button.IsEnabled);
-            Invoke(button); Until(() => button.IsEnabled); Drain();
+            Invoke(button); Until(() => button.IsEnabled && Descendants<TextBlock>(failed).Any(text => text.Text.Contains("installer could not get ready"))); Drain();
             Check("installer failure names the failed step without a false connection error", Descendants<TextBlock>(failed).Any(text => text.Text.Contains("installer could not get ready") && !text.Text.Contains("connection") && !text.Text.Contains("Private fictional")));
             Check("failed install clears completed download progress and permits retry", Descendants<ProgressBar>(failed).Single().Value == 0 && button.IsEnabled);
         } finally { failed.Close(); }
