@@ -54,6 +54,15 @@ internal static partial class Program
                 Check("Settings toggle saves its visible value for relaunch", sound.IsChecked == !previous && new StateStore(root).Preferences.Sounds == !previous);
                 toggle.Toggle(); Drain();
                 Check("Settings toggle saves the return state", sound.IsChecked == previous && new StateStore(root).Preferences.Sounds == previous);
+                // A closed drop-down shows the chosen item's label, never its raw data ("[en, English]").
+                string Shown(ComboBox box) => string.Join("|", Descendants<TextBlock>(box).Select(x => x.Text));
+                string Label(ComboBox box) => string.IsNullOrEmpty(box.DisplayMemberPath) ? box.SelectedItem!.ToString()!
+                    : box.SelectedItem!.GetType().GetProperty(box.DisplayMemberPath)!.GetValue(box.SelectedItem)!.ToString()!;
+                var boxes = Descendants<ComboBox>(settings).Where(x => x.SelectedItem != null).ToList();
+                foreach (string name in new[] { "Speech language", "Activation key", "Live text" })
+                    Check($"closed {name} drop-down shows its label", boxes.SingleOrDefault(x => System.Windows.Automation.AutomationProperties.GetName(x) == name) is { } box && Shown(box) == Label(box) && !Shown(box).Contains('['));
+                Check("Speech language shows English before it is opened", Shown(boxes.Single(x => System.Windows.Automation.AutomationProperties.GetName(x) == "Speech language")) == "English");
+                foreach (var box in boxes) Check($"closed drop-down '{System.Windows.Automation.AutomationProperties.GetName(box)}' shows '{Label(box)}'", Shown(box) == Label(box));
                 Check("timing readout is present without starting microphone", Descendants<TextBlock>(settings).Any(x => x.Text == ProcessingTimes.Read(root)) && !hook.Enabled);
             } finally { settings.Close(); }
             Check("missing timing record gives clear next-use message", ProcessingTimes.Read(root).Contains("next dictation"));
