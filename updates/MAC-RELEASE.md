@@ -1,6 +1,6 @@
 # Trusted Mac releases
 
-The release candidate is 0.3.6, for Apple Silicon and macOS 27 or later. Existing
+The release candidate is 0.3.7, for Apple Silicon and macOS 27 or later. Existing
 public 0.3.5 downloads remain development signed. Do not describe a candidate as
 ready for users until the checks below pass on its exact downloaded bytes.
 

@@ -99,6 +99,17 @@ def require_no_debug_entry(app):
             raise ValueError('Release app contains a debug-only entry point')
 
 
+# A build machine's home folder names its account. A shipped app must not carry one.
+OWNER_PATH = re.compile(rb'/Users/[^/\x00\r\n ]+')
+
+
+def require_no_owner_paths(app):
+    app = Path(app)
+    for path in sorted(app.rglob('*')):
+        if path.is_file() and not path.is_symlink() and OWNER_PATH.search(path.read_bytes()):
+            raise ValueError(f'Release app contains a home folder path in {path.relative_to(app)}')
+
+
 def package(app, dist, *, testing=False, env=None):
     env = os.environ if env is None else env
     signing = None if testing else preflight(env)
@@ -128,6 +139,7 @@ def package(app, dist, *, testing=False, env=None):
         raise ValueError('Unexpected app executable')
     run('lipo', '-verify_arch', 'arm64', executable)
     require_no_debug_entry(app)
+    require_no_owner_paths(app)
     # Public 0.3.5 updaters require this suffix, even for notarized downloads.
     name = f'pFlow-Mac-{version}-testing.dmg'
     dist = Path(dist); dist.mkdir(parents=True, exist_ok=True)

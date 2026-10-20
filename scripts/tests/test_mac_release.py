@@ -87,6 +87,17 @@ class MacReleaseTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 release.require_no_debug_entry(app)
 
+    def test_release_rejects_a_home_folder_path_in_any_bundle_file(self):
+        release.require_no_owner_paths(self.app)
+        nested = self.app / 'Contents/Resources/en.lproj'; nested.mkdir(parents=True)
+        (nested / 'notes.strings').write_bytes(b'built at /Users/ but no account, /home/runner/work')
+        release.require_no_owner_paths(self.app)
+        (self.app / 'Contents/Helpers/whisper-cli').write_bytes(bytes.fromhex('cffaedfe') + b'\x00/Users/fictional-builder/src/whisper.cpp\x00')
+        with self.assertRaisesRegex(ValueError, 'Contents/Helpers/whisper-cli'):
+            self.package(testing=True)
+        self.assertFalse((self.dist / 'pFlow-Mac-0.3.6-testing.dmg').exists())
+        self.assertFalse(any(a[:2] == ('hdiutil', 'create') for a in self.calls))
+
     def test_signs_inside_out_and_hashes_only_final_bytes(self):
         dmg = self.package()
         self.assertEqual(dmg.read_bytes(), b'fictional-dmg-signature-ticket')
