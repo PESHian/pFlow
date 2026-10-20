@@ -1,8 +1,9 @@
 # Speed fixtures
 
 Fictional reference texts for the timing runs (Mac `Tests/SpeedHarnessTests.swift`,
-Windows `PFlow.LiveTests --speed`). Five short (about 7 s spoken), five medium (about 20 s)
-and one long narration (about 3 minutes). No real people, places or private text.
+Windows `PFlow.LiveTests --speed`). Five short (about 7 s spoken), five medium (about 20 s),
+one minute-long note (`minute-1`, about 60 s, for the slow-computer checks) and one long
+narration (about 3 minutes). No real people, places or private text.
 
 Audio is generated on each host from these texts with the system voice, so the same
 recording is used for every before/after run on that host:

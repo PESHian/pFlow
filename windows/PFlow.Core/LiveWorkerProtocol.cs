@@ -17,7 +17,9 @@ namespace PFlow.Core;
 public static class LiveWorkerProtocol
 {
     public const uint Hello = 0x32574650, Request = 0x31534650, Cancel = 0x31434650;
-    public const uint Version = 2, Ready = 1, Result = 4, Error = 5;
+    /// Version 3: the hello carries two thread counts (finished text, live), and
+    /// the finished-text pass (PFQ1) sends `Progress` frames while it works.
+    public const uint Version = 3, Ready = 1, Result = 4, Error = 5, Progress = 6;
     public const int MaximumSamples = 30 * 16_000, MaximumSegments = 512, MaximumText = 4096, MaximumTotalText = 256 * 1024, MaximumLanguage = 64;
     /// Responses for older windows that may be skipped before giving up.
     public const int MaximumStale = 2;

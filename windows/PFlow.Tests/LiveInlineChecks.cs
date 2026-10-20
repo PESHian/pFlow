@@ -245,8 +245,9 @@ internal static class LiveInlineChecks
         Check("a long or odd app name is cleaned and shortened", LiveInlineText.TypingNote("Fictional\u0007 " + new string('x', 80), null, "f") is var note && note.Length == "Typing in ".Length + 61 && note.EndsWith('…') && !note.Contains('\u0007'));
         foreach (var stop in Enum.GetValues<LiveStop>()) {
             Check($"{stop} has a short stopped note", LiveInlineText.StoppedNote(stop).Length is > 0 and <= 26);
-            Check($"{stop} has a short preview note", LiveInlineText.PreviewNote(stop).Length is > 0 and <= 26);
+            Check($"{stop} has a one-line preview note", LiveInlineText.PreviewNote(stop).Length is > 0 and <= 50);
             Check($"{stop} explains where the finished text went", LiveInlineText.Kept(stop).EndsWith("The finished text is in History."));
         }
+        Check("a field pFlow cannot type into live says the words still go in when the take stops", LiveInlineText.PreviewNote(LiveStop.Unsupported).Contains("when you stop"));
     }
 }

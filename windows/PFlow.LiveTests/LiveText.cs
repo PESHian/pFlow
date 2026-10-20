@@ -19,7 +19,7 @@ internal static partial class Program
     sealed class TakeReport
     {
         public string Name = "", Mode = "";
-        public double AudioMs, AudioEndMs, StopMs, FinalMs, CpuSeconds, FirstUpdateMs = -1, FailedAtMs = -1;
+        public double AudioMs, AudioEndMs, StopMs, FinalMs, CpuSeconds, FirstUpdateMs = -1, FailedAtMs = -1, TooSlowAtMs = -1;
         public int UpdatesBeforeEnd, Windows;
         public long PeakAppBytes, PeakWorkerBytes;
         public string LiveAtEnd = "", LiveWords = "", Final = "";
@@ -40,7 +40,7 @@ internal static partial class Program
     /// recorder's 100 ms blocks arrive in real time, live windows go to the warm
     /// worker, stop drains live work, then the normal whole-recording pass runs.
     static async Task<TakeReport> FeedTake(string name, string audio, string mode, bool continuous, Whisper whisper, StateStore store, LivePreview preview,
-        Capsule capsule, Func<TakeReport, LiveRecognizer?, Task>? during = null, Action? eachBlock = null, Action<string>? typed = null)
+        Capsule capsule, Func<TakeReport, LiveRecognizer?, Task>? during = null, Action? eachBlock = null, Action<string>? typed = null, TimeSpan? windowLimit = null)
     {
         var report = new TakeReport { Name = name, Mode = LiveTextModes.Resolve(mode) };
         var trigger = new PFlow.Core.Trigger();
@@ -62,7 +62,8 @@ internal static partial class Program
                     }
                     typed?.Invoke(reconciler.Text);
                 }),
-                () => preview.Dispatcher.InvokeAsync(() => { report.FailedAtMs = clock.Elapsed.TotalMilliseconds; preview.SetNote("Live words stopped"); }));
+                () => preview.Dispatcher.InvokeAsync(() => { report.FailedAtMs = clock.Elapsed.TotalMilliseconds; preview.SetNote("Live words stopped"); }),
+                onTooSlow: () => preview.Dispatcher.InvokeAsync(() => { report.TooSlowAtMs = clock.Elapsed.TotalMilliseconds; preview.SetNote(LiveTake.TooSlowNote); }), windowLimit: windowLimit);
             live = recognizer; reconciler.Begin(recognizer.SessionName); preview.Begin();
         }
         capsule.Set(continuous ? PFlow.Core.Phase.Continuous : PFlow.Core.Phase.Recording);

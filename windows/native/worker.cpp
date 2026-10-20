@@ -1,6 +1,8 @@
 // MIT. Private stdin/stdout worker; no listener, transcript files, or console output.
-// Protocol PFW2: whole recordings (PFQ1) and live windows (PFS1, canceled by PFC1).
-// The live frames are documented in windows/PFlow.Core/LiveWorkerProtocol.cs.
+// Protocol PFW2 version 3: whole recordings (PFQ1, with progress frames while
+// the pass runs) and live windows (PFS1, canceled by PFC1). The hello carries
+// two thread counts: finished text, then live. Frames are documented in
+// windows/PFlow.Core/LiveWorkerProtocol.cs.
 #include "whisper.h"
 #include "common-whisper.h"
 #include <algorithm>
@@ -23,7 +25,7 @@
 #include <io.h>
 
 constexpr uint32_t kHello = 0x32574650, kWhole = 0x31514650, kLive = 0x31534650, kCancel = 0x31434650; // PFW2 PFQ1 PFS1 PFC1
-constexpr uint32_t kVersion = 2, kLiveResult = 4, kLiveError = 5;
+constexpr uint32_t kVersion = 3, kLiveResult = 4, kLiveError = 5, kProgress = 6;
 constexpr uint32_t kMaxLiveSamples = 30 * 16000, kMaxSegments = 512;
 constexpr size_t kMaxSegmentText = 4096, kMaxLiveText = 256 * 1024;
 
@@ -168,6 +170,22 @@ static void recognize_live(whisper_context * ctx, int threads, const Job & job) 
     metric(elapsed(start)); fflush(stdout);
 }
 
+// While the finished-text pass works, a progress frame goes out about once a
+// second from ggml's abort callback (called on the calling thread only), so the
+// app can tell a slow pass from a stuck worker and never ends a pass that is
+// still making progress. Failures here are ignored: the reply itself reports a
+// closed pipe. Nothing else writes to stdout during the pass.
+static Clock::time_point last_progress;
+static bool progress_beat(void *) {
+    auto now = Clock::now();
+    if (now - last_progress >= std::chrono::seconds(1)) {
+        last_progress = now;
+        uint32_t frame = kProgress;
+        if (fwrite(&frame, sizeof(frame), 1, stdout) == 1) fflush(stdout);
+    }
+    return false;
+}
+
 static void transcribe_file(whisper_context * ctx, int threads, const Job & job) {
     auto & audio = job.audio; auto & language = job.language; auto & prompt = job.prompt;
     if (language.empty() || language == "auto" || whisper_lang_id(language.c_str()) < 0) {
@@ -188,7 +206,8 @@ static void transcribe_file(whisper_context * ctx, int threads, const Job & job)
     params.initial_prompt = prompt.c_str();
     // All samples fit, with at least two seconds of padding. Long clips keep the full window.
     params.audio_ctx = samples.size() <= 8 * 16000 ? 512 : samples.size() <= 18 * 16000 ? 1024 : 0;
-    auto start = Clock::now();
+    params.abort_callback = progress_beat;
+    auto start = Clock::now(); last_progress = start;
     whisper_state * state = final_state_for(ctx, params.audio_ctx);
     if (!state || whisper_full_with_state(ctx, state, params, samples.data(), static_cast<int>(samples.size())) != 0) {
         put(3); put(std::string("Whisper could not transcribe this recording.")); fflush(stdout); return;
@@ -203,8 +222,9 @@ int main() {
     _setmode(_fileno(stdin), _O_BINARY); _setmode(_fileno(stdout), _O_BINARY);
     whisper_log_set(quiet, nullptr);
     try {
-        if (number() != kHello) return 2; // PFW2, protocol version 2.
-        int threads = std::clamp(static_cast<int>(number()), 1, 8);
+        if (number() != kHello) return 2; // PFW2, protocol version 3.
+        int threads = std::clamp(static_cast<int>(number()), 1, 8);      // finished-text pass
+        int live_threads = std::clamp(static_cast<int>(number()), 1, 8); // live windows, fewer so the final pass and the computer keep room
         auto model = text(32768); auto start = Clock::now();
         auto options = whisper_context_default_params(); options.use_gpu = false; options.flash_attn = true;
         // The C# lease pins the checked file. Filesystem paths retain Unicode on MinGW and MSVC.
@@ -229,7 +249,7 @@ int main() {
                 live_running = job.kind == kLive; running_session = job.session; running_sequence = job.sequence;
                 abort_live = live_running && pending_canceled; pending_canceled = false;
             }
-            if (job.kind == kLive) recognize_live(ctx.get(), threads, job); else transcribe_file(ctx.get(), threads, job);
+            if (job.kind == kLive) recognize_live(ctx.get(), live_threads, job); else transcribe_file(ctx.get(), threads, job);
             std::lock_guard<std::mutex> guard(state_lock);
             live_running = false; abort_live = false;
         }

@@ -68,7 +68,10 @@ for architecture, machine in machines.items():
     source = args.artifacts / 'payloads' / ('win-' + architecture)
     dest = stage / 'payloads' / source.name
     shutil.copytree(source, dest)
-    for name in ('pFlow.exe', 'engine/whisper-cli.exe', 'engine/pflow-whisper.exe'):
+    required = ['pFlow.exe', 'engine/whisper-cli.exe', 'engine/pflow-whisper.exe']
+    if architecture == 'x64':
+        required.append('engine/pflow-whisper-avx2.exe')  # chosen at run time on processors with AVX2 (SpeechEngine.Choose)
+    for name in required:
         assert pe(dest / name)[0] == machine, name
     for name in ('install-windows.ps1', 'WindowsArchitecture.ps1'):
         shutil.copyfile(scripts / name, dest / name)

@@ -11,16 +11,23 @@ internal sealed class LiveRecognizer
     readonly string language;
     readonly Action<TranscriptUpdate> onUpdate;
     readonly Action onFailure;
+    readonly Action? onTooSlow;
+    readonly TimeSpan windowLimit;
     readonly CancellationTokenSource stopping = new();
     readonly TimeSpan tick;
     Task? loop;
     internal LiveSession Session => session;
     internal string SessionName => session.Session.ToString();
 
-    internal LiveRecognizer(uint take, Whisper whisper, string language, Action<TranscriptUpdate> onUpdate, Action onFailure, TimeSpan? tick = null)
+    /// `onTooSlow` runs once when two windows in a row were slower than real time: live
+    /// words end for the take, the words shown stay, the final pass runs as usual.
+    /// `windowLimit` (default LiveSession.WindowLimitMs) cancels a window that runs too long; it then counts as slow.
+    internal LiveRecognizer(uint take, Whisper whisper, string language, Action<TranscriptUpdate> onUpdate, Action onFailure, TimeSpan? tick = null,
+        Action? onTooSlow = null, TimeSpan? windowLimit = null)
     {
         session = new LiveSession(take, clock: () => Environment.TickCount64); this.whisper = whisper; this.language = language;
         this.onUpdate = onUpdate; this.onFailure = onFailure; this.tick = tick ?? TimeSpan.FromMilliseconds(250);
+        this.onTooSlow = onTooSlow; this.windowLimit = windowLimit ?? TimeSpan.FromMilliseconds(LiveSession.WindowLimitMs);
     }
 
     /// 16-bit PCM from the recorder's writer thread (never the audio callback).
@@ -35,10 +42,13 @@ internal sealed class LiveRecognizer
                 await Task.Delay(tick, stopping.Token);
                 if (session.Next() is not { } request) continue;
                 IReadOnlyList<WhisperWindowSegment>? segments;
-                try { segments = await whisper.RecognizeLive(request, language, stopping.Token); }
+                // A window that outlives the limit is canceled (the worker keeps its warm model) and counts as slow.
+                using var window = CancellationTokenSource.CreateLinkedTokenSource(stopping.Token); window.CancelAfter(windowLimit);
+                try { segments = await whisper.RecognizeLive(request, language, window.Token); }
                 catch (Exception) when (!stopping.IsCancellationRequested) { session.Fail(); onFailure(); return; }
-                if (segments == null) { session.Abandon(request); continue; }
-                if (session.Complete(request, segments) is { } update) onUpdate(update);
+                if (segments == null) session.Abandon(request);
+                else if (session.Complete(request, segments) is { } update) onUpdate(update);
+                if (session.TooSlow) { onTooSlow?.Invoke(); return; }
             }
         } catch (OperationCanceledException) { }
         catch (Exception) { session.Fail(); }

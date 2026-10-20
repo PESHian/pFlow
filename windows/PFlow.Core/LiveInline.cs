@@ -376,7 +376,7 @@ public static class LiveInlineText
     public static string PreviewNote(LiveStop stop) => stop switch {
         LiveStop.Permission => "Can't type in an admin app",
         LiveStop.Secure => "Password field",
-        _ => "Can't type in this app"
+        _ => "Can't type here live. Words go in when you stop"
     };
 
     /// Shown in the preview when typing stops partway through a take.

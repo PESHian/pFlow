@@ -15,9 +15,13 @@ internal sealed class Whisper : IAsyncDisposable
     SpeechWorker? worker;
     internal SpeechMetrics LastMetrics { get; private set; }
     internal int? WorkerId => worker?.Id;
+    /// Progress frames the current worker sent during finished-text passes.
+    internal int WorkerHeartbeats => worker?.Heartbeats ?? 0;
     string DownloadPath => System.IO.Path.Combine(root, "ggml-small.bin");
     public string ModelPath => File.Exists(DownloadPath) ? DownloadPath : System.IO.Path.Combine(assets, "models", "ggml-small.bin");
-    public string Executable => System.IO.Path.Combine(assets, "engine", "pflow-whisper.exe");
+    /// The AVX2 build on x64 processors that have it, else the baseline build (one rule: SpeechEngine.Choose).
+    public string Executable => System.IO.Path.Combine(assets, "engine", SpeechEngine.Choose(
+        RuntimeInformation.ProcessArchitecture == Architecture.X64, Native.Avx2Ready, name => File.Exists(System.IO.Path.Combine(assets, "engine", name))));
     public bool FilesPresent => File.Exists(ModelPath) && File.Exists(Executable);
     public Whisper(string root, string? assetsRoot = null) { this.root = root; assets = assetsRoot ?? AppContext.BaseDirectory; }
     public async Task Verify(string path, CancellationToken cancel)
@@ -93,7 +97,8 @@ internal sealed class Whisper : IAsyncDisposable
             if (!File.Exists(Executable)) throw new FileNotFoundException("The Windows speech engine is missing. Install a complete pFlow package.");
             await EnsureWorker(lifetime.Token);
             Interlocked.Increment(ref liveRequests);
-            // A 15 s window took about a second on the ARM64 test VM; 30 s means the worker is stuck.
+            // The recognizer cancels a window after LiveSession.WindowLimitMs and the worker answers a
+            // cancel within milliseconds; 30 s without any reply means the worker is stuck.
             var response = await worker!.RecognizeLive(request, language, TimeSpan.FromSeconds(30), cancel);
             answered = true;
             if (response.Segments != null) return response.Segments;

@@ -80,6 +80,7 @@ internal sealed class LivePreview : Window
     }
 
     internal void SetNote(string value) { note = value; header.Text = value; }
+    internal string? Note => note;
 
     internal void Finishing() { if (note == null) header.Text = "Finishing…"; }
 

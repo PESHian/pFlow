@@ -14,6 +14,10 @@ internal static class Native
     [StructLayout(LayoutKind.Sequential)] internal struct PointerPoint { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] internal struct WindowBounds { public int Left, Top, Right, Bottom; }
     [DllImport("user32.dll")] internal static extern bool GetPhysicalCursorPos(out PointerPoint point);
+    /// The x64 AVX2 worker needs AVX2, FMA, BMI2 and F16C, with Windows saving their registers (.NET checks the OS for the first three).
+    internal static bool Avx2Ready => System.Runtime.Intrinsics.X86.Avx2.IsSupported && System.Runtime.Intrinsics.X86.Fma.IsSupported
+        && System.Runtime.Intrinsics.X86.Bmi2.IsSupported && F16C;
+    static bool F16C { get { if (!System.Runtime.Intrinsics.X86.X86Base.IsSupported) return false; var (_, _, ecx, _) = System.Runtime.Intrinsics.X86.X86Base.CpuId(1, 0); return (ecx & (1 << 29)) != 0; } }
     [DllImport("user32.dll")] internal static extern bool GetWindowRect(IntPtr window, out WindowBounds bounds);
     [DllImport("user32.dll")] internal static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
     internal delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);

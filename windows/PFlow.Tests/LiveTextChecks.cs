@@ -15,7 +15,7 @@ internal static class LiveTextChecks
     public static async Task<int> Run()
     {
         passed = 0;
-        TranscriptFixtures(); WindowFixtures(); Settings(); Scheduler(); Resting(); Recovery(); PreviewText(); Placement();
+        TranscriptFixtures(); WindowFixtures(); Settings(); Scheduler(); Resting(); Slowness(); Recovery(); PreviewText(); Placement();
         await Framing();
         Console.WriteLine($"{passed} live text checks passed.");
         return passed;
@@ -103,6 +103,55 @@ internal static class LiveTextChecks
             Check("an unknown saved Live text value loads as Off", new StateStore(directory).Preferences.LiveTextMode == LiveTextModes.Off);
             Check("Type in the current app also shows the preview", LiveTextModes.ShowsPreview(LiveTextModes.TypeInApp) && LiveTextModes.ShowsPreview(LiveTextModes.Preview) && !LiveTextModes.ShowsPreview("sideways"));
         } finally { Directory.Delete(directory, true); }
+    }
+
+    /// Two windows in a row slower than real time end live words for the take;
+    /// the words shown stay. A quick window in between starts the count over,
+    /// a window canceled at the limit counts, and a stop never counts.
+    static void Slowness()
+    {
+        static long AudioMs(LiveWindowRequest request) => (request.EndSample - request.StartSample) / LiveWindowPlanner.SamplesPerMs;
+        long now = 0; var take = new LiveSession(30, clock: () => now);
+        take.Append(Tone(2000)); var first = take.Next()!;
+        Check("the slow-window floor is three seconds", LiveSession.SlowWindowFloorMs == 3000 && AudioMs(first) == 2000);
+        now = 3001; take.Complete(first, [new(0, 2000, " Copper", .05)]);
+        Check("one slow window keeps live words going", !take.TooSlow && take.Text.Trim() == "Copper");
+        now = 7000; take.Append(Tone(5000)); var second = take.Next()!;
+        long limit = Math.Max(AudioMs(second), LiveSession.SlowWindowFloorMs);
+        now += limit; take.Complete(second, [new(0, 7000, " Copper kettle", .05)]);
+        Check("a window exactly as long as its audio is not slow", !take.TooSlow);
+        now += 2 * limit; take.Append(Tone(1000)); var third = take.Next()!;
+        now += Math.Max(AudioMs(third), LiveSession.SlowWindowFloorMs) + 1; take.Complete(third, [new(0, 8000, " Copper kettle lid", .05)]);
+        Check("slow, quick, slow is not two in a row", !take.TooSlow);
+        now += 100_000; take.Append(Tone(1000)); var fourth = take.Next()!;
+        now += Math.Max(AudioMs(fourth), LiveSession.SlowWindowFloorMs) + 1; take.Complete(fourth, [new(0, 9000, " Copper kettle lid on", .05)]);
+        Check("two slow windows in a row end live words and keep the words shown", take.TooSlow && take.Text.Trim() == "Copper kettle lid on" && !take.Failed);
+        now += 100_000; take.Append(Tone(2000));
+        Check("after that nothing more is planned for the take", take.Next() == null && !take.Busy);
+        Check("stopping still returns the words", take.Close().Trim() == "Copper kettle lid on");
+
+        // A window canceled at the limit (no result) counts as slow too.
+        long clock2 = 0; var canceled = new LiveSession(31, clock: () => clock2);
+        canceled.Append(Tone(1000)); var a = canceled.Next()!;
+        clock2 = LiveSession.WindowLimitMs; canceled.Abandon(a);
+        clock2 += LiveSession.WindowLimitMs; canceled.Append(Tone(1000)); var b = canceled.Next()!;
+        clock2 += 1; canceled.Abandon(b); // the recognizer's clock, not the session's, decides when a window is canceled
+        Check("two windows canceled at the limit end live words", canceled.TooSlow && LiveSession.WindowLimitMs == 10_000);
+
+        // A stop cancels the window in flight; that is not slowness and must not end anything for the next take.
+        long clock3 = 0; var stopped = new LiveSession(32, clock: () => clock3);
+        stopped.Append(Tone(1000)); var c0 = stopped.Next()!;
+        clock3 = LiveSession.SlowWindowFloorMs + 1; stopped.Complete(c0, [new(0, 1000, " Slow", .05)]); // one slow window
+        clock3 *= 2; stopped.Append(Tone(1000)); var c = stopped.Next()!;
+        clock3 += 50_000; stopped.Close(); stopped.Abandon(c);
+        Check("a window canceled by the stop does not count as a second slow window", !stopped.TooSlow);
+
+        // Fast machine: a 15 s window in 1 s on the test VM is far from slow.
+        long clock4 = 0; var quick = new LiveSession(33, clock: () => clock4);
+        quick.Append(Tone(15_000)); var d = quick.Next()!; clock4 = 1000; quick.Complete(d, [new(0, 15_000, " Harbor", .05)]);
+        clock4 = 3000; quick.Append(Tone(2000)); var e = quick.Next()!; clock4 = 4000; quick.Complete(e, [new(0, 17_000, " Harbor light", .05)]);
+        Check("quick windows never trip the slow rule", !quick.TooSlow && quick.Inferences == 2);
+        Check("the note tells the person what happens next", LiveTake.TooSlowNote.Contains("when you stop") && LiveTake.TooSlowNote.Length <= 60);
     }
 
     static short[] Tone(int milliseconds, double amplitude = .2) =>
@@ -255,21 +304,21 @@ internal static class LiveTextChecks
     {
         var request = LiveWorkerProtocol.EncodeRequest(3, 4, "es", new float[] { .5f, -.25f });
         Check("live request carries its magic, version, take and window", BinaryPrimitives.ReadUInt32LittleEndian(request) == 0x31534650
-            && BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(4)) == 2 && BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(8)) == 3 && BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(12)) == 4);
+            && BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(4)) == 3 && BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(8)) == 3 && BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(12)) == 4);
         Check("live request carries the language and samples exactly", request.Length == 20 + 2 + 4 + 8 && Encoding.UTF8.GetString(request, 20, 2) == "es"
             && BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(22)) == 2 && BinaryPrimitives.ReadSingleLittleEndian(request.AsSpan(26)) == .5f);
-        Check("cancel frame names its window", LiveWorkerProtocol.EncodeCancel(3, 4).SequenceEqual(Reply(0x31434650, 2, 3, 4, _ => { })));
+        Check("cancel frame names its window", LiveWorkerProtocol.EncodeCancel(3, 4).SequenceEqual(Reply(0x31434650, 3, 3, 4, _ => { })));
         bool Throws(Action action) { try { action(); return false; } catch (InvalidDataException) { return true; } }
         Check("empty and oversized windows are never sent", Throws(() => LiveWorkerProtocol.EncodeRequest(1, 1, "en", [])) && Throws(() => LiveWorkerProtocol.EncodeRequest(1, 1, "en", new float[30 * 16000 + 1])));
         Check("an empty or oversized language is never sent", Throws(() => LiveWorkerProtocol.EncodeRequest(1, 1, "", new float[1])) && Throws(() => LiveWorkerProtocol.EncodeRequest(1, 1, new string('e', 65), new float[1])));
 
         var (good, skipped) = await LiveWorkerProtocol.ReadReply(new MemoryStream(Result(1, 1, (0, 900, " Brave turtles"), (900, 1800, " 游泳"))), 1, 1, CancellationToken.None);
         Check("a well-formed reply is read", skipped == 0 && good.Segments!.Count == 2 && good.Segments[1].Text == " 游泳" && good.Segments[0].ToMs == 900 && good.Milliseconds == 12.5);
-        var error = Reply(LiveWorkerProtocol.Error, 2, 1, 1, writer => { var text = Encoding.UTF8.GetBytes("Canceled."); writer.Write(text.Length); writer.Write(text); });
+        var error = Reply(LiveWorkerProtocol.Error, LiveWorkerProtocol.Version, 1, 1, writer => { var text = Encoding.UTF8.GetBytes("Canceled."); writer.Write(text.Length); writer.Write(text); });
         var (canceled, _) = await LiveWorkerProtocol.ReadReply(new MemoryStream(error), 1, 1, CancellationToken.None);
         Check("an error reply is read as an error, not words", canceled.Segments == null && canceled.Error == "Canceled.");
 
-        Check("an older protocol version is rejected", await Rejected(Reply(LiveWorkerProtocol.Result, 1, 1, 1, writer => { writer.Write(0); writer.Write(1.0); })));
+        Check("an older protocol version is rejected", await Rejected(Reply(LiveWorkerProtocol.Result, 2, 1, 1, writer => { writer.Write(0); writer.Write(1.0); })));
         Check("a whole-recording reply where a live reply belongs is rejected", await Rejected(Reply(2, 2, 1, 1, writer => writer.Write(0))));
         Check("an unknown reply kind is rejected", await Rejected(Reply(9, 2, 1, 1, _ => { })));
         Check("garbage is rejected", await Rejected(Encoding.ASCII.GetBytes("not a pFlow worker reply at all")));

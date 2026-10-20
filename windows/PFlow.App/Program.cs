@@ -108,6 +108,7 @@ internal sealed partial class Program : Application
     LiveTyping? TypingFor(string? session) => session == null ? null
         : new LiveTyping(text => typing.Finalize(session, text), () => typing.Typed(session), () => typing.Cancel(session));
     void LiveStopped(LiveRecognizer owner) { if (ReferenceEquals(live, owner)) preview.SetNote("Live words stopped"); }
+    void LiveTooSlow(LiveRecognizer owner) { if (ReferenceEquals(live, owner)) preview.SetNote(LiveTake.TooSlowNote); }
     void EndLive()
     {
         var ending = live; live = null; transcript.Cancel(); preview.Clear();
@@ -146,7 +147,8 @@ internal sealed partial class Program : Application
                 if (LiveTextModes.ShowsPreview(mode)) {
                     LiveRecognizer recognizer = null!;
                     recognizer = new LiveRecognizer(unchecked((uint)sessionId), whisper, store.Preferences.Language,
-                        update => Dispatcher.InvokeAsync(() => ShowLive(recognizer, update)), () => Dispatcher.InvokeAsync(() => LiveStopped(recognizer)));
+                        update => Dispatcher.InvokeAsync(() => ShowLive(recognizer, update)), () => Dispatcher.InvokeAsync(() => LiveStopped(recognizer)),
+                        onTooSlow: () => Dispatcher.InvokeAsync(() => LiveTooSlow(recognizer)));
                     live = recognizer; transcript.Begin(recognizer.SessionName); preview.Begin();
                     if (mode == LiveTextModes.TypeInApp) {
                         // Checked against the field just captured, before any pFlow window shows.

@@ -50,7 +50,14 @@ internal static partial class Program
         string label = SpeedOption("label", "run");
         var rows = new List<Dictionary<string, object>>();
         try {
+            // cpus=N stands in for a computer with N logical processors: the worker is sized for N (final and live thread
+            // rules) and pinned to the first N, so it is slow the way a small machine is, not oversubscribed.
+            if (SpeedOption("cpus", "") is { Length: > 0 } cpus) SpeechWorker.LogicalProcessors = int.Parse(cpus);
             var warm = Stopwatch.StartNew(); await whisper.Prewarm(); double prewarmMs = warm.Elapsed.TotalMilliseconds;
+            if (SpeedOption("cpus", "") is { Length: > 0 } cores && whisper.WorkerId is int pid) {
+                var process = Process.GetProcessById(pid); process.ProcessorAffinity = (IntPtr)((1L << int.Parse(cores)) - 1);
+                Console.WriteLine($"SPEED-CPUS worker {pid} sized for {cores} processors, mask 0x{process.ProcessorAffinity.ToInt64():x}");
+            }
             var timing = new Dictionary<string, double>();
             var pipeline = new DictationPipeline(store, whisper, new LocalTextModel(directory, PackageAssets)) { Timing = (name, ms) => timing[name] = ms };
             int take = 0;
@@ -74,6 +81,7 @@ internal static partial class Program
                     ["stopToFinalMs"] = Math.Round(report.StopMs + report.FinalMs),
                     ["cpuSeconds"] = Math.Round(report.CpuSeconds, 2), ["cpuCores"] = Math.Round(report.CpuSeconds * 1000 / report.AudioMs, 2),
                     ["peakAppMB"] = report.PeakAppBytes / 1048576, ["peakWorkerMB"] = report.PeakWorkerBytes / 1048576,
+                    ["workerHeartbeats"] = whisper.WorkerHeartbeats, ["liveTooSlowMs"] = Math.Round(report.TooSlowAtMs),
                     ["final"] = report.Final, ["wordErrorRate"] = Math.Round(WordErrorRate(report.Final, reference), 4),
                     ["lastWordKept"] = Words(report.Final).Split(' ').LastOrDefault() == Words(reference).Split(' ').LastOrDefault(),
                 });
@@ -86,6 +94,9 @@ internal static partial class Program
                 foreach (string theme in new[] { "light", "dark" }) {
                     store.Preferences.Theme = theme; preview.ApplyTheme(); preview.Begin(); preview.SetNote(note); preview.ShowText("The ferry to Pebble Island leaves at seven forty.");
                     Render(preview, "typing-note-" + theme + "-100", 1, 1); Render(preview, "typing-note-" + theme + "-200", 2, 1);
+                    // The two notes added after the owner's live test: a field pFlow cannot type into live, and a computer too slow for live words.
+                    preview.SetNote(LiveInlineText.PreviewNote(LiveStop.Unsupported)); Render(preview, "web-note-" + theme + "-100", 1, 1); Render(preview, "web-note-" + theme + "-200", 2, 1);
+                    preview.SetNote(LiveTake.TooSlowNote); Render(preview, "slow-note-" + theme + "-100", 1, 1); Render(preview, "slow-note-" + theme + "-200", 2, 1);
                 }
                 preview.Clear();
             }

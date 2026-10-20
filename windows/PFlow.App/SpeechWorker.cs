@@ -20,6 +20,8 @@ internal sealed class SpeechWorker : IDisposable
         _ = Drain(process.StandardError.BaseStream);
     }
     static async Task Drain(Stream errors) { try { await errors.CopyToAsync(Stream.Null); } catch (IOException) { } catch (ObjectDisposedException) { } }
+    /// Processors the thread counts are sized for; the speed harness lowers it (with a matching affinity mask) to stand in for a small computer.
+    internal static int LogicalProcessors { get; set; } = Environment.ProcessorCount;
     internal static async Task<SpeechWorker> Start(string executable, string model, CancellationToken cancel)
     {
         // Keep the checked file open without write/delete sharing for the worker's entire life.
@@ -33,7 +35,8 @@ internal sealed class SpeechWorker : IDisposable
             worker = new(lease, Process.Start(info) ?? throw new IOException("The speech engine could not start."));
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancel); timeout.CancelAfter(TimeSpan.FromSeconds(30));
             using var kill = timeout.Token.Register(worker.Abort);
-            await worker.Send(writer => { writer.Write(LiveWorkerProtocol.Hello); writer.Write(Math.Clamp(Environment.ProcessorCount - 1, 1, 8)); WriteText(writer, model, 32768); }, timeout.Token);
+            int finalThreads = SpeechThreads.Final(LogicalProcessors), liveThreads = SpeechThreads.Live(LogicalProcessors);
+            await worker.Send(writer => { writer.Write(LiveWorkerProtocol.Hello); writer.Write(finalThreads); writer.Write(liveThreads); WriteText(writer, model, 32768); }, timeout.Token);
             uint kind = await worker.Number(timeout.Token);
             if (kind == 3) throw new IOException(await worker.Text(timeout.Token));
             if (kind != 1) throw new IOException("The speech engine sent an invalid response.");
@@ -68,17 +71,32 @@ internal sealed class SpeechWorker : IDisposable
         uint size = await Number(cancel); if (size > 2 * 1024 * 1024) throw new IOException("The speech engine sent an invalid result.");
         return new UTF8Encoding(false, true).GetString(await Read((int)size, cancel));
     }
+    /// How long the finished-text pass may go without a progress frame before
+    /// the worker counts as stuck. The worker sends one about every second
+    /// while whisper computes, so a slow processor is never mistaken for a
+    /// stuck one; the pass as a whole has no fixed time limit here.
+    internal static TimeSpan StallLimit { get; set; } = TimeSpan.FromSeconds(60);
+    internal const string Stalled = "The speech engine stopped answering. Try again.";
+    /// Progress frames received during finished-text passes.
+    internal int Heartbeats { get; private set; }
     internal async Task<(string Text, SpeechMetrics Metrics)> Transcribe(string audio, string language, string prompt, CancellationToken cancel)
     {
-        using var kill = cancel.Register(Abort);
-        await Send(writer => { writer.Write(0x31514650u); WriteText(writer, audio, 32768); WriteText(writer, language, 64); WriteText(writer, prompt, 8192); }, cancel);
-        uint kind = await Number(cancel);
-        if (kind == 3) throw new IOException(await Text(cancel));
-        if (kind != 2) throw new IOException("The speech engine sent an invalid response.");
-        string text = await Text(cancel);
-        double recognition = await Metric(cancel), encode = await Metric(cancel), decode = await Metric(cancel);
-        int context = checked((int)await Number(cancel)); cancel.ThrowIfCancellationRequested();
-        return (text, new(false, 0, recognition, encode, decode, context));
+        using var stall = CancellationTokenSource.CreateLinkedTokenSource(cancel); stall.CancelAfter(StallLimit);
+        var token = stall.Token;
+        using var kill = token.Register(Abort);
+        try {
+            await Send(writer => { writer.Write(0x31514650u); WriteText(writer, audio, 32768); WriteText(writer, language, 64); WriteText(writer, prompt, 8192); }, token);
+            uint kind;
+            while ((kind = await Number(token)) == LiveWorkerProtocol.Progress) { Heartbeats++; stall.CancelAfter(StallLimit); }
+            if (kind == 3) throw new IOException(await Text(token));
+            if (kind != 2) throw new IOException("The speech engine sent an invalid response.");
+            string text = await Text(token);
+            double recognition = await Metric(token), encode = await Metric(token), decode = await Metric(token);
+            int context = checked((int)await Number(token)); token.ThrowIfCancellationRequested();
+            return (text, new(false, 0, recognition, encode, decode, context));
+        } catch (Exception error) when (error is OperationCanceledException or IOException && token.IsCancellationRequested && !cancel.IsCancellationRequested) {
+            throw new IOException(Stalled, error);
+        }
     }
     /// One live window. A cancel asks the worker to stop this window and still
     /// waits for its reply, so the pipe stays in step and the warm model is kept.

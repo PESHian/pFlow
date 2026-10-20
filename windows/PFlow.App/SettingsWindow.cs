@@ -40,7 +40,9 @@ internal sealed partial class SettingsWindow : Window
     static StackPanel Panel() => new() { Margin = new Thickness(20) };
     static TextBlock Text(string value) => new() { Text = value, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 5), LineHeight = 19 };
     static Button Button(string label, Action click) { var b = new Button { Content = label, Margin = new Thickness(0, 4, 0, 4), HorizontalAlignment = HorizontalAlignment.Left }; b.Click += (_, _) => click(); return b; }
-    static ScrollViewer Scroll(UIElement content) => new() { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = content };
+    /// Pages, lists and long text boxes scroll by touch (drag or pan) as well as by wheel and keyboard.
+    internal static T Pannable<T>(T element) where T : DependencyObject { ScrollViewer.SetPanningMode(element, PanningMode.VerticalOnly); return element; }
+    internal static ScrollViewer Scroll(UIElement content) => Pannable(new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = content });
     internal void OpenHistoryPage() => ShowPage("View history", History, true);
     void ShowHome() { cancelKeySelection?.Invoke(); page.Content = home; }
     void ShowPage(string title, Func<UIElement> create, bool cache)
@@ -231,9 +233,9 @@ internal sealed partial class SettingsWindow : Window
     UIElement Dictionary()
     {
         var p = Panel(); p.Children.Add(Text("Learned terms bias Whisper. Exact replacements change only whole words or phrases and never cascade."));
-        var terms = new TextBox { Text = string.Join("\n", store.Preferences.DictionaryTerms), AcceptsReturn = true, Height = 100, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }; p.Children.Add(terms);
+        var terms = Pannable(new TextBox { Text = string.Join("\n", store.Preferences.DictionaryTerms), AcceptsReturn = true, Height = 100, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }); p.Children.Add(terms);
         p.Children.Add(Button("Save learned terms", () => { store.Preferences.DictionaryTerms = terms.Text.Split('\n').Select(x => x.Trim()).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList(); Save(); }));
-        var list = new ListBox { Height = 150 }; void Refresh() => list.ItemsSource = store.Preferences.DictionaryReplacements.Select(x => $"{x.Heard} → {x.Replacement}").ToList(); Refresh(); p.Children.Add(list);
+        var list = Pannable(new ListBox { Height = 150 }); void Refresh() => list.ItemsSource = store.Preferences.DictionaryReplacements.Select(x => $"{x.Heard} → {x.Replacement}").ToList(); Refresh(); p.Children.Add(list);
         p.Children.Add(Text("Heard")); var heard = new TextBox(); p.Children.Add(heard); p.Children.Add(Text("Replace with")); var replacement = new TextBox(); p.Children.Add(replacement);
         p.Children.Add(Button("Save replacement", () => { if (string.IsNullOrWhiteSpace(heard.Text) || string.IsNullOrWhiteSpace(replacement.Text)) return; var entry = store.Preferences.DictionaryReplacements.FirstOrDefault(x => x.Heard.Equals(heard.Text.Trim(), StringComparison.OrdinalIgnoreCase)); if (entry == null) store.Preferences.DictionaryReplacements.Insert(0, new() { Heard = heard.Text.Trim(), Replacement = replacement.Text.Trim() }); else entry.Replacement = replacement.Text.Trim(); Save(); Refresh(); }));
         p.Children.Add(Button("Delete selected replacement", () => { if (list.SelectedIndex >= 0) { store.Preferences.DictionaryReplacements.RemoveAt(list.SelectedIndex); Save(); Refresh(); } }));
@@ -244,7 +246,7 @@ internal sealed partial class SettingsWindow : Window
         var p = Panel(); p.Children.Add(Text("Create your own templates, or use plain dictation without a format. Give a new template a name, then edit and save its sections below."));
         var picker = new ComboBox { DisplayMemberPath = "Name", ItemsSource = store.Preferences.Templates, SelectedItem = store.Preferences.Templates.FirstOrDefault(x => x.Id == store.Preferences.ActiveTemplateId) }; System.Windows.Automation.AutomationProperties.SetName(picker, "Your templates"); p.Children.Add(picker);
         var empty = Text("No templates yet. Create one below whenever you need it."); empty.Visibility = store.Preferences.Templates.Count == 0 ? Visibility.Visible : Visibility.Collapsed; p.Children.Add(empty);
-        var editor = new TextBox { AcceptsReturn = true, AcceptsTab = true, FontFamily = new FontFamily("Consolas"), Height = 280, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto };
+        var editor = Pannable(new TextBox { AcceptsReturn = true, AcceptsTab = true, FontFamily = new FontFamily("Consolas"), Height = 280, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto });
         p.Children.Add(Text("Template name")); var name = new TextBox(); System.Windows.Automation.AutomationProperties.SetName(name, "Template name"); p.Children.Add(name);
         var create = Button("New template", () => { var t = new DictationTemplate { Name = name.Text.Trim(), Sections = [new() { Title = "Narrative", IncludeFullDictation = true }] }; editor.Text = JsonSerializer.Serialize(t, StateStore.Json); });
         create.IsEnabled = false; name.TextChanged += (_, _) => create.IsEnabled = !string.IsNullOrWhiteSpace(name.Text); p.Children.Add(create);
@@ -264,8 +266,8 @@ internal sealed partial class SettingsWindow : Window
     }
     UIElement History()
     {
-        var p = Panel(); var list = new ListBox { Height = 180, DisplayMemberPath = "CreatedAt", ItemsSource = store.History.ToList() }; p.Children.Add(list);
-        var text = new TextBox { AcceptsReturn = true, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, Height = 230, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }; p.Children.Add(text);
+        var p = Panel(); var list = Pannable(new ListBox { Height = 180, DisplayMemberPath = "CreatedAt", ItemsSource = store.History.ToList() }); p.Children.Add(list);
+        var text = Pannable(new TextBox { AcceptsReturn = true, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, Height = 230, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }); p.Children.Add(text);
         var result = Text(""); p.Children.Add(result);
         list.SelectionChanged += (_, _) => { if (list.SelectedItem is Transcript t) { text.Text = t.Text; result.Text = t.InsertionStatus; } };
         p.Children.Add(Button("Copy selected dictation", () => { if (list.SelectedItem is Transcript t) Clipboard.SetText(t.Text); }));

@@ -90,6 +90,13 @@ public sealed class LiveSession(uint session, LiveWindowPlanner? planner = null,
     /// 3.0-3.5 cores busy; resting cut that to 2.0-2.2, first words unchanged
     /// at about 1.7 s, updates every 1.5-1.8 s instead of about 1.1 s.
     public const double RestRatio = 1.0;
+    /// A window that takes longer than the audio it covers (and longer than
+    /// `SlowWindowFloorMs`) means this computer cannot keep up with live words.
+    /// Two such windows in a row end live recognition for the take (`TooSlow`):
+    /// the words shown stay, and the finished text still comes from the final
+    /// pass, which then has the processor to itself. A window still running
+    /// after `WindowLimitMs` is canceled by the recognizer and counts as slow.
+    public const int SlowWindowFloorMs = 3000, WindowLimitMs = 10_000, SlowWindowsBeforeStop = 2;
 
     readonly object sync = new();
     readonly Func<long>? clock = clock;
@@ -103,6 +110,9 @@ public sealed class LiveSession(uint session, LiveWindowPlanner? planner = null,
     public uint Session { get; } = session;
     public bool Closed { get; private set; }
     public bool Failed { get; private set; }
+    /// Live words ended for this take because two windows in a row were slower than real time.
+    public bool TooSlow { get; private set; }
+    int slowRun;
     public int Inferences { get; private set; }
     public int SilentWindows { get; private set; }
     public int RingCapacity => ring.Capacity;
@@ -118,7 +128,7 @@ public sealed class LiveSession(uint session, LiveWindowPlanner? planner = null,
     public LiveWindowRequest? Next()
     {
         lock (sync) {
-            if (Closed || Failed || inFlight != null) return null;
+            if (Closed || Failed || TooSlow || inFlight != null) return null;
             long now = clock?.Invoke() ?? 0;
             if (now < restUntil) return null;
             if (planner.Next(ring.Total, merger.CommittedEndMs, lastEndSample) is not var (start, end)) return null;
@@ -139,26 +149,33 @@ public sealed class LiveSession(uint session, LiveWindowPlanner? planner = null,
         lock (sync) {
             if (!ReferenceEquals(request, inFlight) || request.Session != Session) return null;
             inFlight = null;
-            Rest();
+            Rest(request, canceled: false);
             if (Closed || Failed) return null;
             return merger.Apply(request.Window(segments)) ? new TranscriptUpdate(Session.ToString(), request.Sequence, merger.Text, false) : null;
         }
     }
 
-    /// Called under `sync` when the window in flight ends, however it ended.
-    void Rest()
+    /// Called under `sync` when the window in flight ends, however it ended. A
+    /// window the recognizer canceled while the take was still going was at
+    /// its time limit, so it counts as slow whatever the clock says.
+    void Rest(LiveWindowRequest ended, bool canceled)
     {
-        long now = clock?.Invoke() ?? 0;
-        restUntil = now + (long)(Math.Max(0, now - inFlightSince) * RestRatio);
+        long now = clock?.Invoke() ?? 0, took = Math.Max(0, now - inFlightSince);
+        restUntil = now + (long)(took * RestRatio);
+        // Replays have no clock; a window canceled because the take stopped says nothing about speed.
+        if (clock == null || Closed) return;
+        long audioMs = (ended.EndSample - ended.StartSample) / LiveWindowPlanner.SamplesPerMs;
+        if (canceled || took > Math.Max(audioMs, SlowWindowFloorMs)) { if (++slowRun >= SlowWindowsBeforeStop) TooSlow = true; }
+        else slowRun = 0;
     }
 
-    /// The window was abandoned (canceled); a later one may run, after the same rest.
+    /// The window was canceled (the take stopped, or it reached the time limit); a later one may run, after the same rest.
     public void Abandon(LiveWindowRequest request)
     {
         lock (sync) {
             if (!ReferenceEquals(request, inFlight)) return;
             inFlight = null;
-            Rest();
+            Rest(request, canceled: true);
         }
     }
 
@@ -176,6 +193,8 @@ public sealed class LiveSession(uint session, LiveWindowPlanner? planner = null,
 public static class LiveTake
 {
     public const string KeptStatus = "Kept in History. Recognition stopped before it finished, so nothing was typed.";
+    /// Preview note when live words end because the computer cannot keep up.
+    public const string TooSlowNote = "Live words stopped: too slow here. Words go in when you stop";
 
     /// Words worth keeping after the final pass failed, or null.
     public static string? Recoverable(string? live) => string.IsNullOrWhiteSpace(live) ? null : live.Trim();

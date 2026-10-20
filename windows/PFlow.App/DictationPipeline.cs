@@ -21,7 +21,10 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         state(Phase.Processing, "Transcribing");
         string raw;
         using (var transcription = CancellationTokenSource.CreateLinkedTokenSource(cancel)) {
-            transcription.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(seconds * 2 + 30, 30, 3600)));
+            // The worker reports progress about once a second and SpeechWorker ends one that goes
+            // quiet (StallLimit), so a slow processor is never cut off while it is still working.
+            // This outer limit only bounds the whole wait: ten times the recording plus two minutes.
+            transcription.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(seconds * 10 + 120, 120, 3600)));
             try { raw = await Measure("recognitionMs", () => whisper.Transcribe(audio, store.Preferences.Language, store.Preferences.DictionaryTerms, transcription.Token)); }
             catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { throw new RecognitionFailure("Transcription took too long. Try a shorter recording.", null); }
             catch (Exception error) when (error is not OperationCanceledException) { throw new RecognitionFailure(error.Message, error); }
