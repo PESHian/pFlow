@@ -15,6 +15,13 @@ final class TranscriptionService: StreamingTranscriber {
     private var finalized = ""
     private var volatile = ""
     private var recognitionFailed = false
+    private let reportingOptions: Set<SpeechTranscriber.ReportingOption>
+
+    /// `fastResults` asks Apple Speech for quicker, less settled live words.
+    /// Timing runs compare it with the default; see the speed table in the ledger.
+    init(fastResults: Bool = false) {
+        reportingOptions = fastResults ? [.volatileResults, .fastResults] : [.volatileResults]
+    }
 
     /// The supported locale to transcribe `locale` with, or nil if this engine
     /// covers none of it. The returned locale is what must be handed to
@@ -41,7 +48,7 @@ final class TranscriptionService: StreamingTranscriber {
         let transcriber = SpeechTranscriber(
             locale: locale,
             transcriptionOptions: [],
-            reportingOptions: [.volatileResults],
+            reportingOptions: reportingOptions,
             attributeOptions: [.audioTimeRange]
         )
         self.transcriber = transcriber

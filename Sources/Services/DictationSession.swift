@@ -24,13 +24,30 @@ extension DictationSessioning {
     }
 }
 
+/// Where a take's audio comes from: the microphone in the app, a recording
+/// played in real time in timing runs.
+protocol AudioCapturing: AnyObject {
+    /// Called on the audio thread for each captured buffer.
+    var onBuffer: ((AVAudioPCMBuffer) -> Void)? { get set }
+    /// Called on the audio thread with a normalized 0...1 level.
+    var onLevel: ((Float) -> Void)? { get set }
+    func start() throws
+    func stop()
+    func pause()
+    func resume() throws
+}
+
+extension AudioCaptureService: AudioCapturing {}
+
 @MainActor
 final class DictationSession: DictationSessioning {
     var onLevel: ((Float) -> Void)?
     var onTranscript: ((TranscriptUpdate) -> Void)?
     var onLiveStopped: (() -> Void)?
 
-    private let capture = AudioCaptureService()
+    private let capture: AudioCapturing
+    private let whisperModel: URL
+    private let appleEngine: () -> StreamingTranscriber
     private let relay = AudioBufferRelay()
     private var transcriber: StreamingTranscriber?
     private var feed: LiveTranscriptFeed?
@@ -59,8 +76,13 @@ final class DictationSession: DictationSessioning {
     /// the first keypress.
     private static var cachedResolution: Resolution?
 
-    init(locale: Locale = .current) {
+    init(locale: Locale = .current, capture: AudioCapturing = AudioCaptureService(),
+         whisperModel: URL = WhisperModelStore.modelURL,
+         appleEngine: @escaping () -> StreamingTranscriber = { TranscriptionService() }) {
         self.locale = locale
+        self.capture = capture
+        self.whisperModel = whisperModel
+        self.appleEngine = appleEngine
     }
 
     /// Switch dictation language while idle. Clears the resolved cache so the
@@ -89,7 +111,7 @@ final class DictationSession: DictationSessioning {
         let feed = LiveTranscriptFeed(session: take) { [weak self] update in self?.onTranscript?(update) }
         self.feed = feed
         let choice = selectedEngine()
-        if choice == .whisper, !WhisperModelStore.hasModel(at: WhisperModelStore.modelURL) {
+        if choice == .whisper, !WhisperModelStore.hasModel(at: whisperModel) {
             throw WhisperError.modelNeeded
         }
         // Open the microphone FIRST. Preparing the speech stack takes a moment,
@@ -123,8 +145,9 @@ final class DictationSession: DictationSessioning {
             throw TranscriptionError.unsupportedLocale
         }
 
-        let engine: StreamingTranscriber = choice == .apple ? TranscriptionService()
-            : WhisperTranscriber(liveWorker: live ? { WhisperLiveProcess() } : nil)
+        let model = whisperModel
+        let engine: StreamingTranscriber = choice == .apple ? appleEngine()
+            : WhisperTranscriber(modelURL: model, liveWorker: live ? { WhisperLiveProcess(model: model) } : nil)
         engine.onTranscript = { text in feed.post(text) }
         engine.onLiveStopped = { [weak self] in
             Task { @MainActor in
