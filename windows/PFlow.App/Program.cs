@@ -209,7 +209,10 @@ internal sealed partial class Program : Application
             if (processing) {
                 var speech = whisper.LastMetrics;
                 timing["warmModelReused"] = speech.Reused ? 1 : 0; timing["modelInitializationMs"] = speech.InitializationMs;
-                timing["nativeRecognitionMs"] = speech.RecognitionMs; timing["encoderMs"] = speech.EncodeMs; timing["decoderMs"] = speech.DecodeMs; timing["audioContextFrames"] = speech.AudioContext;
+                timing["nativeRecognitionMs"] = speech.RecognitionMs; timing["audioContextFrames"] = speech.AudioContext;
+                // The worker sends 0 for stages it cannot measure (each finished pass has its own state).
+                if (speech.EncodeMs > 0) timing["encoderMs"] = speech.EncodeMs;
+                if (speech.DecodeMs > 0) timing["decoderMs"] = speech.DecodeMs;
             }
             // One private, overwritten timing record. No words, audio, paths, or application names.
             try { store.Write("last-processing-times.json", timing); } catch (IOException) { } catch (UnauthorizedAccessException) { }

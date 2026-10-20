@@ -104,14 +104,17 @@ static void read_requests() {
     state_changed.notify_one();
 }
 
-// Live windows run on their own whisper_state over the same loaded model; the
-// finished-text pass only ever uses the context's own state, exactly as with
-// Live text off. A shared state let live windows change the finished text: a
-// live window's shorter audio context lays the cross-attention cache out
+// Every pass gets a state of its own over the one loaded model; the context
+// itself holds none. A shared state let one pass change the next pass's text:
+// a pass with a shorter audio context lays the cross-attention cache out
 // differently, and a full 30 s pass reads the padding after its 1500 frames
-// (flash attention, no mask), where those windows had left their values.
-// The live state is made by the first live window and then kept, so later
-// takes neither wait for it nor pay to free it before their finished text.
+// (flash attention, no mask), where the shorter pass had left its values.
+// That happened both with live windows before the finished text and with a
+// short take before a long one. The finished-text pass therefore makes a new,
+// zeroed state each time and frees it after its reply, so its text never
+// depends on an earlier take. Live windows keep one state of their own, made
+// by the first window and then kept, so later windows neither wait for it nor
+// pay to free it before their finished text.
 using State = std::unique_ptr<whisper_state, decltype(&whisper_free_state)>;
 static State live_state(nullptr, whisper_free_state);
 
@@ -172,14 +175,15 @@ static void transcribe_file(whisper_context * ctx, int threads, const Job & job)
     params.initial_prompt = prompt.c_str();
     // All samples fit, with at least two seconds of padding. Long clips keep the full window.
     params.audio_ctx = samples.size() <= 8 * 16000 ? 512 : samples.size() <= 18 * 16000 ? 1024 : 0;
-    whisper_reset_timings(ctx); auto start = Clock::now();
-    if (whisper_full(ctx, params, samples.data(), static_cast<int>(samples.size())) != 0) {
+    auto start = Clock::now();
+    State state(whisper_init_state(ctx), whisper_free_state); // Freed after the reply is sent.
+    if (!state || whisper_full_with_state(ctx, state.get(), params, samples.data(), static_cast<int>(samples.size())) != 0) {
         put(3); put(std::string("Whisper could not transcribe this recording.")); fflush(stdout); return;
     }
     std::string result;
-    for (int i = 0; i < whisper_full_n_segments(ctx); i++) { if (i) result += '\n'; result += whisper_full_get_segment_text(ctx, i); }
-    auto timing = whisper_get_timings(ctx);
-    put(2); put(result); metric(elapsed(start)); metric(timing->encode_ms); metric(timing->decode_ms + timing->batchd_ms + timing->prompt_ms); put(static_cast<uint32_t>(params.audio_ctx)); fflush(stdout);
+    for (int i = 0; i < whisper_full_n_segments_from_state(state.get()); i++) { if (i) result += '\n'; result += whisper_full_get_segment_text_from_state(state.get(), i); }
+    // whisper.cpp reports encoder/decoder timings only for a context's own state, so they are sent as 0 (not measured).
+    put(2); put(result); metric(elapsed(start)); metric(0); metric(0); put(static_cast<uint32_t>(params.audio_ctx)); fflush(stdout);
 }
 
 int main() {
@@ -197,7 +201,7 @@ int main() {
         loader.read = [](void * user, void * data, size_t size) -> size_t { auto & file = *static_cast<std::ifstream *>(user); file.read(static_cast<char *>(data), size); return static_cast<size_t>(file.gcount()); };
         loader.eof = [](void * user) { return static_cast<std::ifstream *>(user)->eof(); };
         loader.close = [](void * user) { static_cast<std::ifstream *>(user)->close(); };
-        std::unique_ptr<whisper_context, decltype(&whisper_free)> ctx(whisper_init_with_params(&loader, options), whisper_free);
+        std::unique_ptr<whisper_context, decltype(&whisper_free)> ctx(whisper_init_with_params_no_state(&loader, options), whisper_free);
         if (!ctx) { put(3); put(std::string("Speech model could not load.")); fflush(stdout); return 3; }
         put(1); metric(elapsed(start)); put(kVersion); fflush(stdout);
         std::thread(read_requests).detach();

@@ -190,24 +190,35 @@ internal static partial class Program
             await whisper.Prewarm();
             int? worker = whisper.WorkerId;
             var bytes = File.ReadAllBytes(audio); int data = bytes.AsSpan().IndexOf("data"u8) + 8;
-            // Live windows must not change the finished text. These recordings are long enough for the
-            // full 30 s context; the live windows use shorter ones on the same loaded model. When they
-            // shared one state, 13 of 21 such pairs changed (S6b).
             var all = MemoryMarshal.Cast<byte, short>(bytes.AsSpan(data, (bytes.Length - data) & ~1)).ToArray();
+            string Recording(string name, short[] pcm) {
+                string path = Path.Combine(directory, "public-sample-" + name + ".wav"); var file = new byte[data + pcm.Length * 2];
+                bytes.AsSpan(0, data).CopyTo(file); MemoryMarshal.AsBytes(pcm.AsSpan()).CopyTo(file.AsSpan(data));
+                BitConverter.TryWriteBytes(file.AsSpan(4), file.Length - 8); BitConverter.TryWriteBytes(file.AsSpan(data - 4), pcm.Length * 2);
+                File.WriteAllBytes(path, file); return path;
+            }
+            // Two recordings long enough for the full 30 s context, each with the live windows run before it is finished again.
+            var longTakes = new[] { (Path: Recording("three-times", all.Concat(all).Concat(all).ToArray()), Windows: new[] { (0, 3), (0, 6), (0, 10) }),
+                                    (Path: Recording("part-then-whole", all[..(9 * 16000)].Concat(all).ToArray()), Windows: new[] { (2, 7), (1, 9) }) };
+            var alone = new List<string>();
+            foreach (var take in longTakes) alone.Add(await whisper.Transcribe(take.Path, "en", [], deadline.Token));
+            // An earlier, shorter take must not change a later take's finished text. Shorter takes use a smaller
+            // audio context; when every finished pass shared one state they left values a 30 s pass reads (S6c).
+            foreach (var (name, seconds) in new[] { ("first-4s", 4), ("first-7s", 7), ("whole", 0) }) {
+                string shorter = seconds == 0 ? audio : Recording(name, all[..(seconds * 16000)]);
+                Check($"shorter take is recognized first ({name})", (await whisper.Transcribe(shorter, "en", [], deadline.Token)).Length > 0);
+                for (int i = 0; i < longTakes.Length; i++)
+                    Check($"a shorter take leaves the next finished text unchanged ({name}, long {i + 1})", await whisper.Transcribe(longTakes[i].Path, "en", [], deadline.Token) == alone[i]);
+            }
+            // Live windows must not change the finished text either. When they shared one state, 13 of 21 such pairs changed (S6b).
             uint sequence = 0;
-            foreach (var (name, pcmLong, windows) in new[] { ("three-times", all.Concat(all).Concat(all).ToArray(), new[] { (0, 3), (0, 6), (0, 10) }),
-                                                             ("part-then-whole", all[..(9 * 16000)].Concat(all).ToArray(), new[] { (2, 7), (1, 9) }) }) {
-                string path = Path.Combine(directory, "public-sample-" + name + ".wav"); var file = new byte[data + pcmLong.Length * 2];
-                bytes.AsSpan(0, data).CopyTo(file); MemoryMarshal.AsBytes(pcmLong.AsSpan()).CopyTo(file.AsSpan(data));
-                BitConverter.TryWriteBytes(file.AsSpan(4), file.Length - 8); BitConverter.TryWriteBytes(file.AsSpan(data - 4), pcmLong.Length * 2);
-                File.WriteAllBytes(path, file);
-                string alone = await whisper.Transcribe(path, "en", [], deadline.Token);
-                foreach (var (start, end) in windows) {
+            for (int i = 0; i < longTakes.Length; i++) {
+                foreach (var (start, end) in longTakes[i].Windows) {
                     var samples = all[(start * 16000)..(end * 16000)].Select(x => x / 32768f).ToArray();
                     await whisper.RecognizeLive(new LiveWindowRequest(7, ++sequence, 0, samples.Length, samples), "en", deadline.Token);
                 }
-                string afterLive = await whisper.Transcribe(path, "en", [], deadline.Token);
-                Check($"live windows leave the finished text unchanged ({name})", afterLive == alone && alone.Length > 0 && whisper.WorkerId == worker);
+                string afterLive = await whisper.Transcribe(longTakes[i].Path, "en", [], deadline.Token);
+                Check($"live windows leave the finished text unchanged (long {i + 1})", afterLive == alone[i] && alone[i].Length > 0 && whisper.WorkerId == worker);
             }
             string first = await whisper.Transcribe(audio, "en", [], deadline.Token);
             string words = string.Join(" ", first.ToLowerInvariant().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));

@@ -685,7 +685,7 @@ internal static partial class Program
                 Check(name + " reuses the verified worker", metrics.Reused && whisper.WorkerId == id && metrics.InitializationMs < 100);
                 Check(name + " recognition completes faster", elapsed < baseline);
                 ratios.Add(baseline / elapsed);
-                Console.WriteLine($"{name}: original={baseline:F0}ms warm={elapsed:F0}ms speedup={baseline/elapsed:F1}x context={metrics.AudioContext} encode={metrics.EncodeMs:F0}ms decode={metrics.DecodeMs:F0}ms");
+                Console.WriteLine($"{name}: original={baseline:F0}ms warm={elapsed:F0}ms speedup={baseline/elapsed:F1}x context={metrics.AudioContext}");
             }
             Check("short and medium speech gain at least twofold", ratios.Take(2).All(ratio => ratio >= 2));
             using (var cancel = new CancellationTokenSource()) {
