@@ -236,6 +236,10 @@ internal static class LiveInlineChecks
 
     static void Notes()
     {
+        Check("the typing note uses the app's own name", LiveInlineText.TypingNote("Notepad", "Microsoft Windows Operating System", "notepad") == "Typing in Notepad");
+        Check("without a description it uses the product name", LiveInlineText.TypingNote("  ", "Fictional Writer", "fwriter") == "Typing in Fictional Writer");
+        Check("without either it uses the program name", LiveInlineText.TypingNote(null, null, "notepad") == "Typing in notepad" && LiveInlineText.TypingNote(null, "", "") == "Typing in this app");
+        Check("a long or odd app name is cleaned and shortened", LiveInlineText.TypingNote("Fictional\u0007 " + new string('x', 80), null, "f") is var note && note.Length == "Typing in ".Length + 61 && note.EndsWith('…') && !note.Contains('\u0007'));
         foreach (var stop in Enum.GetValues<LiveStop>()) {
             Check($"{stop} has a short stopped note", LiveInlineText.StoppedNote(stop).Length is > 0 and <= 26);
             Check($"{stop} has a short preview note", LiveInlineText.PreviewNote(stop).Length is > 0 and <= 26);

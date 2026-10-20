@@ -152,7 +152,7 @@ internal sealed partial class Program : Application
                         // Checked against the field just captured, before any pFlow window shows.
                         var refused = typing.Begin(recognizer.SessionName, target.LiveField());
                         if (refused == null) typingSession = recognizer.SessionName;
-                        preview.SetNote(refused is LiveStop stop ? LiveInlineText.PreviewNote(stop) : "Typing in " + target.ApplicationName);
+                        preview.SetNote(refused is LiveStop stop ? LiveInlineText.PreviewNote(stop) : target.TypingNote);
                     }
                 }
                 recorder = new WaveRecorder(Path.Combine(sessionDirectory, "audio.wav"), live == null ? null : live.Append);

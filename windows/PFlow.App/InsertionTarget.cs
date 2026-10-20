@@ -27,12 +27,37 @@ internal sealed class InsertionTarget : IInsertionTarget
     public bool CanInsert => readable;
     public string ApplicationName { get; }
     public string ApplicationId { get; }
+    /// The preview's "Typing in …" note for this app.
+    internal string TypingNote { get; }
     InsertionTarget(AutomationElement e, string text, int start, int length, bool readable)
     {
         element = e; runtimeId = e.GetRuntimeId(); before = text; this.start = start; this.length = length; this.readable = readable;
         foreground = Native.GetForegroundWindow(); Native.GetWindowThreadProcessId(foreground, out processId);
         using var process = Process.GetProcessById((int)processId); ApplicationName = process.ProcessName; ApplicationId = process.ProcessName;
+        TypingNote = TypingNoteFor(processId, ApplicationName);
     }
+    internal static string TypingNoteFor(uint process, string program)
+    {
+        var version = VersionInfo(process);
+        return LiveInlineText.TypingNote(version?.FileDescription, version?.ProductName, program);
+    }
+    /// The program file's version resource, read by path with limited query
+    /// rights so it works for apps of another architecture; null if unreadable.
+    static FileVersionInfo? VersionInfo(uint process)
+    {
+        IntPtr handle = OpenProcess(0x1000, false, process);
+        if (handle == IntPtr.Zero) return null;
+        try {
+            var path = new System.Text.StringBuilder(1024); int size = path.Capacity;
+            if (!QueryFullProcessImageName(handle, 0, path, ref size)) return null;
+            return FileVersionInfo.GetVersionInfo(path.ToString(0, size));
+        } catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException) { return null; }
+        finally { CloseHandle(handle); }
+    }
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, uint process);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern bool QueryFullProcessImageName(IntPtr process, int flags, System.Text.StringBuilder name, ref int size);
     /// The captured field for live typing, made before any pFlow window shows.
     /// Null when the field cannot take verified range writes: the take uses Preview.
     internal ILiveTextField? LiveField() => readable ? LiveTextField.Create(element, foreground, processId) : null;

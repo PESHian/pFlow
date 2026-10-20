@@ -42,6 +42,13 @@ internal static partial class Program
     {
         string root = Path.Combine(Path.GetTempPath(), "pflow-live-typing-fictional-" + Guid.NewGuid().ToString("N"));
         try {
+            // The preview names the app as it names itself, read from its program file only.
+            var explorer = System.Diagnostics.Process.GetProcessesByName("explorer").FirstOrDefault();
+            if (explorer != null) {
+                string expected = "Typing in " + System.Diagnostics.FileVersionInfo.GetVersionInfo(explorer.MainModule!.FileName).FileDescription!.Trim();
+                Check("typing note uses the app's own name, not its program file name", InsertionTarget.TypingNoteFor((uint)explorer.Id, explorer.ProcessName) == expected && expected != "Typing in explorer");
+            }
+            Check("typing note falls back to the program name when the app cannot be read", InsertionTarget.TypingNoteFor(0, "fictionalpad") == "Typing in fictionalpad");
             var store = new StateStore(root);
             var template = new DictationTemplate { Name = "Harbor log", Title = "Harbor log", BoldHeadings = true, Sections = [new ReportSection { Title = "Narrative", IncludeFullDictation = true }] };
             store.Preferences.UseLocalAI = false; store.Preferences.Cleanup = true; store.Preferences.Paragraphs = true;

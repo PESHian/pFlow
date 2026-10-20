@@ -358,6 +358,20 @@ public static class LiveInlineText
     public static string LineBreaks(string text, string lineBreak) =>
         text.Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", lineBreak);
 
+    /// Shown in the preview while pFlow types into the app, named the way the
+    /// app names itself (its file description, then its product name), else by
+    /// its program file name. Never the window title, which can name a document.
+    public static string TypingNote(string? description, string? product, string program)
+    {
+        static string? Clean(string? name)
+        {
+            if (name == null) return null;
+            string text = new string(name.Where(c => !char.IsControl(c)).ToArray()).Trim();
+            return text.Length == 0 ? null : text.Length <= 60 ? text : text[..60].TrimEnd() + "…";
+        }
+        return "Typing in " + (Clean(description) ?? Clean(product) ?? Clean(program) ?? "this app");
+    }
+
     /// Shown in the preview when typing could not start, so the take is Preview only.
     public static string PreviewNote(LiveStop stop) => stop switch {
         LiveStop.Permission => "Can't type in an admin app",
