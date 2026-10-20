@@ -54,6 +54,8 @@ This public repository contains application source, artwork, licenses, and ficti
 
 Mac: install Xcode with the macOS 27 SDK and [XcodeGen](https://github.com/yonaskolb/XcodeGen), run `xcodegen generate`, then build the Yap scheme from `Yap.xcodeproj`. `scripts/build-whisper.sh` prepares the pinned local engine. `release.sh` supports Developer ID signing/notarization when you supply your own credentials.
 
+For trusted Mac candidates, follow the [signing setup and release checks](updates/MAC-RELEASE.md). Production packaging requires an approved Developer ID identity and notarization access. Development builds cannot use the production updater. Public download claims above remain tied to the published builds until a new candidate passes the clean-Mac checks.
+
 Windows: install .NET 10 SDK, CMake, and Visual Studio C++ tools for your architecture, then run `windows/scripts/build-windows.ps1`. See [Windows details](windows/README.md). Use `-Architecture x64`, `-Architecture arm64`, or `-Architecture x86`. ARM64 native compilation uses the Clang C++ toolset; the other builds use MSVC with a static speech runtime. The published Windows binaries omit debug symbols. Release builds are checked for personal build paths; source builds need the same checks before distribution. Each architecture needs its own build and verification.
 
 ## Tested limits

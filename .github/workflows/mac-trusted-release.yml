@@ -1,0 +1,66 @@
+name: Trusted Mac candidate
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pflow-mac-trusted-release
+  cancel-in-progress: false
+jobs:
+  package:
+    if: github.ref == 'refs/heads/main'
+    # Provision a fresh isolated VM for each job. Never share this pool or its
+    # keychains with pull requests, test jobs, or a person's logged-in Mac.
+    runs-on: [self-hosted, macOS, ARM64, pflow-mac-release-ephemeral]
+    environment: mac-trusted-release
+    timeout-minutes: 90
+    env:
+      PFLOW_DEVELOPER_TEAM: ${{ vars.PFLOW_DEVELOPER_TEAM }}
+      PFLOW_SIGNING_IDENTITY: ${{ vars.PFLOW_SIGNING_IDENTITY }}
+      PFLOW_APPROVED_PUBLISHER: ${{ vars.PFLOW_APPROVED_PUBLISHER }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Build and test approved main without signing secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
+          python3 -c 'import os; from scripts.mac_release import requirement; requirement(os.environ["PFLOW_DEVELOPER_TEAM"])'
+          xcodegen generate
+          xcodebuild -project Yap.xcodeproj -scheme Yap -configuration Release -destination 'platform=macOS' -derivedDataPath build -only-testing:YapTests/ReleaseUpdatesTests -only-testing:YapTests/MacUpdateProcessTests CODE_SIGN_IDENTITY=- ENABLE_TESTABILITY=YES "PFLOW_DEVELOPER_TEAM=$PFLOW_DEVELOPER_TEAM" test > "$RUNNER_TEMP/pflow-build.log" 2>&1 || { tail -30 "$RUNNER_TEMP/pflow-build.log"; exit 1; }
+          python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+      - name: Sign and notarize with a disposable keychain
+        env:
+          PFLOW_CERTIFICATE_P12: ${{ secrets.PFLOW_CERTIFICATE_P12 }}
+          PFLOW_CERTIFICATE_PASSWORD: ${{ secrets.PFLOW_CERTIFICATE_PASSWORD }}
+          PFLOW_NOTARY_APPLE_ID: ${{ secrets.PFLOW_NOTARY_APPLE_ID }}
+          PFLOW_NOTARY_PASSWORD: ${{ secrets.PFLOW_NOTARY_PASSWORD }}
+        run: python3 scripts/mac_signing_keychain.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: mac-trusted-candidate
+          path: dist/pFlow-Mac-*
+          if-no-files-found: error
+          retention-days: 90
+  attest:
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: mac-trusted-candidate
+          path: dist
+      - uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
+        with:
+          subject-path: |
+            dist/*.dmg
+            dist/*.trusted.json
+      # Publishing is separate: test this exact download in clean online and
+      # offline Mac states, then upload these unchanged assets to a new release.

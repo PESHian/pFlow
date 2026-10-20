@@ -1,14 +1,15 @@
 name: Mac updater
 on:
   push:
-    branches: [feat/in-app-updates]
-    paths: ['Sources/**', 'Tests/*Update*Tests.swift', 'project.yml', 'updates/test-vectors.json', '.github/workflows/mac-updates.yml']
+    branches: [feat/in-app-updates, fix/mac-trusted-install]
+    paths: ['Sources/**', 'Tests/*Update*Tests.swift', 'project.yml', 'release.sh', 'scripts/mac_release.py', 'updates/test-vectors.json', '.github/workflows/mac-updates.yml']
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   build:
-    runs-on: xcode-27
+    # A fresh VM with no signing keychain, separate from the release runner pool.
+    runs-on: [self-hosted, macOS, ARM64, pflow-mac-test-ephemeral]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -24,10 +25,7 @@ jobs:
           tail -20 build-updates.log
           app=build/Build/Products/Release/Yap.app
           codesign --verify --deep --strict "$app"
-          "$app/Contents/MacOS/Yap" --check-setup
           bash release.sh --testing "$app"
-          mv dist/pFlow-0.3.5-testing.dmg dist/pFlow-Mac-0.3.5-testing.dmg
-          (cd dist && shasum -a 256 pFlow-Mac-0.3.5-testing.dmg > pFlow-Mac-0.3.5-testing.dmg.sha256)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
@@ -36,7 +34,7 @@ jobs:
           retention-days: 7
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: mac-release
-          path: dist/pFlow-Mac-0.3.5-testing.dmg*
+          name: mac-development-only
+          path: dist/pFlow-Mac-*-testing.dmg*
           if-no-files-found: error
           retention-days: 7

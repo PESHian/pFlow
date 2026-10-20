@@ -12,8 +12,9 @@ settings:
     SWIFT_STRICT_CONCURRENCY: minimal
     SWIFT_SERIALIZE_DEBUGGING_OPTIONS: NO
     OTHER_SWIFT_FLAGS: '$(inherited) -file-prefix-map "$(SRCROOT)=/_/pflow" -debug-prefix-map "$(SRCROOT)=/_/pflow"'
-    MARKETING_VERSION: "0.3.5"
-    CURRENT_PROJECT_VERSION: "27"
+    MARKETING_VERSION: "0.3.6"
+    CURRENT_PROJECT_VERSION: "28"
+    PFLOW_DEVELOPER_TEAM: ""
     DEAD_CODE_STRIPPING: YES
     # Apple Silicon only. The on-device SpeechAnalyzer needs it, and the Intel
     # fallback sent audio to Apple, which we won't do.

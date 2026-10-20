@@ -4,6 +4,41 @@ import Testing
 
 private final class UpdateTestBundle: NSObject { }
 struct ReleaseUpdatesTests {
+    @Test func productionTrustRejectsAdHocAppAndInvalidTeams() throws {
+        for team in ["", "$(PFLOW_DEVELOPER_TEAM)", "SHORT", "TEAM\" or true"] {
+            #expect(throws: (any Error).self) { try MacUpdateInstaller.developerRequirement(team: team) }
+        }
+        // The test host is ad-hoc signed. Use a syntactically valid team so this
+        // exercises Apple's certificate policy, not the input validator.
+        #expect(throws: (any Error).self) { try MacUpdateInstaller.verifyDeveloperID(Bundle.main.bundleURL, team: "PFLOWTEST1") }
+    }
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["PFLOW_TRUST_FIXTURE_APP"] != nil, "Requires an independently valid Developer ID app and its real team ID."))
+    func realDeveloperIDTeamPolicy() throws {
+        let env = ProcessInfo.processInfo.environment
+        let app = URL(fileURLWithPath: try #require(env["PFLOW_TRUST_FIXTURE_APP"]))
+        let team = try #require(env["PFLOW_TRUST_FIXTURE_TEAM"])
+        #expect(team != "PFLOWTEST1")
+        try MacUpdateInstaller.verifyDeveloperID(app, team: team)
+        #expect(throws: (any Error).self) { try MacUpdateInstaller.verifyDeveloperID(app, team: "PFLOWTEST1") }
+    }
+    @Test func helperCopyKeepsItsSealAndRejectsModification() throws {
+        let fm = FileManager.default, root = fm.temporaryDirectory.appendingPathComponent("pflow-helper-fictional-\(UUID().uuidString)")
+        try fm.createDirectory(at: root, withIntermediateDirectories: false); defer { try? fm.removeItem(at: root) }
+        let original = Bundle.main.bundleURL, helper = root.appendingPathComponent("helper.app")
+        let version = try #require(MacUpdateInstaller.metadata(original)["CFBundleShortVersionString"] as? String)
+        func integrityOnly(_ app: URL, _ version: String) throws {
+            try MacUpdateInstaller.verifyBundle(app, version: version)
+            try MacUpdateInstaller.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path])
+        }
+        try MacUpdateInstaller.copyHelper(from: original, to: helper, version: version, validate: integrityOnly)
+        for file in ["Contents/Info.plist", "Contents/MacOS/Yap", "Contents/_CodeSignature/CodeResources"] {
+            #expect(try Data(contentsOf: original.appendingPathComponent(file)) == Data(contentsOf: helper.appendingPathComponent(file)))
+        }
+        let plist = helper.appendingPathComponent("Contents/Info.plist")
+        var info = try MacUpdateInstaller.metadata(helper); info["CFBundleIdentifier"] = "com.pesh.Yap.UpdateHelper"
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: plist)
+        #expect(throws: (any Error).self) { try integrityOnly(helper, version) }
+    }
     @Test func signedFeedAndVersionRules() throws {
         struct Vector: Decodable { let name: String; let data: String; let signature: String }
         let url = try #require(Bundle(for: UpdateTestBundle.self).url(forResource: "test-vectors", withExtension: "json"))

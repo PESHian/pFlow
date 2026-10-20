@@ -20,6 +20,8 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>PFLOWUpdateTeamID</key>
+	<string>$(PFLOW_DEVELOPER_TEAM)</string>
 	<key>CFBundleIconFile</key>
 	<string>Pesh</string>
 	<key>LSMinimumSystemVersion</key>
