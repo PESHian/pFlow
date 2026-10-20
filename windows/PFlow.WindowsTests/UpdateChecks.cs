@@ -13,6 +13,9 @@ internal static partial class Program
     static int RunUpdateHelper(string planFile)
     {
         using var helper = System.Diagnostics.Process.Start(PFlow.Windows.Program.UpdateInstallerStartInfo(Path.GetDirectoryName(planFile)!, planFile))!;
+        // The real app exits before replacement. This waiting test wrapper must
+        // release its own Windows directory lock without changing the child's cwd.
+        Environment.CurrentDirectory = Path.GetDirectoryName(planFile)!;
         if (!helper.WaitForExit(45000)) throw new Exception("The controlled update helper did not finish.");
         return helper.ExitCode;
     }
