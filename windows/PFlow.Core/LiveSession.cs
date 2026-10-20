@@ -86,8 +86,9 @@ public sealed class LiveSession(uint session, LiveWindowPlanner? planner = null,
     /// After each window, live recognition rests as long as that window took,
     /// so it keeps the processor busy at most half the time. A window that
     /// finishes well inside the 1 s stride is never delayed by this. Measured on
-    /// the 6-core ARM64 test VM: windows took about 0.9 s back to back and kept
-    /// about 3.1 cores busy; resting cut that to about 2 (see the speed table).
+    /// the 6-core ARM64 test VM with fixed recordings: back-to-back windows kept
+    /// 3.0-3.5 cores busy; resting cut that to 2.0-2.2, first words unchanged
+    /// at about 1.7 s, updates every 1.5-1.8 s instead of about 1.1 s.
     public const double RestRatio = 1.0;
 
     readonly object sync = new();

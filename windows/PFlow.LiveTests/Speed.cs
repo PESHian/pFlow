@@ -80,6 +80,15 @@ internal static partial class Program
                 Console.WriteLine("SPEED " + JsonSerializer.Serialize(rows[^1]));
                 Check(audio + " finished text is not empty", !string.IsNullOrWhiteSpace(report.Final));
             }
+            // How the typing note looks with an app's own long name, light and dark.
+            if (SpeedOption("render", "") == "note") {
+                string note = LiveInlineText.TypingNote("Fictional Harbor Notes and Lantern Logbook Studio Edition 2026", null, "fhnotes");
+                foreach (string theme in new[] { "light", "dark" }) {
+                    store.Preferences.Theme = theme; preview.ApplyTheme(); preview.Begin(); preview.SetNote(note); preview.ShowText("The ferry to Pebble Island leaves at seven forty.");
+                    Render(preview, "typing-note-" + theme + "-100", 1, 1); Render(preview, "typing-note-" + theme + "-200", 2, 1);
+                }
+                preview.Clear();
+            }
         } finally {
             File.WriteAllText(Path.Combine(root, $"speed-{label}-{DateTime.UtcNow:yyyyMMddHHmmss}.json"), JsonSerializer.Serialize(rows, new JsonSerializerOptions { WriteIndented = true }));
             preview.Close(); capsule.Close(); Directory.Delete(directory, true);
