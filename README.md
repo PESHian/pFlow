@@ -57,9 +57,9 @@ Typing stops for the rest of the take if you move the cursor, type, switch apps 
 | Destination | Checked behavior |
 |---|---|
 | AppKit text view and text field in a test window (Unicode, CRLF, styled text, selection, cancel, edits) | Inline, through AppKit's own accessibility methods in the same process |
-| Same, through real Accessibility calls | Not run: the test Mac has not granted Accessibility to a test build |
-| TextEdit, Safari text box, Electron editors (VS Code, Cursor) | Not run, same reason |
-| Field whose text or range cannot be read or set | Preview for the take (test field only) |
+| Same, through real Accessibility calls | Not run: no test build on the test Mac has Accessibility permission |
+| TextEdit (plain and rich), Safari text box and text area, VS Code | Not run, same reason. A Debug-only self-test (`--pflow-inline-selftest <folder>`) drives these with throwaway documents once a build is allowed |
+| Field that cannot be read or set, has several cursors, or holds over 100,000 characters | Preview for the take (test field only) |
 
 ## Privacy
 

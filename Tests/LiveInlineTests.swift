@@ -64,7 +64,7 @@ final class SimulatedTextField: LiveTextField {
     var value: String { current.value ?? "" }
 
     func state() -> LiveFieldState { current }
-    func canWriteRanges(keeping selection: NSRange) -> Bool { writable }
+    func canWriteRanges() -> Bool { writable }
     func replace(_ range: NSRange, with text: String) -> Bool {
         replaced.append((range, text))
         if let onReplace { return onReplace(self, range, text) }
@@ -179,6 +179,22 @@ struct LiveInlineTests {
                     #expect(state.selection == range(field.selection), "\(label): selection")
                 }
             }
+        }
+    }
+
+    @Test func fieldsTooLongToReadOnEveryUpdateUsePreview() {
+        let long = String(repeating: "a", count: LiveInlineOwnership.maxFieldLength + 1)
+        let state = LiveFieldState(app: 1, element: LiveFieldState.target, secure: false, trusted: true,
+                                   value: long, selection: NSRange(location: 0, length: 0))
+        guard case .failure(.unsupported) = LiveInlineOwnership.begin(state, writable: true) else {
+            Issue.record("a field over the limit began live typing")
+            return
+        }
+        var fits = state
+        fits.value = String(long.dropLast())
+        guard case .success = LiveInlineOwnership.begin(fits, writable: true) else {
+            Issue.record("a field at the limit did not begin")
+            return
         }
     }
 

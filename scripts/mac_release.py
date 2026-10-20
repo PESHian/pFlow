@@ -88,6 +88,17 @@ def staple(path):
     run('xcrun', 'stapler', 'validate', path)
 
 
+# Debug-only live typing self-test; a release app must never contain it.
+DEBUG_ONLY_MARKERS = (b'--pflow-inline-selftest',)
+
+
+def require_no_debug_entry(app):
+    # Debug builds keep their code in a separate dylib beside the executable.
+    for path in sorted((Path(app) / 'Contents/MacOS').iterdir()):
+        if path.is_file() and any(marker in path.read_bytes() for marker in DEBUG_ONLY_MARKERS):
+            raise ValueError('Release app contains a debug-only entry point')
+
+
 def package(app, dist, *, testing=False, env=None):
     env = os.environ if env is None else env
     signing = None if testing else preflight(env)
@@ -116,6 +127,7 @@ def package(app, dist, *, testing=False, env=None):
     if executable.is_symlink() or not executable.is_file():
         raise ValueError('Unexpected app executable')
     run('lipo', '-verify_arch', 'arm64', executable)
+    require_no_debug_entry(app)
     # Public 0.3.5 updaters require this suffix, even for notarized downloads.
     name = f'pFlow-Mac-{version}-testing.dmg'
     dist = Path(dist); dist.mkdir(parents=True, exist_ok=True)

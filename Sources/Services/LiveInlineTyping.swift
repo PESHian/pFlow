@@ -6,9 +6,9 @@ import ApplicationServices
 @MainActor
 protocol LiveTextField: AnyObject {
     func state() -> LiveFieldState
-    /// Whether text ranges can be set here at all. Checked once at begin by
-    /// setting the current selection again, which changes no text.
-    func canWriteRanges(keeping selection: NSRange) -> Bool
+    /// Whether text ranges and text can be set here at all. Checked once at
+    /// begin without writing anything.
+    func canWriteRanges() -> Bool
     /// Selects `range` and replaces it with `text` through a native
     /// text-range operation, never with keys or the clipboard.
     func replace(_ range: NSRange, with text: String) -> Bool
@@ -54,7 +54,7 @@ final class LiveInlineSession {
 
     static func begin(id: String, field: LiveTextField) -> Result<LiveInlineSession, LiveInlineOwnership.Stop> {
         let state = field.state()
-        let writable = state.selection.map(field.canWriteRanges(keeping:)) ?? false
+        let writable = state.selection != nil && field.canWriteRanges()
         return LiveInlineOwnership.begin(state, writable: writable)
             .map { LiveInlineSession(id: id, field: field, ownership: $0) }
     }
@@ -123,11 +123,21 @@ final class AXLiveTextField: LiveTextField {
         let secure = SecureInput.isEnabled
             || attribute(element, kAXSubroleAttribute) as? String == kAXSecureTextFieldSubrole
         return LiveFieldState(app: front, element: same ? LiveFieldState.target : "other", secure: secure,
-                              trusted: AXIsProcessTrusted(), value: attribute(element, kAXValueAttribute) as? String,
-                              selection: selection())
+                              trusted: AXIsProcessTrusted(), value: boundedValue(), selection: selection())
     }
 
+    /// The field's text, unless it is too long to read on every update; a
+    /// missing value means Preview at begin and a stop during a take.
+    private func boundedValue() -> String? {
+        if let count = attribute(element, kAXNumberOfCharactersAttribute) as? Int,
+           count > LiveInlineOwnership.maxFieldLength { return nil }
+        return attribute(element, kAXValueAttribute) as? String
+    }
+
+    /// The one selection, or nil when there is none or more than one (several
+    /// cursors in a code editor), which pFlow cannot keep track of.
     private func selection() -> NSRange? {
+        if let ranges = attribute(element, kAXSelectedTextRangesAttribute) as? [AXValue], ranges.count != 1 { return nil }
         guard let raw = attribute(element, kAXSelectedTextRangeAttribute), CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
         let value = raw as! AXValue
         var range = CFRange()
@@ -140,9 +150,8 @@ final class AXLiveTextField: LiveTextField {
         return AXUIElementIsAttributeSettable(element, name as CFString, &result) == .success && result.boolValue
     }
 
-    func canWriteRanges(keeping selection: NSRange) -> Bool {
-        guard settable(kAXSelectedTextRangeAttribute), settable(kAXSelectedTextAttribute) else { return false }
-        return select(selection) && self.selection() == selection
+    func canWriteRanges() -> Bool {
+        settable(kAXSelectedTextRangeAttribute) && settable(kAXSelectedTextAttribute)
     }
 
     func select(_ range: NSRange) -> Bool {

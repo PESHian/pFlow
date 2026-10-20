@@ -18,6 +18,13 @@ enum YapMain {
             print("LOGIN_ENABLED=\(login.isEnabled) LOGIN_NEEDS_APPROVAL=\(login.needsApproval) APPLE_INTELLIGENCE=\(TranscriptCleanupService().isAvailable)")
             return
         }
+        #if DEBUG
+        // Debug builds only: the live typing self-test. Runs before any app setup.
+        if CommandLine.arguments.contains(InlineSelfTest.flag) {
+            InlineSelfTest.start(arguments: CommandLine.arguments)
+            return
+        }
+        #endif
         if RuntimeMode.isTesting {
             let app = NSApplication.shared
             app.setActivationPolicy(.prohibited)

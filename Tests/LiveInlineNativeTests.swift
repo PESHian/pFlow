@@ -74,9 +74,7 @@ final class InProcessAccessibilityField: LiveTextField {
                        selection: view.accessibilitySelectedTextRange())
     }
 
-    func canWriteRanges(keeping selection: NSRange) -> Bool {
-        select(selection) && view.accessibilitySelectedTextRange() == selection
-    }
+    func canWriteRanges() -> Bool { true }
 
     func select(_ range: NSRange) -> Bool {
         view.setAccessibilitySelectedTextRange(range)

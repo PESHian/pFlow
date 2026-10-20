@@ -93,6 +93,9 @@ struct LiveInlineOwnership {
         case stopped(Stop)
     }
 
+    /// Longest field, in UTF-16 units, read on every update. Longer fields use Preview.
+    static let maxFieldLength = 100_000
+
     private let app: Int32
     private let before: String
     private let after: String
@@ -114,6 +117,7 @@ struct LiveInlineOwnership {
         guard state.trusted else { return .failure(.permission) }
         guard !state.secure else { return .failure(.secure) }
         guard writable, state.element == LiveFieldState.target, let value = state.value,
+              (value as NSString).length <= maxFieldLength,
               let selection = state.selection, selection.location >= 0, selection.length >= 0,
               NSMaxRange(selection) <= (value as NSString).length,
               let range = Range(selection, in: value),

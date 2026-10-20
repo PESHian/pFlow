@@ -23,8 +23,11 @@ never by canonical equivalence ("é" as one code point is not "e" + U+0301).
 - `value`: the field's whole text, or `null` when it cannot be read.
 - `selection`: `[location, length]`.
 
-`begin.writable` is the native probe: setting the current selection again
-succeeded and read back the same range, without changing any text.
+`begin.writable` is the native check, made without writing anything: the
+selected range and selected text can be set. A field reports no `selection`
+when it has more than one (several cursors), and no `value` when it is longer
+than 100,000 UTF-16 units, so pFlow does not read a huge document on every
+update. Either means Preview at begin and a stop during a take.
 `beginResult` is `ready`, or the stop reason that makes the take use Preview.
 
 ## Steps
@@ -58,8 +61,8 @@ An optional `field {value, selection}` on a step is the simulated field after it
 ## Rules
 
 1. Begin is refused without permission (`permission`), in a secure field
-   (`secure`), or when the field cannot be read or its range cannot be written
-   (`unsupported`). The take then uses Preview.
+   (`secure`), or when the field cannot be read, is over 100,000 units, has no
+   single selection, or its range cannot be written (`unsupported`). The take then uses Preview.
 2. pFlow owns one span, starting at the original selection. Before every write
    it checks, in order: `permission`, `app`, `focus`, `secure`, then that the
    whole value is exactly the text before the span + the owned text + the text

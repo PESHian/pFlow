@@ -77,6 +77,16 @@ class MacReleaseTests(unittest.TestCase):
     def package(self, **kwargs):
         return release.package(self.app, self.dist, env=ENV, **kwargs)
 
+    def test_release_rejects_the_debug_self_test_entry(self):
+        with tempfile.TemporaryDirectory() as folder:
+            app = Path(folder) / 'pFlow.app'
+            macos = app / 'Contents/MacOS'; macos.mkdir(parents=True)
+            (macos / 'pFlow').write_bytes(b'\x00code\x00--apply-update\x00')
+            release.require_no_debug_entry(app)
+            (macos / 'pFlow.debug.dylib').write_bytes(b'\x00code\x00--pflow-inline-selftest\x00')
+            with self.assertRaises(ValueError):
+                release.require_no_debug_entry(app)
+
     def test_signs_inside_out_and_hashes_only_final_bytes(self):
         dmg = self.package()
         self.assertEqual(dmg.read_bytes(), b'fictional-dmg-signature-ticket')
