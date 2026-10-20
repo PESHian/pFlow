@@ -104,19 +104,32 @@ static void read_requests() {
     state_changed.notify_one();
 }
 
-// Every pass gets a state of its own over the one loaded model; the context
-// itself holds none. A shared state let one pass change the next pass's text:
-// a pass with a shorter audio context lays the cross-attention cache out
-// differently, and a full 30 s pass reads the padding after its 1500 frames
-// (flash attention, no mask), where the shorter pass had left its values.
-// That happened both with live windows before the finished text and with a
-// short take before a long one. The finished-text pass therefore makes a new,
-// zeroed state each time and frees it after its reply, so its text never
-// depends on an earlier take. Live windows keep one state of their own, made
-// by the first window and then kept, so later windows neither wait for it nor
-// pay to free it before their finished text.
+// The finished text must never depend on an earlier pass. A pass with a
+// shorter audio context lays the cross-attention cache out differently, and a
+// full 30 s pass reads the padding after its 1500 frames (flash attention, no
+// mask), where the shorter pass had left its values. That happened both with
+// live windows before the finished text and with a short take before a long
+// one. So live windows have a state of their own, and the finished-text state
+// only ever sees one audio context: when a take needs a different one, the
+// state is freed and a new, zeroed one is made. Passes with the same context
+// write the same frames and never touch the padding, so reusing the state
+// between them gives the same text as a new one (checked by the architecture
+// speech test). A new state for every pass was also correct, but on the ARM64
+// VM with Live text on it made 4 of 10 medium finished passes take about 6.5 s
+// instead of 2.5 s, so states are kept while the context stays the same.
 using State = std::unique_ptr<whisper_state, decltype(&whisper_free_state)>;
 static State live_state(nullptr, whisper_free_state);
+static State final_state(nullptr, whisper_free_state);
+static int final_audio_ctx = -1; // The only audio context final_state has seen.
+
+static whisper_state * final_state_for(whisper_context * ctx, int audio_ctx) {
+    if (!final_state || final_audio_ctx != audio_ctx) {
+        final_state.reset(); // Free first: never hold two finished-text states.
+        final_state.reset(whisper_init_state(ctx));
+        final_audio_ctx = final_state ? audio_ctx : -1;
+    }
+    return final_state.get();
+}
 
 static void live_error(const Job & job, const char * message) {
     put(kLiveError); put(kVersion); put(job.session); put(job.sequence); put(std::string(message)); fflush(stdout);
@@ -176,12 +189,12 @@ static void transcribe_file(whisper_context * ctx, int threads, const Job & job)
     // All samples fit, with at least two seconds of padding. Long clips keep the full window.
     params.audio_ctx = samples.size() <= 8 * 16000 ? 512 : samples.size() <= 18 * 16000 ? 1024 : 0;
     auto start = Clock::now();
-    State state(whisper_init_state(ctx), whisper_free_state); // Freed after the reply is sent.
-    if (!state || whisper_full_with_state(ctx, state.get(), params, samples.data(), static_cast<int>(samples.size())) != 0) {
+    whisper_state * state = final_state_for(ctx, params.audio_ctx);
+    if (!state || whisper_full_with_state(ctx, state, params, samples.data(), static_cast<int>(samples.size())) != 0) {
         put(3); put(std::string("Whisper could not transcribe this recording.")); fflush(stdout); return;
     }
     std::string result;
-    for (int i = 0; i < whisper_full_n_segments_from_state(state.get()); i++) { if (i) result += '\n'; result += whisper_full_get_segment_text_from_state(state.get(), i); }
+    for (int i = 0; i < whisper_full_n_segments_from_state(state); i++) { if (i) result += '\n'; result += whisper_full_get_segment_text_from_state(state, i); }
     // whisper.cpp reports encoder/decoder timings only for a context's own state, so they are sent as 0 (not measured).
     put(2); put(result); metric(elapsed(start)); metric(0); metric(0); put(static_cast<uint32_t>(params.audio_ctx)); fflush(stdout);
 }
@@ -202,7 +215,8 @@ int main() {
         loader.eof = [](void * user) { return static_cast<std::ifstream *>(user)->eof(); };
         loader.close = [](void * user) { static_cast<std::ifstream *>(user)->close(); };
         std::unique_ptr<whisper_context, decltype(&whisper_free)> ctx(whisper_init_with_params_no_state(&loader, options), whisper_free);
-        if (!ctx) { put(3); put(std::string("Speech model could not load.")); fflush(stdout); return 3; }
+        // Made at load, before any live window, for the full 30 s context (as the context's own state was).
+        if (!ctx || !final_state_for(ctx.get(), 0)) { put(3); put(std::string("Speech model could not load.")); fflush(stdout); return 3; }
         put(1); metric(elapsed(start)); put(kVersion); fflush(stdout);
         std::thread(read_requests).detach();
         for (;;) {
