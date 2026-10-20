@@ -13,6 +13,9 @@ protocol WhisperLiveWorking: AnyObject, Sendable {
     func finishTake(recording: URL, language: String, threads: Int) throws -> String
     /// Safe from any thread. A call that is waiting fails promptly.
     func stop()
+    /// Whether `stop` was called or the helper missed a deadline. A stopped
+    /// worker is never used again.
+    var isStopped: Bool { get }
 }
 
 /// The bundled `pflow-whisper-live` helper (Metal). It talks over a private
@@ -26,6 +29,9 @@ protocol WhisperLiveWorking: AnyObject, Sendable {
 ///   finish:   u32 "PLF1", u32 id, u32 length + language, u32 threads, u32 length + recording path
 ///   finished: u32 4, u32 id, u32 length + text (whisper-cli -otxt lines), f64 ms
 /// The finish request reads only the take's own recording, in its private folder.
+/// Every reply has a deadline (`replyLimit`, plus twice the recording's length
+/// for the finish request). A helper that misses it is ended with SIGKILL,
+/// which also ends one that was stopped (SIGSTOP), so the waiting call fails.
 final class WhisperLiveProcess: WhisperLiveWorking, @unchecked Sendable {
     static let hello: UInt32 = 0x314C_4650
     static let request: UInt32 = 0x3151_4C50
@@ -35,6 +41,7 @@ final class WhisperLiveProcess: WhisperLiveWorking, @unchecked Sendable {
     private let executable: URL
     private let model: URL
     private let threads: UInt32
+    private let replyLimit: TimeInterval
     private let lock = NSLock()
     private var process: Process?
     private var input: FileHandle?
@@ -43,13 +50,26 @@ final class WhisperLiveProcess: WhisperLiveWorking, @unchecked Sendable {
     private var nextID: UInt32 = 0
 
     init(executable: URL = Bundle.main.bundleURL.appending(path: "Contents/Helpers/pflow-whisper-live"),
-         model: URL = WhisperModelStore.modelURL, threads: UInt32 = 4) {
+         model: URL = WhisperModelStore.modelURL, threads: UInt32 = 4, replyLimit: TimeInterval = 30) {
         self.executable = executable
         self.model = model
         self.threads = threads
+        self.replyLimit = replyLimit
     }
 
-    deinit { process?.terminate() }
+    deinit { if let process, process.isRunning { kill(process.processIdentifier, SIGKILL) } }
+
+    var isStopped: Bool { lock.withLock { stopped } }
+
+    /// Runs one request and its reply. If the reply is not complete within
+    /// `limit` seconds the helper is ended, which makes the waiting read or
+    /// write fail.
+    private func answered<T>(within limit: TimeInterval, _ exchange: () throws -> T) throws -> T {
+        let deadline = DispatchWorkItem { [weak self] in self?.stop() }
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + limit, execute: deadline)
+        defer { deadline.cancel() }
+        return try exchange()
+    }
 
     func load() throws {
         guard FileManager.default.isExecutableFile(atPath: executable.path) else { throw WhisperError.engineMissing }
@@ -74,11 +94,13 @@ final class WhisperLiveProcess: WhisperLiveWorking, @unchecked Sendable {
         message.put(Self.hello)
         message.put(threads)
         message.put(text: model.path)
-        try write(message)
-        switch try readNumber() {
-        case 1: _ = try read(8)
-        case 3: _ = try readText(limit: 4096); throw WhisperError.failed
-        default: throw WhisperError.failed
+        try answered(within: replyLimit) {
+            try write(message)
+            switch try readNumber() {
+            case 1: _ = try read(8)
+            case 3: _ = try readText(limit: 4096); throw WhisperError.failed
+            default: throw WhisperError.failed
+            }
         }
     }
 
@@ -91,22 +113,26 @@ final class WhisperLiveProcess: WhisperLiveWorking, @unchecked Sendable {
         message.put(text: language)
         message.put(UInt32(samples.count))
         samples.withUnsafeBytes { message.append(contentsOf: $0) }
-        try write(message)
-        let status = try readNumber()
-        guard try readNumber() == id else { throw WhisperError.failed }
-        guard status == 2 else { _ = try? readText(limit: 4096); throw WhisperError.failed }
-        let count = try readNumber()
-        guard count <= 512 else { throw WhisperError.failed }
-        var segments: [WhisperWindowSegment] = []
-        for _ in 0..<count {
-            let from = Int(Int32(bitPattern: try readNumber()))
-            let to = Int(Int32(bitPattern: try readNumber()))
-            let noSpeech = Double(Float(bitPattern: try readNumber()))
-            segments.append(WhisperWindowSegment(fromMs: from, toMs: to, text: try readText(limit: 65_536),
-                                                 noSpeechProbability: noSpeech))
+        return try answered(within: replyLimit) {
+            try write(message)
+            let status = try readNumber()
+            // One helper per take and one request at a time: any other id is
+            // a broken helper, never a reply to keep.
+            guard try readNumber() == id else { throw WhisperError.failed }
+            guard status == 2 else { _ = try? readText(limit: 4096); throw WhisperError.failed }
+            let count = try readNumber()
+            guard count <= 512 else { throw WhisperError.failed }
+            var segments: [WhisperWindowSegment] = []
+            for _ in 0..<count {
+                let from = Int(Int32(bitPattern: try readNumber()))
+                let to = Int(Int32(bitPattern: try readNumber()))
+                let noSpeech = Double(Float(bitPattern: try readNumber()))
+                segments.append(WhisperWindowSegment(fromMs: from, toMs: to, text: try readText(limit: 65_536),
+                                                     noSpeechProbability: noSpeech))
+            }
+            _ = try read(8)
+            return segments
         }
-        _ = try read(8)
-        return segments
     }
 
     func finishTake(recording: URL, language: String, threads: Int) throws -> String {
@@ -117,19 +143,26 @@ final class WhisperLiveProcess: WhisperLiveWorking, @unchecked Sendable {
         message.put(text: language)
         message.put(UInt32(threads))
         message.put(text: recording.path)
-        try write(message)
-        let status = try readNumber()
-        guard try readNumber() == id else { throw WhisperError.failed }
-        guard status == 4 else { _ = try? readText(limit: 4096); throw WhisperError.failed }
-        let text = try readText(limit: 4 * 1024 * 1024)
-        _ = try read(8)
-        return text
+        // 16-bit mono 16 kHz: 32,000 bytes a second.
+        let bytes = (try? FileManager.default.attributesOfItem(atPath: recording.path)[.size] as? Int) ?? 0
+        let limit = min(replyLimit + 2 * Double(bytes) / 32_000, 3_600)
+        return try answered(within: limit) {
+            try write(message)
+            let status = try readNumber()
+            guard try readNumber() == id else { throw WhisperError.failed }
+            guard status == 4 else { _ = try? readText(limit: 4096); throw WhisperError.failed }
+            let text = try readText(limit: 4 * 1024 * 1024)
+            _ = try read(8)
+            return text
+        }
     }
 
     func stop() {
         let process = lock.withLock { stopped = true; return self.process }
-        // Ending the helper makes a waiting read or write fail; nothing is left running.
-        if let process, process.isRunning { process.terminate() }
+        // Ending the helper makes a waiting read or write fail; nothing is left
+        // running. SIGKILL, because a helper that is stopped or hung would not
+        // act on SIGTERM.
+        if let process, process.isRunning { kill(process.processIdentifier, SIGKILL) }
     }
 
     private func write(_ data: Data) throws {

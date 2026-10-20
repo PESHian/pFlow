@@ -20,6 +20,10 @@ final class WhisperTranscriber: StreamingTranscriber {
     private let liveWorker: (() -> WhisperLiveWorking)?
     /// Touched only on `queue` once recording starts.
     private var live: WhisperLiveRecognizer?
+    /// The same recognizer until the take ends, for `cancel`, which must not
+    /// wait behind `queue` while a hung helper holds it.
+    private let takeLock = NSLock()
+    private var takeLive: WhisperLiveRecognizer?
 
     init(modelURL: URL = WhisperModelStore.modelURL,
          executableURL: URL = Bundle.main.bundleURL.appending(path: "Contents/Helpers/whisper-cli"),
@@ -55,6 +59,7 @@ final class WhisperTranscriber: StreamingTranscriber {
                 onText: { [weak self] in self?.onTranscript?($0) },
                 onFailure: { [weak self] in self?.onLiveStopped?() })
             queue.sync { live = recognizer }
+            takeLock.withLock { takeLive = recognizer }
             recognizer.start()
         }
     }
@@ -91,7 +96,11 @@ final class WhisperTranscriber: StreamingTranscriber {
     /// that pass itself with whisper-cli's exact decoding; if it cannot,
     /// whisper-cli runs as usual.
     func finish() async throws -> String {
-        defer { removeRecording() }
+        let ending = takeLock.withLock { takeLive }
+        defer {
+            takeLock.withLock { if takeLive === ending { takeLive = nil } }
+            removeRecording()
+        }
         let (shown, worker, failure) = await withCheckedContinuation {
             (continuation: CheckedContinuation<(String, WhisperLiveWorking?, Error?), Never>) in
             queue.async { [self] in
@@ -138,6 +147,9 @@ final class WhisperTranscriber: StreamingTranscriber {
     }
 
     func cancel() async {
+        // End the helper first and directly: a window or finished-text pass
+        // waiting on it then fails at once instead of holding `queue`.
+        takeLock.withLock { () -> WhisperLiveRecognizer? in defer { takeLive = nil }; return takeLive }?.stop()
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             queue.async { [self] in
                 writer = nil

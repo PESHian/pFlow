@@ -85,6 +85,7 @@ final class WhisperLiveRecognizer: @unchecked Sendable {
     private let language: String
     private let planner: LiveWindowPlanner
     private let tick: DispatchTimeInterval
+    private let stopLimit: DispatchTimeInterval
     private let onText: (String) -> Void
     private let onFailure: () -> Void
     private let queue = DispatchQueue(label: "com.pesh.whisper.live", qos: .userInitiated)
@@ -99,12 +100,13 @@ final class WhisperLiveRecognizer: @unchecked Sendable {
     private var recognized: [Range<Int>] = []
 
     init(worker: WhisperLiveWorking, language: String, planner: LiveWindowPlanner = LiveWindowPlanner(),
-         tick: DispatchTimeInterval = .milliseconds(250),
+         tick: DispatchTimeInterval = .milliseconds(250), stopLimit: DispatchTimeInterval = .seconds(3),
          onText: @escaping (String) -> Void, onFailure: @escaping () -> Void) {
         self.worker = worker
         self.language = language
         self.planner = planner
         self.tick = tick
+        self.stopLimit = stopLimit
         self.onText = onText
         self.onFailure = onFailure
     }
@@ -144,12 +146,16 @@ final class WhisperLiveRecognizer: @unchecked Sendable {
 
     /// Ends live windows for the take but keeps the helper and its loaded
     /// model for the finished-text pass. A window or model load still running
-    /// finishes first (one at most), so the helper is idle when this returns.
-    /// The worker is nil when it failed or never loaded; the caller ends it.
+    /// may finish first (one at most), so the helper is idle when this returns.
+    /// If it does not finish within `stopLimit` the helper is ended. The
+    /// worker is nil when it failed, never loaded or was ended; the caller
+    /// then uses whisper-cli.
     func stopKeepingWorker() -> (text: String, worker: WhisperLiveWorking?) {
         let text = closeWindows()
-        queue.sync {}
-        let usable = lock.withLock { loaded && !failed }
+        let idle = DispatchSemaphore(value: 0)
+        queue.async { idle.signal() }
+        if idle.wait(timeout: .now() + stopLimit) == .timedOut { worker.stop() }
+        let usable = lock.withLock { loaded && !failed } && !worker.isStopped
         if !usable { worker.stop() }
         return (text, usable ? worker : nil)
     }
@@ -189,9 +195,10 @@ final class WhisperLiveRecognizer: @unchecked Sendable {
 
     private func fail() {
         let timer = lock.withLock { () -> DispatchSourceTimer? in
-            guard !closed, !failed else { return nil }
+            guard !failed else { return nil }
             failed = true
-            onFailure()
+            // After stop the take is over: nothing more is reported.
+            if !closed { onFailure() }
             defer { self.timer = nil }
             return self.timer
         }

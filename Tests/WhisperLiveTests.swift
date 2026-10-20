@@ -83,6 +83,7 @@ final class FakeLiveWorker: WhisperLiveWorking, @unchecked Sendable {
 
     /// Ending the helper makes a waiting call return, as closing the pipe does.
     func stop() { lock.withLock { stops += 1; return finishGate }?.signal() }
+    var isStopped: Bool { lock.withLock { stops > 0 } }
 }
 
 private final class Box<T>: @unchecked Sendable {
@@ -567,6 +568,131 @@ struct WhisperLiveTests {
         #expect(await outcome.value == "failed")
         #expect(ProcessInfo.processInfo.systemUptime - started < 5)
         worker.stop()
+    }
+
+    /// A fake live helper: says "ready", then runs `then` (shell).
+    private func liveHelper(in root: URL, then: String) throws -> URL {
+        let helper = root.appending(path: "live-helper-\(UUID().uuidString)")
+        try "#!/bin/sh\nprintf '\\001\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000'\n\(then)\n"
+            .write(to: helper, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
+        return helper
+    }
+
+    /// Whether a process started from `helper` is still alive.
+    private func running(_ helper: URL) -> Bool {
+        let pgrep = Process()
+        pgrep.executableURL = URL(filePath: "/usr/bin/pgrep")
+        pgrep.arguments = ["-f", helper.path]
+        pgrep.standardOutput = FileHandle.nullDevice
+        try? pgrep.run()
+        pgrep.waitUntilExit()
+        return pgrep.terminationStatus == 0
+    }
+
+    /// Runs `work` and reports whether it returned within `seconds`.
+    private func returns(within seconds: Double, _ work: @escaping @Sendable () async -> Void) async -> Bool {
+        let done = Box(false)
+        Task.detached { await work(); done.update { $0 = true } }
+        await waitUntil(seconds) { done.value }
+        return done.value
+    }
+
+    @Test func helperThatStopsAnsweringIsEndedAndWhisperCLIMakesTheFinishedText() async throws {
+        let fake = try engine(final: "Copper boats came home")
+        defer { try? FileManager.default.removeItem(at: fake.root) }
+        // Ready, then the helper freezes (SIGSTOP) in the middle of the take,
+        // and would ignore a polite SIGTERM.
+        let helper = try liveHelper(in: fake.root, then: "trap '' TERM\nkill -STOP $$")
+        let transcriber = WhisperTranscriber(modelURL: fake.model, executableURL: fake.helper, temporaryDirectory: fake.root,
+                                             liveWorker: { WhisperLiveProcess(executable: helper, model: fake.model) })
+        try await transcriber.begin(locale: .init(identifier: "en-US"), contextualStrings: [])
+        play(transcriber, seconds: 2.5)
+        // A live window is now waiting on the frozen helper.
+        try await Task.sleep(for: .seconds(1))
+        let result = Box<String?>(nil)
+        let started = ProcessInfo.processInfo.systemUptime
+        let finished = await returns(within: 8) {
+            let text = try? await transcriber.finish()
+            result.update { $0 = text }
+        }
+        let elapsed = ProcessInfo.processInfo.systemUptime - started
+        if !finished { await transcriber.cancel() }
+        #expect(finished, "finish waited on a frozen helper")
+        #expect(elapsed < 6, "finish took \(elapsed) s")
+        #expect(result.value == "Copper boats came home")
+        await waitUntil(2) { !running(helper) }
+        #expect(!running(helper), "the frozen helper was left running")
+    }
+
+    @Test func cancelEndsAFrozenHelperAtOnceEvenWhileFinishWaits() async throws {
+        let fake = try engine(final: "Copper boats came home")
+        defer { try? FileManager.default.removeItem(at: fake.root) }
+        let helper = try liveHelper(in: fake.root, then: "kill -STOP $$")
+        let transcriber = WhisperTranscriber(modelURL: fake.model, executableURL: fake.helper, temporaryDirectory: fake.root,
+                                             liveWorker: { WhisperLiveProcess(executable: helper, model: fake.model) })
+        try await transcriber.begin(locale: .init(identifier: "en-US"), contextualStrings: [])
+        play(transcriber, seconds: 2.5)
+        try await Task.sleep(for: .seconds(1))
+        let finishDone = Box(false)
+        Task.detached { _ = try? await transcriber.finish(); finishDone.update { $0 = true } }
+        // finish is now waiting for the window the frozen helper holds.
+        try await Task.sleep(for: .milliseconds(300))
+        let started = ProcessInfo.processInfo.systemUptime
+        let canceled = await returns(within: 6) { await transcriber.cancel() }
+        let elapsed = ProcessInfo.processInfo.systemUptime - started
+        #expect(canceled)
+        #expect(elapsed < 1.5, "cancel took \(elapsed) s")
+        await waitUntil(2) { finishDone.value }
+        #expect(finishDone.value)
+        await waitUntil(2) { !running(helper) }
+        #expect(!running(helper))
+    }
+
+    @Test func everyHelperReplyHasADeadline() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Ready, then it reads every request and never answers.
+        let helper = try liveHelper(in: root, then: "cat > /dev/null")
+        let recording = root.appending(path: "audio.wav")
+        try Data(count: 3_200).write(to: recording)
+        for request in ["window", "finish"] {
+            let worker = WhisperLiveProcess(executable: helper, model: root, replyLimit: 0.5)
+            try worker.load()
+            let outcome = Box("waiting")
+            let started = ProcessInfo.processInfo.systemUptime
+            let returned = await returns(within: 6) {
+                do {
+                    if request == "window" { _ = try worker.recognize(speech(seconds: 1), language: "en") }
+                    else { _ = try worker.finishTake(recording: recording, language: "en", threads: 4) }
+                    outcome.update { $0 = "answered" }
+                } catch { outcome.update { $0 = "failed" } }
+            }
+            let elapsed = ProcessInfo.processInfo.systemUptime - started
+            worker.stop()
+            #expect(returned && outcome.value == "failed", "\(request): \(outcome.value)")
+            #expect(elapsed < 3, "\(request) took \(elapsed) s")
+            #expect(worker.isStopped)
+        }
+    }
+
+    @Test func aReplyForAnotherRequestIsNeverTakenAsTheCurrentOne() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Two replies, both for request 1 and with no segments, then it only reads.
+        let reply = "printf '\\002\\000\\000\\000\\001\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000\\000'"
+        let helper = try liveHelper(in: root, then: "\(reply)\n\(reply)\ncat > /dev/null")
+        let worker = WhisperLiveProcess(executable: helper, model: root, replyLimit: 5)
+        defer { worker.stop() }
+        try worker.load()
+        let samples = speech(seconds: 1)
+        let first = await Task.detached { (try? worker.recognize(samples, language: "en")) != nil }.value
+        #expect(first, "the reply for request 1 is accepted")
+        // Request 2 reads the late reply that still names request 1.
+        let second = await Task.detached { (try? worker.recognize(samples, language: "en")) != nil }.value
+        #expect(!second, "a reply for request 1 was taken as the reply to request 2")
     }
 
     @Test func missingHelperFailsLoad() {
