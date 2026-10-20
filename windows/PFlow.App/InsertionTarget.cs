@@ -48,14 +48,18 @@ internal sealed class InsertionTarget
     }
     void Validate()
     {
+        ValidateFocus();
+        var now = Capture();
+        if (!now.CanInsert) throw new InvalidOperationException("This field is no longer editable. Your text is in History.");
+        FieldState.RequireUnchanged(State, now.State);
+    }
+    void ValidateFocus()
+    {
         if (Native.GetForegroundWindow() != foreground) throw new InvalidOperationException("Focus changed. Your text is in History.");
         Native.GetWindowThreadProcessId(foreground, out var current);
         var focused = AutomationElement.FocusedElement;
         if (current != processId || focused == null || !focused.GetRuntimeId().SequenceEqual(runtimeId)) throw new InvalidOperationException("Focus changed. Your text is in History.");
         CheckSecure(focused);
-        var now = Capture();
-        if (!now.CanInsert) throw new InvalidOperationException("This field is no longer editable. Your text is in History.");
-        FieldState.RequireUnchanged(State, now.State);
     }
     internal readonly record struct Payload(string Text, string? Rtf, string Expected);
     internal static Payload Prepare(FieldState destination, string text, string? rtf = null)
@@ -74,8 +78,7 @@ internal sealed class InsertionTarget
         text = payload.Text; rtf = payload.Rtf; string expected = payload.Expected;
         // ValuePattern avoids the clipboard for plain controls that expose it.
         if (rtf == null && !keepClipboard && element.TryGetCurrentPattern(ValuePattern.Pattern, out var value) && !((ValuePattern)value).Current.IsReadOnly) {
-            ((ValuePattern)value).SetValue(expected);
-            return TextProcessing.SameText(Read(), expected) ? "Inserted" : "Insertion could not be confirmed; check the field before copying from History.";
+            return ApplyPlainValue(element, (ValuePattern)value, expected, start + text.Length, ValidateFocus) ? "Inserted" : "Insertion could not be confirmed; check the field before copying from History.";
         }
         if (rtf == null && !keepClipboard) return await TypeUnicode(text, expected, cancel);
         ClipboardLease lease;
@@ -104,9 +107,49 @@ internal sealed class InsertionTarget
             }
         }
     }
-    string Read()
+    internal static bool ApplyPlainValue(AutomationElement field, ValuePattern value, string expected, int caret, Action validateFocus)
     {
-        try { return element.TryGetCurrentPattern(TextPattern.Pattern, out var p) ? ((TextPattern)p).DocumentRange.GetText(-1) : ""; }
+        if (caret < 0 || caret > expected.Length) throw new ArgumentOutOfRangeException(nameof(caret));
+        value.SetValue(expected);
+        if (!TextProcessing.SameText(ReadText(field), expected)) return false;
+        var pattern = (TextPattern)field.GetCurrentPattern(TextPattern.Pattern);
+        var originalSelection = pattern.GetSelection();
+        if (originalSelection.Length != 1) return false;
+        var document = pattern.DocumentRange;
+        System.Windows.Automation.Text.TextPatternRange? position = null;
+        string prefix = expected[..caret];
+        if (prefix.Length == 0) {
+            position = document.Clone();
+            position.MoveEndpointByRange(TextPatternRangeEndpoint.End, position, TextPatternRangeEndpoint.Start);
+        } else {
+            // Text providers can normalize line endings and use different character units.
+            // Locate the actual prefix instead of counting UTF-16 units as UIA characters.
+            string lines = prefix.Replace("\r\n", "\n").Replace('\r', '\n');
+            foreach (string candidate in new[] { prefix, lines, lines.Replace("\n", "\r\n"), lines.Replace('\n', '\r') }.Distinct()) {
+                var found = document.FindText(candidate, false, false);
+                if (found == null || found.CompareEndpoints(TextPatternRangeEndpoint.Start, document, TextPatternRangeEndpoint.Start) != 0 || !TextProcessing.SameText(found.GetText(-1), prefix)) continue;
+                position = found;
+                position.MoveEndpointByRange(TextPatternRangeEndpoint.Start, position, TextPatternRangeEndpoint.End);
+                break;
+            }
+        }
+        if (position == null) return false;
+        validateFocus();
+        if (!TextProcessing.SameText(ReadText(field), expected)) return false;
+        var currentSelection = pattern.GetSelection();
+        if (currentSelection.Length != 1
+            || currentSelection[0].CompareEndpoints(TextPatternRangeEndpoint.Start, originalSelection[0], TextPatternRangeEndpoint.Start) != 0
+            || currentSelection[0].CompareEndpoints(TextPatternRangeEndpoint.End, originalSelection[0], TextPatternRangeEndpoint.End) != 0) return false;
+        position.Select();
+        var selection = pattern.GetSelection();
+        return selection.Length == 1 && selection[0].CompareEndpoints(TextPatternRangeEndpoint.Start, position, TextPatternRangeEndpoint.Start) == 0
+            && selection[0].CompareEndpoints(TextPatternRangeEndpoint.End, position, TextPatternRangeEndpoint.End) == 0
+            && TextProcessing.SameText(ReadText(field), expected);
+    }
+    string Read() => ReadText(element);
+    static string ReadText(AutomationElement field)
+    {
+        try { return field.TryGetCurrentPattern(TextPattern.Pattern, out var p) ? ((TextPattern)p).DocumentRange.GetText(-1) : ""; }
         catch (ElementNotAvailableException) { return ""; }
     }
     async Task<string> TypeUnicode(string text, string expected, CancellationToken cancel)

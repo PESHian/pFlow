@@ -11,7 +11,7 @@ These are testing builds. macOS and Windows may show an unsigned or unnotarized 
 | Platform | Download | Requirements |
 | --- | --- | --- |
 | Mac | pFlow-Mac-0.3.5-testing.dmg | Apple Silicon, macOS 27 or later |
-| Windows | pFlow-Windows-Universal-0.1.13-testing.zip | Windows x64 (Intel/AMD), ARM64, or x86; Windows 10 1607+ / Windows 11 |
+| Windows | pFlow-Windows-Universal-0.1.14-testing.zip | Windows x64 (Intel/AMD), ARM64, or x86; Windows 10 1607+ / Windows 11 |
 
 ### Mac
 

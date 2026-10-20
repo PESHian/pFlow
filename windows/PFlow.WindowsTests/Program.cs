@@ -66,16 +66,17 @@ internal static partial class Program
     {
         if (args.Length > 0 && args[0] == "--architecture-speech") return ArchitectureSpeech(args[1], args[2]).GetAwaiter().GetResult();
         if (args.Length > 0 && args[0] == "--model") return ModelChecks(args[1], args.Contains("--cleanup-only"));
-        if (args.Length == 0 || args[0] is "--updates-only" or "--controls-only" or "--learn-keys-only") { try { return LaunchPrivate(args.Length > 0 ? args[0] : ""); } catch (Exception error) { Console.Error.WriteLine(error); return 1; } }
+        if (args.Length == 0 || args[0] is "--updates-only" or "--controls-only" or "--learn-keys-only" or "--insertion-only") { try { return LaunchPrivate(args.Length > 0 ? args[0] : ""); } catch (Exception error) { Console.Error.WriteLine(error); return 1; } }
         using var reportWriter = new StreamWriter(args[1]) { AutoFlush = true }; Console.SetOut(reportWriter); Console.SetError(reportWriter);
         try {
             Check("isolated window station", ObjectName(GetProcessWindowStation()) == args[2]);
             Check("isolated desktop", ObjectName(GetThreadDesktop(GetCurrentThreadId())) == "fixture");
+            if (args.Contains("--insertion-only")) { NativeInsertion(); Console.WriteLine($"{passed} native insertion/caret checks passed."); return 0; }
             if (args.Contains("--learn-keys-only")) { _ = Application.Current ?? new PFlow.Windows.Program { ShutdownMode = ShutdownMode.OnExplicitShutdown }; NativeHotkeys(); NativeKeyCapture(); Console.WriteLine($"{passed} native learned-key checks passed."); return 0; }
             if (args.Contains("--controls-only")) { NativeControls(); Console.WriteLine($"{passed} native settings controls checks passed."); return 0; }
             NativeUpdates();
             if (args.Contains("--updates-only")) { Console.WriteLine($"{passed} native update checks passed."); return 0; }
-            NativeHotkeys(); NativeKeyCapture(); NativeControls();
+            NativeHotkeys(); NativeKeyCapture(); NativeControls(); NativeInsertion();
             Check("INPUT size matches Windows ABI", Marshal.SizeOf<Native.Input>() == (IntPtr.Size == 8 ? 40 : 28));
             Check("INPUT union alignment matches Windows ABI", Marshal.OffsetOf<Native.Input>(nameof(Native.Input.Data)).ToInt32() == (IntPtr.Size == 8 ? 8 : 4));
             Check("keyboard structure matches Windows ABI", Marshal.SizeOf<Native.KeyboardInput>() == (IntPtr.Size == 8 ? 24 : 16));
