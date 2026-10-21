@@ -17,8 +17,67 @@ final class PermissionsManager {
     var accessibility: Bool = false
     var automation: Status = .notDetermined
     var requiresSpeechRecognition = true
+    /// Apple's Accessibility prompt shows once per app record, so a later
+    /// press goes straight to System Settings instead of doing nothing.
+    var accessibilityPrompted: Bool {
+        defaults.string(forKey: Self.promptedKey) == Self.promptedValue
+    }
 
+    static let promptedKey = "pflow.accessibilityPrompted"
+    private static var promptedValue: String {
+        Bundle.main.bundlePath + "@" + (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0")
+    }
+    private let defaults: UserDefaults
     private var pollTimer: Timer?
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    /// What one press of Grant does. Exactly one path per press: Apple's own
+    /// prompt (which names the app and offers Open System Settings) or the
+    /// System Settings pane, never both at once.
+    enum GrantPath: Equatable { case prompt, openSettings, nothing }
+
+    static func accessibilityPath(granted: Bool, promptedBefore: Bool) -> GrantPath {
+        if granted { return .nothing }
+        return promptedBefore ? .openSettings : .prompt
+    }
+
+    static func automationPath(_ status: Status) -> GrantPath {
+        switch status {
+        case .granted: return .nothing
+        case .notDetermined: return .prompt
+        case .denied: return .openSettings
+        }
+    }
+
+    /// One Grant press for Accessibility. The grant itself is noticed by
+    /// `startObserving`, so the window updates without a relaunch.
+    func grantAccessibility(prompt: (() -> Void)? = nil, open: (() -> Void)? = nil) {
+        switch Self.accessibilityPath(granted: accessibility, promptedBefore: accessibilityPrompted) {
+        case .prompt:
+            defaults.set(Self.promptedValue, forKey: Self.promptedKey)
+            (prompt ?? requestAccessibility)()
+        case .openSettings:
+            (open ?? openAccessibilitySettings)()
+        case .nothing:
+            break
+        }
+    }
+
+    /// One Grant press for Automation: the prompt while undecided, the pane
+    /// once it was denied.
+    func grantAutomation(prompt: (() async -> Void)? = nil, open: (() -> Void)? = nil) async {
+        switch Self.automationPath(automation) {
+        case .prompt:
+            if let prompt { await prompt() } else { await requestAutomation() }
+        case .openSettings:
+            (open ?? openAutomationSettings)()
+        case .nothing:
+            break
+        }
+    }
 
     var allGranted: Bool {
         microphone == .granted && (!requiresSpeechRecognition || speech == .granted) && accessibility && automation == .granted
@@ -157,8 +216,9 @@ final class PermissionsManager {
             NSLog("pFlow: tccutil reset failed: \(error.localizedDescription)")
         }
         refresh()
-        requestAccessibility()
-        openAccessibilitySettings()
+        // The record is gone, so Apple's prompt can show again: one path.
+        defaults.removeObject(forKey: Self.promptedKey)
+        grantAccessibility()
     }
 
     func requestMicrophone() async {

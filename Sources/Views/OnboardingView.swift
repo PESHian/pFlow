@@ -36,24 +36,20 @@ struct OnboardingView: View {
                     title: "Accessibility",
                     detail: "To paste into other apps.",
                     granted: app.permissions.accessibility,
-                    action: {
-                        app.permissions.requestAccessibility()
-                        app.permissions.openAccessibilitySettings()
-                    }
+                    action: { app.permissions.grantAccessibility() }
                 )
+                if !app.permissions.accessibility && app.permissions.accessibilityPrompted {
+                    Text("Turn on pFlow in the list that opened. If nothing opened, press Grant again to open System Settings.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 PermissionStep(
                     icon: "wand.and.stars",
                     title: "Automation",
                     detail: "To place text in the focused field.",
                     granted: app.permissions.automation == .granted,
-                    action: {
-                        Task {
-                            await app.permissions.requestAutomation()
-                            if app.permissions.automation != .granted {
-                                app.permissions.openAutomationSettings()
-                            }
-                        }
-                    }
+                    action: { Task { await app.permissions.grantAutomation() } }
                 )
             }
 
