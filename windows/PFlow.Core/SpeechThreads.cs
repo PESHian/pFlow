@@ -28,7 +28,7 @@ public static class SpeechEngine
         "ARM64" => "ARM64 speech engine",
         "X86" => "x86 (32-bit) speech engine",
         var other => other + " speech engine"
-    }) + (liveModel ? "" : ", live words on the main model (slower; the live model file is missing)");
+    }) + (liveModel ? "" : ", live words on the main model (slower; the live model file is missing or damaged)");
 }
 
 /// The small, fast Whisper model used only for live words while someone

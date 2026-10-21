@@ -36,6 +36,44 @@ if ($Setup) {
         Check ($shortcut.TargetPath -eq "$installed\pFlow.exe") 'Setup added the Start menu shortcut'
         Check (@(Get-ChildItem $env:LOCALAPPDATA -Directory -Filter 'pFlow.setup-*').Count -eq 0) 'Setup removed its unpack folder'
         Check (!(Test-Path ([Environment]::GetFolderPath('Desktop') + '\pFlow by Pesh.lnk')) -or $true) 'desktop shortcut only when asked (not asked here)'
+        # The real uninstall against this fixture account: decoy siblings with similar names, a junction to a decoy, and
+        # the data folder must survive; only pFlow's own folders, shortcut and keys go. The signed-in account's own Run
+        # value, Uninstall key and desktop shortcut are saved first and put back, since the registry is not redirected.
+        $programs=Join-Path $env:LOCALAPPDATA 'Programs'
+        foreach($d in 'pFlowNotes','pFlow backup','decoy-target','pFlow.previous-fictional'){New-Item -ItemType Directory -Force "$programs\$d" | Out-Null; 'keep' | Set-Content "$programs\$d\keep.txt"}
+        New-Item -ItemType Junction -Path "$programs\pFlow.previous-link" -Target "$programs\decoy-target" | Out-Null
+        $dataDir=Join-Path $env:LOCALAPPDATA 'pFlow';New-Item -ItemType Directory -Force $dataDir | Out-Null;'{"fictional":true}' | Set-Content "$dataDir\settings.json"
+        $runKey='HKCU:\Software\Microsoft\Windows\CurrentVersion\Run';$savedRun=(Get-ItemProperty $runKey -ErrorAction SilentlyContinue).'pFlow by Pesh'
+        $uninstKey='HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\pFlow by Pesh';$savedUninst=if(Test-Path $uninstKey){Get-ItemProperty $uninstKey}else{$null}
+        $deskLink=[Environment]::GetFolderPath('Desktop')+'\pFlow by Pesh.lnk';$savedDesk=if(Test-Path $deskLink){[IO.File]::ReadAllBytes($deskLink)}else{$null}
+        try {
+            # A copy running from the install folder that will not quit (a renamed cmd.exe standing in for pFlow busy
+            # with a take): the uninstall must wait, then stop and remove nothing, never end it by force.
+            Copy-Item "$env:SystemRoot\System32\cmd.exe" "$installed\engine\pFlow.exe"
+            $busy=Start-Process -FilePath "$installed\engine\pFlow.exe" -ArgumentList '/c','timeout /t 300 /nobreak' -PassThru -WindowStyle Hidden
+            try {
+                $refused=Start-Process -FilePath "$installed\pFlow.exe" -ArgumentList '--uninstall','--quiet' -PassThru -NoNewWindow
+                for($k=0;$k -lt 150 -and !$refused.HasExited;$k++){Start-Sleep 1}
+                Check ($refused.HasExited -and $refused.ExitCode -eq 1) 'uninstall with a busy copy that will not quit stops with exit 1 (waited, never killed)'
+                Check (!$busy.HasExited) 'the busy copy was not ended by force'
+                Check ((Test-Path "$installed\pFlow.exe") -and (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\pFlow by Pesh.lnk")) 'a refused uninstall removes nothing'
+            } finally { if(!$busy.HasExited){Stop-Process -Id $busy.Id -Force}; Start-Sleep 1; Remove-Item "$installed\engine\pFlow.exe" -Force }
+            $u=Start-Process -FilePath "$installed\pFlow.exe" -ArgumentList '--uninstall','--quiet' -PassThru -NoNewWindow
+            for($k=0;$k -lt 60 -and !$u.HasExited;$k++){Start-Sleep 1}
+            Check ($u.HasExited -and $u.ExitCode -eq 0) 'quiet uninstall finished without error'
+            for($k=0;$k -lt 40 -and (Test-Path $installed);$k++){Start-Sleep 1}
+            Check (!(Test-Path $installed)) 'uninstall removed the app folder'
+            Check (!(Test-Path "$programs\pFlow.previous-fictional")) 'uninstall removed a previous pFlow folder'
+            Check (!(Test-Path "$programs\pFlow.previous-link") -and (Test-Path "$programs\decoy-target\keep.txt")) 'uninstall removed only the pFlow junction, not the folder it pointed at'
+            Check ((Test-Path "$programs\pFlowNotes\keep.txt") -and (Test-Path "$programs\pFlow backup\keep.txt")) 'uninstall left sibling folders with similar names alone'
+            Check (!(Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\pFlow by Pesh.lnk")) 'uninstall removed the Start menu shortcut'
+            Check (!(Test-Path $uninstKey)) 'uninstall removed the Installed apps row'
+            Check (Test-Path "$dataDir\settings.json") 'quiet uninstall keeps settings and History'
+        } finally {
+            if($savedRun){New-Item $runKey -Force | Out-Null;Set-ItemProperty $runKey -Name 'pFlow by Pesh' -Value $savedRun}
+            if($savedUninst){New-Item $uninstKey -Force | Out-Null;foreach($p in $savedUninst.PSObject.Properties){if($p.Name -notlike 'PS*'){Set-ItemProperty $uninstKey -Name $p.Name -Value $p.Value}}}
+            if($savedDesk){[IO.File]::WriteAllBytes($deskLink,$savedDesk)}
+        }
     } finally {
         $env:LOCALAPPDATA=$local;$env:APPDATA=$roaming
         if(Test-Path $fixture){Remove-Item -LiteralPath $fixture -Recurse -Force}

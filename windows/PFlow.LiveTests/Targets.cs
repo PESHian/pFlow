@@ -246,6 +246,13 @@ internal static partial class Program
             Check("the clipboard was never touched for the card", Native.GetClipboardSequenceNumber() == clipboard);
             var typed = await pipeline.Deliver(prepared, 1.0, new InsertingTarget(), IntPtr.Zero, (_, _) => { }, CancellationToken.None);
             Check("an inserted take never offers the card", typed.Prompt == null && typed.Status == "Inserted");
+            // Recognition of the whole take fails (no engine in this folder) after live words: the card is offered only
+            // when nothing was typed live; words already typed in the app stay there and get no "couldn't type this".
+            var typing = new LiveTyping(_ => (LiveFinal.Applied, null), () => true, () => (LiveCancel.NothingTyped, null));
+            var keptTyped = await pipeline.Run(Path.Combine(directory, "missing-fictional.wav"), 1.0, new UnreachableTarget(), directory, IntPtr.Zero, (_, _) => { }, CancellationToken.None, "Fictional live words.", typing);
+            Check("a failed final after live typing keeps the typed words and offers no card", keptTyped.Status == LiveInlineText.KeptTyped && keptTyped.Prompt == null);
+            var keptShown = await pipeline.Run(Path.Combine(directory, "missing-fictional.wav"), 1.0, new UnreachableTarget(), directory, IntPtr.Zero, (_, _) => { }, CancellationToken.None, "Fictional live words.", null);
+            Check("a failed final with live words only shown offers them in the card", keptShown.Status == LiveTake.KeptStatus && keptShown.Prompt is { } k && k.Text == "Fictional live words." && k.Reason.StartsWith(LiveTake.KeptStatus));
         } finally { Directory.Delete(directory, true); }
     }
     sealed class UnreachableTarget : IInsertionTarget

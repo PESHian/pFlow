@@ -8,15 +8,22 @@ namespace PFlow.Windows;
 /// copy of the rule. `Run` is `pFlow.exe --uninstall`: asks once, asks whether
 /// to keep settings and History (default keep), ends the running copy, removes
 /// the shortcuts, the Run and Uninstall keys and pFlow's own folders under
-/// Programs. Nothing outside this account is touched, and no admin is needed.
+/// Programs. A copy that will not quit (busy with a take or a clipboard restore)
+/// is never ended by force: the uninstall stops and says so. Nothing outside
+/// this account is touched, and no admin is needed.
 internal static class Uninstaller
 {
     const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run", RunValue = "pFlow by Pesh", Shortcut = "pFlow by Pesh.lnk";
     const string Title = "pFlow by Pesh";
     static string Me => Environment.ProcessPath ?? "";
-    static string Programs => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs");
+    // The LOCALAPPDATA/APPDATA variables first, as Setup and the install scripts read them, so the install test can redirect them.
+    static string Local => Environment.GetEnvironmentVariable("LOCALAPPDATA") ?? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+    static string Roaming => Environment.GetEnvironmentVariable("APPDATA") ?? Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+    static string Programs => Path.Combine(Local, "Programs");
     static string InstallRoot => Path.Combine(Programs, "pFlow");
-    static string DataRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "pFlow");
+    static string DataRoot => Path.Combine(Local, "pFlow");
+    /// Held while an uninstall runs; the running copy quits only when it sees this.
+    internal const string RunningMutex = "Local\\pFlow-by-Pesh-Windows-uninstalling";
 
     /// Writes the Installed apps row when this copy runs from the install folder. Quiet on any failure.
     internal static void Register()
@@ -36,9 +43,13 @@ internal static class Uninstaller
     {
         if (!quiet && MessageBox.Show(UninstallEntry.ConfirmQuestion, Title, MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return 1;
         bool keepData = quiet || MessageBox.Show(UninstallEntry.KeepDataQuestion, Title, MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes) == MessageBoxResult.Yes;
+        using var running = new Mutex(true, RunningMutex);
         try {
-            EndRunningCopies();
-            foreach (string link in new[] { Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Microsoft", "Windows", "Start Menu", "Programs", Shortcut), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), Shortcut) })
+            if (!EndRunningCopies()) {
+                if (!quiet) MessageBox.Show(UninstallEntry.CannotQuit, Title, MessageBoxButton.OK, MessageBoxImage.Warning); else Console.Error.WriteLine(UninstallEntry.CannotQuit);
+                return 1;
+            }
+            foreach (string link in new[] { Path.Combine(Roaming, "Microsoft", "Windows", "Start Menu", "Programs", Shortcut), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), Shortcut) })
                 if (File.Exists(link)) File.Delete(link);
             using (var run = Registry.CurrentUser.OpenSubKey(RunKey, writable: true)) run?.DeleteValue(RunValue, false);
             Registry.CurrentUser.DeleteSubKeyTree(UninstallEntry.KeyPath, false);
@@ -62,29 +73,36 @@ internal static class Uninstaller
 
     internal const string QuitEvent = "Local\\pFlow-by-Pesh-Windows-uninstall-quit";
 
-    /// The running copy is asked to quit (it listens on `QuitEvent`); one that does not go in 8 s is ended.
-    static void EndRunningCopies()
+    /// Copies running from the folder being removed are asked to quit (they listen on `QuitEvent`
+    /// and finish any insertion and clipboard restore first). Waits up to 90 s; never ends one by
+    /// force, so a clipboard item mid-restore is never lost. False when one is still running.
+    static bool EndRunningCopies()
     {
-        var running = Process.GetProcessesByName("pFlow").Where(p => p.Id != Environment.ProcessId).ToList();
-        if (running.Count == 0) return;
+        var running = Process.GetProcessesByName("pFlow").Where(p => p.Id != Environment.ProcessId && UninstallEntry.RunsFrom(PathOf(p), InstallRoot)).ToList();
+        if (running.Count == 0) return true;
         try { using var quit = new EventWaitHandle(false, EventResetMode.AutoReset, QuitEvent); foreach (var _ in running) quit.Set(); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        var deadline = DateTime.UtcNow.AddSeconds(90);
         foreach (var process in running) {
-            try { if (!process.WaitForExit(8000)) { process.Kill(); process.WaitForExit(5000); } }
+            try { while (!process.HasExited && DateTime.UtcNow < deadline) process.WaitForExit(500); if (!process.HasExited) return false; }
             catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception) { }
         }
+        return true;
     }
+    static string? PathOf(Process process) { try { return process.MainModule?.FileName; } catch { return null; } }
 
-    /// A detached command script that removes the folders once this process has exited, trying for up to 30 s, then deletes itself.
+    /// A detached command script that removes the folders once this process has exited, trying for
+    /// up to 30 s, then deletes itself. Plain batch: no delayed expansion, so a "!" in a name is safe.
     static void RemoveAfterExit(IEnumerable<string> folders)
     {
         string temp = Path.GetTempPath();
         string script = Path.Combine(temp, "pflow-remove-" + Guid.NewGuid().ToString("N") + ".cmd");
-        var lines = new List<string> { "@echo off", "setlocal enabledelayedexpansion", "for /l %%i in (1,1,30) do (" };
-        foreach (string folder in folders) lines.Add("  if exist \"" + folder + "\" rmdir /s /q \"" + folder + "\" >nul 2>&1");
-        lines.Add("  set gone=1");
-        foreach (string folder in folders) lines.Add("  if exist \"" + folder + "\" set gone=0");
-        lines.Add("  if \"!gone!\"==\"1\" goto done"); lines.Add("  timeout /t 1 /nobreak >nul"); lines.Add(")"); lines.Add(":done"); lines.Add("del \"%~f0\"");
+        var lines = new List<string> { "@echo off", "set tries=0", ":again" };
+        foreach (string folder in folders) lines.Add("if exist \"" + folder + "\" rmdir /s /q \"" + folder + "\" >nul 2>&1");
+        string gone = string.Join(" ", folders.Select(folder => "if not exist \"" + folder + "\""));
+        lines.Add(gone + " goto done");
+        lines.Add("set /a tries+=1"); lines.Add("if %tries% geq 30 goto done"); lines.Add("timeout /t 1 /nobreak >nul"); lines.Add("goto again");
+        lines.Add(":done"); lines.Add("del \"%~f0\"");
         File.WriteAllLines(script, lines);
         var cmd = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "cmd.exe");
         var info = new ProcessStartInfo(cmd) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = temp };

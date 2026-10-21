@@ -15,7 +15,7 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
     internal TimeSpan CleanupBudget { get; init; } = TimeSpan.FromSeconds(8);
     internal const string CopyFailed = "Inserted, but it could not be copied to the clipboard. Copy it from History.";
     /// `Prompt` carries the words for pFlow's "couldn't type this" card, with the
-    /// reason line, whenever the words did not go into the app (one rule: InsertionPrompt.Needed).
+    /// reason line, whenever the words did not go into the app (one rule: InsertionPrompt.Offer).
     internal readonly record struct Result(string Status, string? Notice, (string Text, string Reason)? Prompt = null);
     internal readonly record struct Prepared(string Text, string? Rtf, int SpokenWords, bool ReportUnavailable, bool CleanupIncomplete, bool CleanupTimedOut);
     internal async Task<Prepared> Prepare(string audio, double seconds, string folder, Action<Phase, string?> state, CancellationToken cancel)
@@ -75,11 +75,12 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         try { prepared = await Prepare(audio, seconds, folder, state, cancel); }
         catch (RecognitionFailure error) when (LiveTake.Recoverable(liveWords) is { } kept) {
             // Recognition of the whole take failed after live words appeared: keep them, say so, type nothing more.
-            string status = typing?.Typed() == true ? LiveInlineText.KeptTyped : LiveTake.KeptStatus;
+            bool typed = typing?.Typed() == true;
+            string status = typed ? LiveInlineText.KeptTyped : LiveTake.KeptStatus;
             store.Add(new Transcript(Guid.NewGuid(), kept, DateTimeOffset.Now, seconds, "Windows default microphone", TextProcessing.WordCount(kept),
                 originalTarget.ApplicationName, originalTarget.ApplicationId, status));
             state(Phase.Failed, status);
-            return new Result(status, status + " " + error.Message, (kept, status + " " + error.Message));
+            return new Result(status, status + " " + error.Message, InsertionPrompt.Offer(kept, status, typed));
         }
         return await Deliver(prepared, seconds, originalTarget, owner, state, cancel, typing);
     }
@@ -121,7 +122,7 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         // Anything short of "Inserted" is said every time; words that did not go in are shown in the card to copy.
         string? notice = result != "Inserted" ? result : unavailable ? "Dictation inserted. AI report formatting did not finish; your words were kept."
             : prepared.CleanupIncomplete ? "Dictation inserted. Cleanup did not finish; your original words were kept." : null;
-        return new Result(result, notice, InsertionPrompt.Needed(result, kept) && !string.IsNullOrWhiteSpace(text) ? (text, result) : null);
+        return new Result(result, notice, InsertionPrompt.Offer(text, result, kept));
     }
 }
 

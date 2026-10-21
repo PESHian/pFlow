@@ -23,7 +23,9 @@ internal sealed class PromptCard : Window
     readonly TextBox words;
     readonly Button copy, close, secondary;
     readonly DropShadowEffect shadow;
-    readonly System.Windows.Threading.DispatcherTimer copied, expiry;
+    readonly System.Windows.Threading.DispatcherTimer copied, expiry, watch;
+    /// How long the words card stays before it hides on its own.
+    internal static readonly TimeSpan WordsLifetime = TimeSpan.FromMinutes(3);
     readonly Image mark;
     internal IntPtr Handle => new WindowInteropHelper(this).Handle;
     internal string Title_ => title.Text;
@@ -99,6 +101,10 @@ internal sealed class PromptCard : Window
         copied.Tick += (_, _) => { copied.Stop(); copy.Content = InsertionPrompt.Copy; };
         expiry = new System.Windows.Threading.DispatcherTimer();
         expiry.Tick += (_, _) => Dismiss();
+        // A card left open goes away on its own (the words stay in History), and at once when a
+        // full-screen app (a game, a video) is in front, so it never sits over one.
+        watch = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        watch.Tick += (_, _) => { if (IsVisible && FullScreenInFront()) Dismiss(); };
         ApplyTheme(); ApplyTextSize();
     }
 
@@ -125,6 +131,7 @@ internal sealed class PromptCard : Window
         words.Visibility = hint.Visibility = copy.Visibility = Visibility.Visible; secondary.Visibility = Visibility.Collapsed; copy.Content = InsertionPrompt.Copy;
         secondary.Margin = new Thickness(10, 12, 0, 0);
         Reveal(anchor);
+        expiry.Interval = WordsLifetime; expiry.Start();
     }
 
     /// The start notice: where pFlow is and how to dictate; goes away on its own after `lifetime`.
@@ -138,7 +145,19 @@ internal sealed class PromptCard : Window
         if (lifetime > TimeSpan.Zero) { expiry.Interval = lifetime; expiry.Start(); }
     }
 
-    internal void Dismiss() { expiry.Stop(); copied.Stop(); if (IsVisible) Hide(); }
+    /// Hides the card and lets the words go; they stay in History.
+    internal void Dismiss() { expiry.Stop(); copied.Stop(); watch.Stop(); if (IsVisible) Hide(); words.Text = ""; reason.Text = ""; }
+
+    /// True when the window in front fills its whole display (not the desktop or the taskbar).
+    static bool FullScreenInFront()
+    {
+        IntPtr front = Native.GetForegroundWindow();
+        if (front == IntPtr.Zero || !Native.GetWindowRect(front, out var at)) return false;
+        var screen = System.Windows.Forms.Screen.FromHandle(front).Bounds;
+        if (at.Left > screen.Left || at.Top > screen.Top || at.Right < screen.Right || at.Bottom < screen.Bottom) return false;
+        var name = new System.Text.StringBuilder(64); Native.GetClassName(front, name, name.Capacity);
+        return name.ToString() is not ("Progman" or "WorkerW" or "Shell_TrayWnd");
+    }
 
     void CopyWords()
     {
@@ -150,6 +169,7 @@ internal sealed class PromptCard : Window
     {
         if (!IsVisible) Show();
         Place(anchor);
+        watch.Start();
     }
 
     /// Beside the recording control when there is one; otherwise above the tray corner of the main display.

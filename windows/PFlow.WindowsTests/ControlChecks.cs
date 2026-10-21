@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using PFlow.Core;
 using PFlow.Windows;
 using System.IO;
@@ -130,6 +131,7 @@ internal static partial class Program
     /// The "couldn't type this" card and the start notice: shown without taking
     /// focus, readable in both looks, a touch-sized Copy button that is the only
     /// thing that writes the clipboard. PFLOW_SHOTS=<folder> also writes PNGs.
+    static void words_focus(PromptCard card) { if (card.Card is Border b && b.Child is StackPanel stack) stack.Children.OfType<TextBox>().First().Focus(); }
     static void NativePromptCard()
     {
         double Luminance(Color color) {
@@ -149,7 +151,7 @@ internal static partial class Program
                 uint clipboard = Native.GetClipboardSequenceNumber();
                 card.ShowWords(words, "Focus changed. Your text is in History.", new WindowInteropHelper(anchor).Handle); Drain();
                 Check($"{theme} card shows without taking focus", card.IsVisible && !card.ShowActivated && !card.IsActive);
-                Check($"{theme} card shows the title, the plain reason and the exact words to copy", card.Title_ == InsertionPrompt.Title && card.Reason == "Focus changed." && card.Words == words && card.WordsShown && card.CopyShown);
+                Check($"{theme} card shows the title, the plain reason and the exact words to copy", card.Title_ == InsertionPrompt.Title && card.Reason == "You switched to another window before pFlow could type." && card.Words == words && card.WordsShown && card.CopyShown);
                 var face = card.Card is Border b ? b.Background : Brushes.Black;
                 Check($"{theme} card text is readable: title, reason, words and the Copy label", Contrast(card.TitleBrush, face) >= 7 && Contrast(card.ReasonBrush, face) >= 4.5
                     && Contrast(card.WordsBrush, card.WordsBackground) >= 7 && Contrast(card.CopyBrush, card.CopyBackground) >= 4.5);
@@ -159,8 +161,16 @@ internal static partial class Program
                 var copy = card.Card is Border border && border.Child is StackPanel stack ? stack.Children.OfType<StackPanel>().Last().Children.OfType<Button>().First() : null;
                 copy!.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent)); Drain();
                 Check($"{theme} Copy puts exactly the words on the clipboard and says Copied", card.Copies == 1 && Native.GetClipboardSequenceNumber() != clipboard && Clipboard.GetText() == words && card.CopyLabel == InsertionPrompt.Copied);
+                // The words box focused inside pFlow's own window: a take must refuse, never target whatever hides behind the card.
+                // The cursor in the card's words box: a take must refuse, never target whatever hides behind the card. A process
+                // started by a scheduled task cannot bring its window to the front, so the foreground process is supplied.
+                words_focus(card); Drain();
+                string refusal = ""; try { var got = InsertionTarget.Capture(() => (uint)Environment.ProcessId); refusal = "captured " + got.Kind; } catch (InvalidOperationException error) { refusal = error.Message; }
+                Check($"{theme} dictating with the cursor in pFlow's own window is refused", refusal == InsertionTarget.OwnWindow);
+                string elsewhere = ""; try { InsertionTarget.Capture(() => (uint)Environment.ProcessId + 1); elsewhere = "captured"; } catch (InvalidOperationException error) { elsewhere = error.Message; }
+                Check($"{theme} another process in front is not refused as pFlow's own window", elsewhere != InsertionTarget.OwnWindow);
                 card.Dismiss(); Drain();
-                Check($"{theme} close hides the card", !card.IsVisible);
+                Check($"{theme} close hides the card and lets the words go", !card.IsVisible && card.Words == "" && card.Reason == "");
                 card.ShowNotice(StartNotice.Body("Right Ctrl"), StartNotice.Settings, TimeSpan.Zero); Drain();
                 Check($"{theme} the start notice says where pFlow is and how to dictate, with no words box and no Copy", card.IsVisible && !card.IsActive && card.Title_ == StartNotice.Title
                     && card.Reason.Contains("Hold Right Ctrl") && !card.WordsShown && !card.CopyShown);

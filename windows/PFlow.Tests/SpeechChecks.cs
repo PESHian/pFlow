@@ -13,7 +13,7 @@ internal static class SpeechChecks
             && SpeechEngine.Describe("X64", SpeechEngine.Baseline) == "x64, standard speech engine (no AVX2)" && SpeechEngine.Describe("Arm64", SpeechEngine.Baseline) == "ARM64 speech engine"
             && SpeechEngine.Describe("X86", SpeechEngine.Baseline) == "x86 (32-bit) speech engine");
         Check("Settings says when live words lack their fast model and run on the main one",
-            SpeechEngine.Describe("ARM64", SpeechEngine.Baseline, liveModel: false) == "ARM64 speech engine, live words on the main model (slower; the live model file is missing)"
+            SpeechEngine.Describe("ARM64", SpeechEngine.Baseline, liveModel: false) == "ARM64 speech engine, live words on the main model (slower; the live model file is missing or damaged)"
             && !SpeechEngine.Describe("ARM64", SpeechEngine.Baseline, liveModel: true).Contains("main model"));
         Check("the live model is the 5-bit base model, with its exact size and checksum pinned",
             LiveSpeechModel.FileName == "ggml-base-q5_1.bin" && LiveSpeechModel.Bytes == 59707625 && LiveSpeechModel.Sha.Length == 64 && LiveSpeechModel.Sha == LiveSpeechModel.Sha.ToLowerInvariant());

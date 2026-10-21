@@ -57,14 +57,25 @@ internal static class StaleCopies
     /// The running copy's side of `AskRunningCopyToOpenSettings`.
     internal static void ListenForOpenSettings(Action openSettings) => Listen(SettingsEvent, openSettings, "pFlow open settings");
 
-    /// The uninstaller's request to quit (Uninstaller.QuitEvent).
-    internal static void ListenForUninstall(Action quit) => Listen(Uninstaller.QuitEvent, quit, "pFlow uninstall quit");
+    /// The uninstaller's request to quit (Uninstaller.QuitEvent), honored only while an
+    /// uninstaller is really running (it holds Uninstaller.RunningMutex); a stray signal is ignored.
+    internal static void ListenForUninstall(Action quit) => Listen(Uninstaller.QuitEvent, () => { if (UninstallerRunning()) quit(); }, "pFlow uninstall quit");
 
+    static bool UninstallerRunning()
+    {
+        try { using var held = Mutex.OpenExisting(Uninstaller.RunningMutex); return true; }
+        catch (Exception error) when (error is WaitHandleCannotBeOpenedException or UnauthorizedAccessException or IOException) { return false; }
+    }
+
+    /// A pre-created event with an access list that keeps this copy out, or any other failure,
+    /// only disables that listener; it never stops pFlow from starting.
     static void Listen(string eventName, Action action, string threadName)
     {
         var listener = new Thread(() => {
-            using var signal = new EventWaitHandle(false, EventResetMode.AutoReset, eventName);
-            while (true) { signal.WaitOne(); action(); }
+            try {
+                using var signal = new EventWaitHandle(false, EventResetMode.AutoReset, eventName);
+                while (true) { signal.WaitOne(); action(); }
+            } catch (Exception error) when (error is IOException or UnauthorizedAccessException or WaitHandleCannotBeOpenedException or ObjectDisposedException) { }
         }) { IsBackground = true, Name = threadName };
         listener.Start();
     }

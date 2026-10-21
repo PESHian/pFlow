@@ -52,7 +52,7 @@ internal sealed partial class Program : Application
         try {
             string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "pFlow");
             StaleCopies.RepointRunKey(); StaleCopies.ListenForNewerCopy(() => Dispatcher.InvokeAsync(Quit));
-            StaleCopies.ListenForOpenSettings(() => Dispatcher.InvokeAsync(OpenSettings)); StaleCopies.ListenForUninstall(() => Dispatcher.InvokeAsync(Quit));
+            StaleCopies.ListenForOpenSettings(() => Dispatcher.InvokeAsync(OpenSettings)); StaleCopies.ListenForUninstall(() => Dispatcher.InvokeAsync(QuitForUninstall));
             _ = Task.Run(Uninstaller.Register);
             store = new StateStore(directory); whisper = new Whisper(directory);
             InsertionLog.Path = Path.Combine(directory, "insertion.log");
@@ -160,8 +160,9 @@ internal sealed partial class Program : Application
             if (operations.Busy) { keyboard.Reset(); return; }
             try {
                 if (!whisper.FilesPresent) throw new InvalidOperationException("Install the Whisper model in Settings first. The complete Windows package must include its engine.");
-                prompt.Dismiss();
+                // Captured first: hiding the card could activate another window, which must never become the target.
                 target = InsertionTarget.Capture();
+                prompt.Dismiss();
                 InsertionLog.Record("take: app=" + target.ApplicationName + " field=" + target.Kind + (target.CanInsert ? " insertable" : " not insertable: " + target.Refusal) + " live=" + LiveTextModes.Resolve(store.Preferences.LiveTextMode) + " copy=" + store.Preferences.CopyDictationToClipboard);
                 sessionId = operations.Start();
                 session = new CancellationTokenSource(TimeSpan.FromHours(2));
@@ -296,6 +297,12 @@ internal sealed partial class Program : Application
         settings.Closed += (_, _) => settings = null; settings.Show();
     }
     void OpenHistory() { OpenSettings(); settings?.OpenHistoryPage(); }
+    /// The uninstaller asked: quit as soon as no insertion or clipboard restore is under way (it waits up to 90 s and never ends pFlow by force).
+    async void QuitForUninstall()
+    {
+        for (int i = 0; i < 170 && (phase == Phase.Inserting || ClipboardLease.Pending.Count > 0); i++) await Task.Delay(500);
+        Quit();
+    }
     async void Quit()
     {
         if (phase == Phase.Inserting || ClipboardLease.Pending.Count > 0) { Notify("pFlow is restoring your clipboard. Quit when insertion ends."); return; }

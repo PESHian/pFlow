@@ -35,10 +35,26 @@ internal static class InstalledChecks
             && InsertionPrompt.Needed("Dictation is off in password fields.", false) && InsertionPrompt.Needed("Insertion could not be confirmed; check the field before copying from History.", false)
             && !InsertionPrompt.Needed("Inserted", false) && !InsertionPrompt.Needed("Inserted as plain text; bold headings could not be applied safely.", false)
             && !InsertionPrompt.Needed("Inserted, but it could not be copied to the clipboard. Copy it from History.", false) && !InsertionPrompt.Needed("Kept as typed", true));
-        Check("the card's reason line drops the 'in History' trailer and never comes out empty",
-            InsertionPrompt.Reason("Focus changed. Your text is in History.") == "Focus changed." && InsertionPrompt.Reason("Saved to History. Open History to copy your dictation.") == "Saved to History."
-            && InsertionPrompt.Reason("Couldn't reach that box. Your words are in History.") == "Couldn't reach that box." && InsertionPrompt.Reason("Dictation is off in password fields.") == "Dictation is off in password fields."
-            && InsertionPrompt.Reason("  Your text is in History. ") == "The words could not go into that box.");
+        Check("the card's reason line says each known outcome in plain words, no 'focus' or 'insertion' jargon",
+            InsertionPrompt.Reason("Focus changed. Your text is in History.") == "You switched to another window before pFlow could type."
+            && InsertionPrompt.Reason("Saved to History. Open History to copy your dictation.") == "pFlow can't type into that kind of box."
+            && InsertionPrompt.Reason("Couldn't reach that box. Your words are in History.") == "That box did not let pFlow in."
+            && InsertionPrompt.Reason("Dictation is off in password fields.") == "pFlow never types into a password box."
+            && InsertionPrompt.Reason("Insertion could not be confirmed; check the field before copying from History.").StartsWith("pFlow could not check that the words went in.")
+            && InsertionPrompt.Reason("This field is no longer editable. Your text is in History.") == "That box stopped taking text before pFlow could type."
+            && InsertionPrompt.Reason("Kept in History. Recognition stopped before it finished, so nothing was typed. The speech engine stopped answering.") == "Recognition stopped before it finished, so nothing was typed."
+            && InsertionPrompt.Reason("Click in the app where the words should go, then dictate. The cursor was in pFlow's own window.").StartsWith("The cursor was in pFlow's own window.")
+            && !new[] { "Focus changed. Your text is in History.", "Insertion could not be confirmed; check the field before copying from History.", "Release the shortcut keys first. Your text is in History.", "The clipboard changed before insertion. Your text is in History." }
+                .Any(status => InsertionPrompt.Reason(status).Contains("Focus") || InsertionPrompt.Reason(status).Contains("Insertion") || InsertionPrompt.Reason(status).Contains("History")));
+        Check("an unknown outcome drops the 'in History' trailer and never comes out empty",
+            InsertionPrompt.Reason("Something else went wrong. Your text is in History.") == "Something else went wrong." && InsertionPrompt.Reason("  Your text is in History. ") == "The words could not go into that box.");
+        Check("one rule offers the card: never for inserted words, words typed live, or empty text; the reason is the outcome itself",
+            InsertionPrompt.Offer("Fictional words.", "Focus changed. Your text is in History.", false) == ("Fictional words.", "Focus changed. Your text is in History.")
+            && InsertionPrompt.Offer("Fictional words.", "Kept in History. Recognition stopped before it finished; the words already typed stay in your app.", true) == null
+            && InsertionPrompt.Offer("Fictional words.", "Inserted", false) == null && InsertionPrompt.Offer("   ", "Focus changed. Your text is in History.", false) == null);
+        Check("the uninstall asks only copies running from the folder being removed to quit",
+            UninstallEntry.RunsFrom(root + @"\pFlow.exe", root) && !UninstallEntry.RunsFrom(@"C:\Fixture\Other\pFlow\pFlow.exe", root) && !UninstallEntry.RunsFrom(null, root)
+            && UninstallEntry.CannotQuit.Contains("nothing was removed"));
         Check("the start notice names the tray and the activation key", StartNotice.Body("Right Ctrl") == "Find it in the tray, near the clock. Hold Right Ctrl and speak; let go to put the words in." && StartNotice.Title == "pFlow is running");
         { var values = UninstallEntry.Values(current, root, new Version(0, 1, 20), 760L * 1024 * 1024 + 1, new DateTimeOffset(2026, 10, 21, 9, 0, 0, TimeSpan.Zero));
           Check("the Installed apps row names pFlow by Pesh, Pesh, the version, the icon, the folder, the size in KB and a no-admin uninstall command",

@@ -34,14 +34,16 @@ internal sealed class SpeechWorker : IDisposable
     internal static int FailNextStarts { get; set; }
     /// Progress frames received while the last worker loaded its model.
     internal int StartHeartbeats { get; private set; }
+    /// A live model file that failed its size or hash check at the last start (live words then run on the main model).
+    internal static bool LiveModelRejected { get; private set; }
     /// Starting has no fixed time limit: hashing the 487 MB model and loading it both report progress
     /// (a chunk hashed, a frame from the worker), and only `StallLimit` without any progress ends it. A slow
     /// disk or a virus scanner reading the file makes a start slow, not stuck. `liveModel` (null when the
-    /// file is not installed) is checked the same way; a present but damaged live model stops the start,
-    /// like a damaged main model, instead of quietly running live words on the main model.
+    /// file is not installed) is checked the same way; a damaged one is left out, never blocking dictation.
     internal static async Task<SpeechWorker> Start(string executable, string model, string? liveModel, CancellationToken cancel)
     {
         if (FailNextStarts > 0) { FailNextStarts--; throw new SpeechWorkerLost(Stalled); }
+        LiveModelRejected = false;
         // Keep the checked files open without write/delete sharing for the worker's entire life.
         var lease = Lease(model); FileStream? liveLease = null;
         SpeechWorker? worker = null;
@@ -50,8 +52,10 @@ internal sealed class SpeechWorker : IDisposable
         try {
             await Verify(lease, Whisper.ModelBytes, Whisper.ModelSha, "The Whisper model", "Download it again in Settings.", stall, token);
             if (liveModel != null) {
-                liveLease = Lease(liveModel);
-                await Verify(liveLease, LiveSpeechModel.Bytes, LiveSpeechModel.Sha, "The live speech model", "Install a complete pFlow package.", stall, token);
+                // The live model only speeds up live words: a damaged one is left out (Settings says so) and
+                // the finished text is never held up by it.
+                try { liveLease = Lease(liveModel); await Verify(liveLease, LiveSpeechModel.Bytes, LiveSpeechModel.Sha, "The live speech model", "", stall, token); }
+                catch (Exception error) when (error is InvalidDataException or IOException or UnauthorizedAccessException) { liveLease?.Dispose(); liveLease = null; liveModel = null; LiveModelRejected = true; }
             }
             var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
             worker = new(lease, liveLease, Process.Start(info) ?? throw new SpeechWorkerLost("The speech engine could not start."));

@@ -75,4 +75,5 @@ internal static class Native
         if (SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>()) != inputs.Length)
             throw new InvalidOperationException("Windows blocked keyboard input. Your text is in History.");
     }
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern int GetClassName(IntPtr window, System.Text.StringBuilder name, int size);
 }
