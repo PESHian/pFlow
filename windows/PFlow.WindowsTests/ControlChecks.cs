@@ -47,6 +47,9 @@ internal static partial class Program
             var settings = new SettingsWindow(store,new Whisper(root),new LocalTextModel(root),hook,()=>{},()=>false);
             try {
                 settings.Show(); settings.UpdateLayout(); Drain();
+                var headings = Descendants<TextBlock>(settings).Where(x => x.FontFamily.Source == "Consolas" && x.FontSize == 10).Select(x => x.Text).ToList();
+                Check("Live text has its own section right after Shortcut", headings.Count(x => x == "LIVE TEXT") == 1 && headings.IndexOf("LIVE TEXT") == headings.IndexOf("SHORTCUT") + 1);
+                Check("Settings shows the Live text control once", Descendants<ComboBox>(settings).Count(x => System.Windows.Automation.AutomationProperties.GetName(x) == "Live text") == 1);
                 var sound = Descendants<CheckBox>(settings).Single(x => x.Content as string == "Quiet start and stop sounds");
                 bool previous = store.Preferences.Sounds;
                 var toggle = (IToggleProvider)UIElementAutomationPeer.CreatePeerForElement(sound).GetPattern(PatternInterface.Toggle);

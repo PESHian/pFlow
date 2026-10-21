@@ -14,6 +14,8 @@ enum Theme {
             : NSColor.white.withAlphaComponent(0.78)
     })
     static let surfaceHover = Color.primary.opacity(0.06)
+    static let switchOff = Color.primary.opacity(0.22)
+    static let switchOffStrong = Color.primary.opacity(0.38)
 
     static let recording = Color(red: 0.90, green: 0.29, blue: 0.35)
     static let success = Color(red: 0.20, green: 0.68, blue: 0.45)
@@ -83,5 +85,57 @@ struct GhostButtonStyle: ButtonStyle {
                     .strokeBorder(Theme.hairline, lineWidth: 1)
             )
             .contentShape(Rectangle())
+    }
+}
+
+/// The app's on/off switch: green track with a white knob when on, grey when off.
+/// macOS draws an "on" switch grey whenever its window is not in front, which
+/// in dark mode looks exactly like "off". This one looks the same either way.
+struct PeshSwitchStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        PeshSwitch(configuration: configuration)
+    }
+}
+
+extension ToggleStyle where Self == PeshSwitchStyle {
+    static var peshSwitch: PeshSwitchStyle { PeshSwitchStyle() }
+}
+
+private struct PeshSwitch: View {
+    let configuration: ToggleStyleConfiguration
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.labelsVisibility) private var labels
+
+    var body: some View {
+        HStack(spacing: Theme.s2) {
+            if labels != .hidden { configuration.label }
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) { configuration.isOn.toggle() }
+            } label: { track }
+                .buttonStyle(.plain)
+        }
+        .accessibilityRepresentation {
+            Toggle(isOn: configuration.$isOn) { configuration.label }
+        }
+    }
+
+    private var track: some View {
+        let on = configuration.isOn
+        let strong = contrast == .increased
+        return Capsule()
+            .fill(on ? Theme.success : (strong ? Theme.switchOffStrong : Theme.switchOff))
+            .overlay(Capsule().strokeBorder(strong ? Color.primary.opacity(0.7) : Theme.hairline,
+                                            lineWidth: strong ? 1 : 0.5))
+            .overlay(alignment: on ? .trailing : .leading) {
+                Circle().fill(.white)
+                    .overlay(Circle().strokeBorder(Color.black.opacity(strong ? 0.5 : 0.12), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(0.25), radius: 1, y: 0.5)
+                    .frame(width: 18, height: 18)
+                    .padding(2)
+            }
+            .frame(width: 40, height: 22)
+            .opacity(isEnabled ? 1 : 0.45)
+            .contentShape(Capsule())
     }
 }

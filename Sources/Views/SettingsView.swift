@@ -19,6 +19,7 @@ struct SettingsView: View {
                 historySection
                 dictionarySection
                 shortcutSection
+                liveTextSection
                 transcriptionSection
                 intelligenceSection
                 languageSection
@@ -136,6 +137,16 @@ struct SettingsView: View {
             Card(padding: Theme.s3) {
                 Text("Hold Right Command to dictate. Release to insert. Double-tap for continuous recording; tap again to finish.")
                     .font(.system(size: 13))
+            }
+        }
+    }
+
+    private var liveTextSection: some View {
+        @Bindable var app = app
+        return VStack(alignment: .leading, spacing: Theme.s3) {
+            SectionLabel("Live text")
+            Card {
+                LiveTextPicker(mode: $app.liveTextMode, engine: app.transcriptionEngine)
             }
         }
     }
@@ -266,8 +277,6 @@ struct SettingsView: View {
                     .disabled(app.coordinator.state != .idle)
                     Text("Both run on this Mac. Apple Intelligence handles cleanup with either engine.")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
-                    Divider()
-                    LiveTextPicker(mode: $app.liveTextMode, engine: app.transcriptionEngine)
                     if app.transcriptionEngine == .whisper {
                         if model.isReady {
                             Label("Whisper is ready · works offline", systemImage: "checkmark.circle")
@@ -361,7 +370,7 @@ struct SettingsView: View {
 
 /// Label on the left, switch hard-right. Using `Toggle`'s own label would let
 /// each row's text width push its switch to a different x, leaving the column ragged.
-private struct SettingsToggleRow: View {
+struct SettingsToggleRow: View {
     let title: String
     let subtitle: String
     @Binding var isOn: Bool
@@ -373,16 +382,17 @@ private struct SettingsToggleRow: View {
                 Text(subtitle).font(.system(size: 12)).foregroundStyle(.secondary)
             }
             Spacer(minLength: Theme.s3)
-            Toggle("", isOn: $isOn)
+            Toggle(title, isOn: $isOn)
                 .labelsHidden()
-                .toggleStyle(.switch)
+                .toggleStyle(.peshSwitch)
         }
         .padding(.horizontal, Theme.s3)
         .padding(.vertical, Theme.s2 + 2)
     }
 }
 
-/// The Live text choice and a plain note on what it does.
+/// The Live text choice, all three options in view, and a plain note on what
+/// the selected one does. Settings shows it once, in its own section.
 struct LiveTextPicker: View {
     @Binding var mode: LiveTextMode
     let engine: TranscriptionEngine
@@ -392,6 +402,8 @@ struct LiveTextPicker: View {
             Picker("Live text", selection: $mode) {
                 ForEach(LiveTextMode.allCases) { mode in Text(mode.title).tag(mode) }
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
             Text(note)
                 .font(.system(size: 12)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
