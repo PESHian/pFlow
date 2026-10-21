@@ -102,6 +102,9 @@ internal static class LiveTextChecks
             File.WriteAllText(settings, File.ReadAllText(settings).Replace("\"liveTextMode\": \"type\"", "\"liveTextMode\": \"sideways\""));
             Check("an unknown saved Live text value loads as Off", new StateStore(directory).Preferences.LiveTextMode == LiveTextModes.Off);
             Check("Type in the current app also shows the preview", LiveTextModes.ShowsPreview(LiveTextModes.TypeInApp) && LiveTextModes.ShowsPreview(LiveTextModes.Preview) && !LiveTextModes.ShowsPreview("sideways"));
+            Check("Type in the current app shows only the recording control while typing works", !LiveTextModes.ShowsCard(LiveTextModes.TypeInApp, typingLive: true) && LiveTextModes.ShowsCard(LiveTextModes.TypeInApp, typingLive: false));
+            Check("Preview always shows the card and Off never does", LiveTextModes.ShowsCard(LiveTextModes.Preview, true) && LiveTextModes.ShowsCard(LiveTextModes.Preview, false)
+                && !LiveTextModes.ShowsCard(LiveTextModes.Off, false) && !LiveTextModes.ShowsCard("sideways", false));
         } finally { Directory.Delete(directory, true); }
     }
 

@@ -20,6 +20,17 @@ public static class LiveTextModes
     /// stopped or the app does not allow it.
     public static bool ShowsPreview(string? value) => Resolve(value) != Off;
 
+    /// Whether the take shows the text card or only the small recording
+    /// control. Type mode keeps the control while pFlow is typing in the app:
+    /// the words are already on screen there. The card appears only when
+    /// typing could not start or has stopped, with its note. The one rule for
+    /// both platforms (`LiveTextMode.showsCard` on the Mac).
+    public static bool ShowsCard(string? value, bool typingLive) => Resolve(value) switch {
+        Off => false,
+        Preview => true,
+        _ => !typingLive
+    };
+
     public static string Note(string? value) => Resolve(value) switch {
         Preview => "Shows your words in a small pFlow window while you talk. Your app gets the finished text once you stop. Words show about a second behind, and the finished text can differ a little from the preview.",
         TypeInApp => "Types your words into the app as you talk, a little behind, and puts in the finished text when you stop. If you move the cursor, type, or switch apps, typing stops and the finished text is saved in History. Apps that don't allow this, such as web browsers, show the preview instead. Template styles such as bold arrive as plain text. Words show about a second behind, and the finished text can differ a little from the preview.",

@@ -20,7 +20,7 @@ final class HUDPanel: NSPanel, NSWindowDelegate {
         hidesOnDeactivate = false
         isOpaque = false
         backgroundColor = .clear
-        hasShadow = false // the SwiftUI view draws its own soft shadow
+        hasShadow = false // the capsule draws its own look; the card turns the window shadow on
 
         let hosting = DraggableHUDView(rootView: RecordingHUDView(model: model))
         hosting.autoresizingMask = [.width, .height]
@@ -32,6 +32,14 @@ final class HUDPanel: NSPanel, NSWindowDelegate {
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+
+    /// The card floats on a real window shadow; the capsule has none. The
+    /// shadow follows the rounded card because the window itself is clear.
+    func showsCardShadow(_ on: Bool) {
+        guard hasShadow != on else { return }
+        hasShadow = on
+        invalidateShadow()
+    }
 
     // Layout is forced before measuring: reading `fittingSize` while SwiftUI still has a stale layout returns the wrong size, so the panel would appear at one size and visibly snap to another.
     func reposition(avoidingCaret: Bool = false) {
@@ -53,6 +61,7 @@ final class HUDPanel: NSPanel, NSWindowDelegate {
         let size = contentView?.fittingSize ?? NSSize(width: 120, height: 32)
         guard size.width > 0, size.height > 0 else { return }
         setContentSize(size)
+        invalidateShadow()
 
         // The window includes a transparent shadow margin, so offset by it to
         // keep the visible card where it looks right.

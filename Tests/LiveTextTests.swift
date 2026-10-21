@@ -87,6 +87,10 @@ struct LiveTextTests {
         #expect(defaults.string(forKey: "dictationLanguage") == "de-DE")
         #expect(LiveTextMode.allCases.map(\.title) == ["Off", "Preview in pFlow", "Type in the current app"])
         #expect(LiveTextMode.allCases.map(\.showsPreview) == [false, true, true])
+        // Type mode keeps the small capsule while pFlow types in the app; the
+        // card appears only when typing could not start or has stopped.
+        #expect(LiveTextMode.allCases.map { $0.showsCard(typingLive: true) } == [false, true, false])
+        #expect(LiveTextMode.allCases.map { $0.showsCard(typingLive: false) } == [false, true, true])
     }
 
     // MARK: Coordinator
@@ -342,6 +346,21 @@ struct LiveTextTests {
         hud.hide(after: 0)
     }
 
+    @Test func cardKeepsOneSizeWhileWordsGrowAndShowsTheNoteInItsHeader() throws {
+        var heights: [CGFloat] = []
+        for words in ["", "Seven", "The lighthouse keeper counted seven blue kites over the quiet harbor, then waved goodbye to the pelicans and walked home along the sea wall, where the orchard lanterns glowed."] {
+            let model = HUDModel()
+            model.livePreview = true
+            model.partial = LivePreviewText.tail(of: words)
+            model.liveNote = words.isEmpty ? nil : "Stopped: cursor moved"
+            let view = NSHostingView(rootView: RecordingHUDView(model: model))
+            heights.append(view.fittingSize.height)
+        }
+        #expect(Set(heights).count == 1, "the card must not change height as words arrive: \(heights)")
+        let lines = ceil(NSFont.systemFont(ofSize: NSFont.systemFontSize).ascender - NSFont.systemFont(ofSize: NSFont.systemFontSize).descender + NSFont.systemFont(ofSize: NSFont.systemFontSize).leading)
+        #expect(heights[0] >= lines * 3.5 + 20, "room for three lines, a fading half line and the header")
+    }
+
     @Test func previewFitsSmallScreensAndLargeTextInLightAndDark() throws {
         let shots = ProcessInfo.processInfo.environment["PFLOW_HUD_SHOTS"].map { URL(fileURLWithPath: $0) }
         let text = "The lighthouse keeper counted seven blue kites over the quiet harbor, then waved goodbye to the pelicans and walked home along the sea wall, where the orchard lanterns glowed."
@@ -374,7 +393,30 @@ struct LiveTextTests {
             }
         }
         if let shots {
-            for (look, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            for (look, appearance, scheme) in [("light", NSAppearance.Name.aqua, ColorScheme.light), ("dark", .darkAqua, .dark)] {
+                for (name, note, phase, words) in [("listening", nil, HUDPhase.listening, text),
+                                                   ("empty", nil, .listening, ""),
+                                                   ("typing-stopped", "Stopped: cursor moved", .listening, text),
+                                                   ("cannot-type", "Can't type in this app", .listening, "Buy rope and a lantern"),
+                                                   ("finishing", nil, .transcribing, text),
+                                                   ("kept", nil, .liveTextKept, text)] {
+                    let model = HUDModel()
+                    model.livePreview = true
+                    model.colorScheme = scheme
+                    model.phase = phase
+                    model.partial = LivePreviewText.tail(of: words)
+                    model.liveNote = note
+                    model.levels = (0..<HUDModel.waveformSampleCount).map { Float(0.15 + 0.6 * abs(sin(Double($0) * 0.7))) }
+                    let view = NSHostingView(rootView: RecordingHUDView(model: model))
+                    view.appearance = NSAppearance(named: appearance)
+                    view.frame = NSRect(origin: .zero, size: view.fittingSize)
+                    view.layoutSubtreeIfNeeded()
+                    if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                        view.cacheDisplay(in: view.bounds, to: rep)
+                        try rep.representation(using: .png, properties: [:])?
+                            .write(to: shots.appending(path: "card-\(name)-\(look).png"))
+                    }
+                }
                 for (mode, engine) in [(LiveTextMode.off, TranscriptionEngine.apple), (.preview, .apple),
                                        (.typeInApp, .apple), (.preview, .whisper)] {
                     let view = NSHostingView(rootView: Card {

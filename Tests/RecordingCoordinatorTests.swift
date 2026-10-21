@@ -87,6 +87,8 @@ final class FakeHUD: HUDControlling {
     var previews: [Bool] = []
     var partials: [String] = []
     var notes: [String?] = []
+    /// Mid-take switches between the capsule and the card.
+    var cards: [Bool] = []
     var hidden = 0
     var hideDelays: [Double] = []
     var onConfirm: (() -> Void)?
@@ -97,6 +99,7 @@ final class FakeHUD: HUDControlling {
     func setLevel(_ level: Float) {}
     func setPartial(_ text: String) { partials.append(text) }
     func setLiveNote(_ note: String?) { notes.append(note) }
+    func setLivePreview(_ on: Bool) { cards.append(on) }
     func hide(after seconds: Double) { hidden += 1; hideDelays.append(seconds) }
     func setActions(onConfirm: @escaping () -> Void, onCancel: @escaping () -> Void) {
         self.onConfirm = onConfirm

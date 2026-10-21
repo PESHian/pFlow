@@ -114,59 +114,52 @@ struct RecordingHUDView: View {
     }
 }
 
-/// Live text: the newest words in a readable card. It never takes focus
+/// Live text: the newest words in a calm floating card. It never takes focus
 /// (the panel cannot become key) and keeps the same size for the whole take.
+/// Header: Pesh mark, recording dot and a short caption leading, the live
+/// waveform trailing. Below a hairline, the transcript fills from the bottom
+/// of a fixed box; the top of the box fades so older lines dissolve instead
+/// of being cut.
 private struct LivePreviewCard<Status: View>: View {
     @Bindable var model: HUDModel
     let title: String
     let isRecordingPhase: Bool
     @ViewBuilder let status: () -> Status
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.colorScheme) private var systemScheme
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// Lines of transcript kept in view, plus the headroom that fades out.
+    private var visibleLines: CGFloat { 3 }
+    private var fadeLines: CGFloat { 0.5 }
+    private var headerHeight: CGFloat { 20 }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.s2) {
-            HStack(spacing: Theme.s2) {
-                status()
-                if model.phase == .confirmCancel || model.phase == .transcribing || model.phase == .cleaning {
-                    Text(title).font(.caption).foregroundStyle(.secondary)
-                } else if isRecordingPhase, let note = model.liveNote {
-                    Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        .help("pFlow still finishes your words when you stop.")
-                        .accessibilityLabel("\(note). pFlow still finishes your words when you stop.")
-                }
-                Spacer(minLength: 0)
-            }
-            .frame(minHeight: 20)
-            // Three lines of space, filled from the bottom: the newest words
-            // stay in view and older lines scroll off the top.
-            Text(verbatim: "\n\n")
-                .font(textFont)
-                .hidden()
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .overlay(alignment: .bottomLeading) {
-                    Text(shownText)
-                        .font(textFont)
-                        .foregroundStyle(model.partial.isEmpty ? .secondary : .primary)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .clipped()
+        VStack(alignment: .leading, spacing: 0) {
+            header
+                .frame(height: headerHeight)
+                .padding(.horizontal, Theme.s4)
+                .padding(.top, Theme.s3)
+            Rectangle().fill(Theme.hairline).frame(height: 1)
+                .padding(.horizontal, Theme.s4)
+                .padding(.vertical, Theme.s2)
+            transcript
+                .padding(.horizontal, Theme.s4)
+                .padding(.bottom, Theme.s3)
         }
-        .padding(Theme.s3)
         .frame(width: model.previewMaxWidth)
         .contentShape(Rectangle())
         .background {
-            let shape = RoundedRectangle(cornerRadius: Theme.radius)
+            let shape = RoundedRectangle(cornerRadius: Theme.radiusLarge, style: .continuous)
             if reduceTransparency {
                 shape.fill(Color(nsColor: .windowBackgroundColor))
-                    .overlay(shape.strokeBorder(Theme.hairlineStrong, lineWidth: 0.75))
             } else {
                 shape.fill(.regularMaterial)
-                    .overlay(shape.strokeBorder(Theme.gradient.opacity(0.45), lineWidth: 0.75))
             }
+            shape.strokeBorder(contrast == .increased ? Theme.switchOffStrong : Theme.hairlineStrong,
+                               lineWidth: contrast == .increased ? 1 : 0.75)
         }
         .environment(\.colorScheme, model.colorScheme ?? systemScheme)
         .accessibilityElement(children: .ignore)
@@ -174,9 +167,62 @@ private struct LivePreviewCard<Status: View>: View {
         .accessibilityValue(model.partial)
     }
 
+    private var header: some View {
+        HStack(alignment: .center, spacing: Theme.s2) {
+            PeshMark(size: 16)
+            if isRecordingPhase {
+                RecordingDot(pulsing: model.phase == .listening && !reduceMotion)
+                Text(caption)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .help(model.liveNote == nil ? title : "pFlow still finishes your words when you stop.")
+                Spacer(minLength: Theme.s2)
+                RecordingWaveform(levels: Array(model.levels.suffix(25)),
+                                  style: AppearanceSettings.shared.waveformStyle, compact: true)
+            } else if isProcessingPhase {
+                ProgressView().controlSize(.small).tint(Theme.accent)
+                Text(title).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 0)
+            } else {
+                status()
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private var caption: String {
+        if model.phase == .confirmCancel { return title }
+        return model.liveNote ?? "Listening"
+    }
+
+    private var isProcessingPhase: Bool {
+        model.phase == .transcribing || model.phase == .cleaning
+    }
+
+    // A fixed box, filled from the bottom: the newest words stay in view and
+    // older lines rise into the fade at the top. The box never changes size
+    // while the words grow, so the card does not jitter.
+    private var transcript: some View {
+        let box = lineHeight * (visibleLines + fadeLines)
+        return Text(model.partial)
+            .font(textFont)
+            .foregroundStyle(.primary)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: box, alignment: .bottomLeading)
+            .clipped()
+            .mask {
+                LinearGradient(stops: [.init(color: .clear, location: 0),
+                                       .init(color: .black, location: fadeLines * 2 / (visibleLines + fadeLines))],
+                               startPoint: .top, endPoint: .bottom)
+            }
+    }
+
     // macOS text styles do not grow with the text size setting on their own,
     // so the preview scales its own body size.
-    private var textFont: Font {
+    private var textSize: CGFloat {
         let scale: CGFloat = switch typeSize {
         case .xSmall: 0.85
         case .small: 0.92
@@ -192,12 +238,32 @@ private struct LivePreviewCard<Status: View>: View {
         case .accessibility5: 3
         @unknown default: 1
         }
-        return .system(size: NSFont.systemFontSize * scale)
+        return NSFont.systemFontSize * scale
     }
 
-    private var shownText: String {
-        if !model.partial.isEmpty { return model.partial }
-        return isRecordingPhase ? "Listening…" : ""
+    private var textFont: Font { .system(size: textSize) }
+
+    private var lineHeight: CGFloat {
+        let font = NSFont.systemFont(ofSize: textSize)
+        return ceil(font.ascender - font.descender + font.leading)
+    }
+}
+
+/// The recording indicator in the card header: a small dot in the recording
+/// colour that breathes while pFlow listens (still under Reduce Motion).
+private struct RecordingDot: View {
+    let pulsing: Bool
+    @State private var dim = false
+
+    var body: some View {
+        Circle()
+            .fill(Theme.recording)
+            .frame(width: 8, height: 8)
+            .opacity(dim ? 0.35 : 1)
+            .onAppear { if pulsing { dim = true } }
+            .onChange(of: pulsing) { _, now in dim = now }
+            .animation(pulsing ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : .default, value: dim)
+            .accessibilityHidden(true)
     }
 }
 
@@ -232,16 +298,19 @@ private struct HUDButton: View {
 struct RecordingWaveform: View {
     let levels: [Float]
     let style: WaveformStyle
+    /// The card header's small waveform: no outline or shadow, 84x16. The
+    /// capsule keeps its chrome.
+    var compact = false
 
     var body: some View {
         switch style {
         case .wave:
-            Waveform(levels: levels)
+            Waveform(levels: levels, compact: compact)
         case .lines:
             WaveformLines(levels: AudioLevel.waveformLevels(levels))
                 .fill(Theme.gradient)
-                .frame(width: 100, height: 20)
-                .shadow(color: .black.opacity(0.25), radius: 1.5, x: 0, y: 1)
+                .frame(width: compact ? 84 : 100, height: compact ? 16 : 20)
+                .shadow(color: .black.opacity(compact ? 0 : 0.25), radius: 1.5, x: 0, y: 1)
         }
     }
 }
@@ -267,14 +336,15 @@ private struct WaveformLines: Shape {
 /// A connected envelope of real microphone levels, newest on the right.
 private struct Waveform: View {
     let levels: [Float]
+    var compact = false
 
     var body: some View {
         let outline = WaveformOutline(levels: AudioLevel.waveformLevels(levels))
         outline
             .fill(Theme.gradient)
-            .overlay(outline.stroke(.black.opacity(0.5), lineWidth: 0.75))
-            .frame(width: 100, height: 20)
-            .shadow(color: .black.opacity(0.25), radius: 1.5, x: 0, y: 1)
+            .overlay(outline.stroke(.black.opacity(compact ? 0 : 0.5), lineWidth: 0.75))
+            .frame(width: compact ? 84 : 100, height: compact ? 16 : 20)
+            .shadow(color: .black.opacity(compact ? 0 : 0.25), radius: 1.5, x: 0, y: 1)
     }
 }
 

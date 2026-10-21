@@ -32,7 +32,9 @@ internal static class PeshTheme
             ["PeshMuted"] = light ? "685B74" : "A39EAD", ["PeshCard"] = light ? "C7FFFFFF" : "D91A1526",
             ["PeshInput"] = light ? "FCFAFE" : "120F1B", ["PeshBorder"] = light ? "D8CEDF" : "332D40",
             ["PeshToggleOff"] = light ? "E3DCEB" : "55475F", ["PeshTile"] = light ? "EDE8F2" : "1A1526", ["PeshSegment"] = light ? "E3DCEB" : "2B2634", ["PeshAccentInk"] = AccentInk(preferences.Accent),
-            ["PeshHover"] = light ? "EFE7F7" : "2B203A", ["PeshSelection"] = light ? "EEDDFA" : "402E55", ["PeshAccent"] = preferences.Accent
+            ["PeshHover"] = light ? "EFE7F7" : "2B203A", ["PeshSelection"] = light ? "EEDDFA" : "402E55", ["PeshAccent"] = preferences.Accent,
+            // Floating card over other apps, and the recording dot (same red as the Mac Theme.recording).
+            ["PeshFloating"] = light ? "FFFFFF" : "1A1526", ["PeshRecording"] = "E64A59"
         };
         foreach (var pair in values) window.Resources[pair.Key] = Brush(pair.Value);
         window.Background = (Brush)window.Resources["PeshBackground"]; window.Foreground = (Brush)window.Resources["PeshText"];

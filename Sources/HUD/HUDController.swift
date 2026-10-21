@@ -41,6 +41,7 @@ final class HUDController: HUDControlling {
         guard let panel else { return }
 
         panel.alphaValue = 0
+        panel.showsCardShadow(livePreview)
         panel.reposition(avoidingCaret: livePreview)
         panel.orderFrontRegardless()
 
@@ -75,6 +76,14 @@ final class HUDController: HUDControlling {
     func setLiveNote(_ note: String?) {
         guard model.livePreview else { return }
         model.liveNote = note
+    }
+
+    func setLivePreview(_ on: Bool) {
+        guard model.livePreview != on else { return }
+        model.livePreview = on
+        if !on { model.partial = ""; model.liveNote = nil }
+        panel?.showsCardShadow(on)
+        panel?.reposition(avoidingCaret: on)
     }
 
     func hide(after seconds: Double) {

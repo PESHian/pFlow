@@ -1,23 +1,40 @@
 using System.Windows.Interop;
+using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
 
 namespace PFlow.Windows;
 
-/// The words heard so far, shown near the recording control while a take with
-/// Live text runs. It never takes focus or the text cursor: it is shown without
-/// activation, refuses activation by click (WS_EX_NOACTIVATE, MA_NOACTIVATE),
-/// lets clicks pass through, has no taskbar entry, and never uses the clipboard.
+/// The words heard so far, in a calm floating card near the recording control
+/// while a take with Live text runs. Same shape as the Mac card: a header with
+/// the Pesh mark, a recording dot and a short caption; a hairline; then the
+/// transcript filling a fixed box from the bottom, its top fading so older
+/// lines dissolve instead of being cut. The box never changes size while the
+/// words grow. The recording control under the card already shows the
+/// waveform, so the card carries none.
+/// It never takes focus or the text cursor: shown without activation, refuses
+/// activation by click (WS_EX_NOACTIVATE, MA_NOACTIVATE), lets clicks pass
+/// through, has no taskbar entry, and never uses the clipboard.
 internal sealed class LivePreview : Window
 {
     const int ExStyle = -20, NoActivate = 0x08000000, ToolWindow = 0x80, Transparent = 0x20, MouseActivate = 0x21, NoActivateReply = 3;
-    const double BaseWidth = 380, Gap = 8;
+    const double BaseWidth = 380, Gap = 4, ShadowMargin = 12, VisibleLines = 3, FadeLines = 0.5;
     readonly StateStore store;
-    readonly Border card;
-    readonly TextBlock header, words;
+    readonly Border card, dot, rule;
+    readonly TextBlock caption, words;
     readonly Grid lines;
+    readonly Image mark;
+    readonly DropShadowEffect shadow;
     string? note;
     internal IntPtr Handle => new WindowInteropHelper(this).Handle;
     internal string Shown => words.Text;
-    internal string Header => header.Text;
+    internal string Caption => caption.Text;
+    internal string? Note => note;
+    internal double LinesHeight => lines.Height;
+    internal double WordsLineHeight => words.LineHeight;
+    internal FrameworkElement Card => card;
+    internal Brush CaptionBrush => caption.Foreground;
+    internal Brush WordsBrush => words.Foreground;
     internal int Updates { get; private set; }
 
     internal LivePreview(StateStore store)
@@ -26,15 +43,36 @@ internal sealed class LivePreview : Window
         WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.NoResize; AllowsTransparency = true; Background = Brushes.Transparent;
         ShowInTaskbar = false; ShowActivated = false; Topmost = true; Focusable = false; IsHitTestVisible = false;
         SizeToContent = SizeToContent.Height;
-        header = new TextBlock { Margin = new Thickness(0, 0, 0, 4), TextTrimming = TextTrimming.CharacterEllipsis };
-        header.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted");
+
+        mark = new Image { Width = 16, Height = 16, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+        try { mark.Source = new BitmapImage(new Uri("pack://application:,,,/pFlow;component/Assets/PeshMark.png")); } catch { mark.Visibility = Visibility.Collapsed; }
+        dot = new Border { Width = 8, Height = 8, CornerRadius = new CornerRadius(4), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+        dot.SetResourceReference(Border.BackgroundProperty, "PeshRecording");
+        caption = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis };
+        caption.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted");
+        var header = new Grid { Height = 20 };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition());
+        Grid.SetColumn(dot, 1); Grid.SetColumn(caption, 2);
+        header.Children.Add(mark); header.Children.Add(dot); header.Children.Add(caption);
+
+        rule = new Border { Height = 1, Margin = new Thickness(0, 8, 0, 8) };
+        rule.SetResourceReference(Border.BackgroundProperty, "PeshBorder");
+
         words = new TextBlock { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Bottom, LineStackingStrategy = LineStackingStrategy.BlockLineHeight };
         words.SetResourceReference(TextBlock.ForegroundProperty, "PeshText");
-        // The newest three lines: older lines scroll up out of the clipped area.
-        lines = new Grid { ClipToBounds = true }; lines.Children.Add(words);
-        var stack = new StackPanel(); stack.Children.Add(header); stack.Children.Add(lines);
-        card = new Border { CornerRadius = new CornerRadius(12), BorderThickness = new Thickness(1), Padding = new Thickness(14, 10, 14, 12), Child = stack };
-        card.SetResourceReference(Border.BackgroundProperty, "PeshBackground");
+        // The newest lines stay in view; older ones rise into the fade at the top of the box.
+        lines = new Grid { ClipToBounds = true };
+        lines.OpacityMask = new LinearGradientBrush(new GradientStopCollection {
+            new(Colors.Transparent, 0), new(Colors.Black, FadeLines * 2 / (VisibleLines + FadeLines)) }, new Point(0, 0), new Point(0, 1));
+        lines.Children.Add(words);
+
+        var stack = new StackPanel(); stack.Children.Add(header); stack.Children.Add(rule); stack.Children.Add(lines);
+        shadow = new DropShadowEffect { BlurRadius = 16, ShadowDepth = 2, Direction = 270, Color = Colors.Black };
+        card = new Border { CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1), Padding = new Thickness(16, 12, 16, 14), Margin = new Thickness(ShadowMargin), Child = stack, Effect = shadow };
+        card.SetResourceReference(Border.BackgroundProperty, "PeshFloating");
+        card.SetResourceReference(Border.BorderBrushProperty, "PeshBorder");
         Content = card;
         System.Windows.Automation.AutomationProperties.SetName(this, "pFlow live preview");
         SourceInitialized += (_, _) => {
@@ -57,32 +95,26 @@ internal sealed class LivePreview : Window
     internal void ApplyTextSize(double? scale = null)
     {
         double factor = scale ?? TextScale();
-        header.FontSize = 11.5 * factor; words.FontSize = 15 * factor; words.LineHeight = 21 * factor;
-        lines.Height = words.LineHeight * 3;
-        Width = BaseWidth * (1 + (factor - 1) / 2);
+        caption.FontSize = 12 * factor; words.FontSize = 14 * factor; words.LineHeight = 20 * factor;
+        lines.Height = words.LineHeight * (VisibleLines + FadeLines);
+        Width = BaseWidth * (1 + (factor - 1) / 2) + 2 * ShadowMargin;
     }
 
     internal void ApplyTheme()
     {
         PeshTheme.Apply(this, store.Preferences);
         Background = Brushes.Transparent;
-        card.BorderBrush = (Brush)Resources["PeshAccent"];
+        shadow.Opacity = PeshTheme.Light(store.Preferences) ? .18 : .5;
     }
 
     /// A new take: clear everything from the previous one.
-    internal void Begin() { note = null; Updates = 0; words.Text = ""; header.Text = "Listening…"; }
+    internal void Begin() { note = null; Updates = 0; words.Text = ""; caption.Text = "Listening"; Pulse(true); }
 
-    internal void ShowText(string text)
-    {
-        Updates++;
-        words.Text = LivePreviewText.Tail(text);
-        if (note == null) header.Text = "Live preview";
-    }
+    internal void ShowText(string text) { Updates++; words.Text = LivePreviewText.Tail(text); }
 
-    internal void SetNote(string value) { note = value; header.Text = value; }
-    internal string? Note => note;
+    internal void SetNote(string value) { note = value; caption.Text = value; }
 
-    internal void Finishing() { if (note == null) header.Text = "Finishing…"; }
+    internal void Finishing() { caption.Text = "Finishing…"; Pulse(false); }
 
     internal void Reveal(IntPtr control)
     {
@@ -90,7 +122,16 @@ internal sealed class LivePreview : Window
         Place(control);
     }
 
-    internal void Clear() { Hide(); Begin(); }
+    internal void Clear() { Hide(); Pulse(false); Begin(); }
+
+    /// The recording dot breathes while pFlow listens; still when Windows
+    /// animations are off.
+    void Pulse(bool on)
+    {
+        if (on && SystemParameters.ClientAreaAnimation) {
+            dot.BeginAnimation(OpacityProperty, new DoubleAnimation(1, .35, TimeSpan.FromSeconds(.9)) { AutoReverse = true, RepeatBehavior = RepeatBehavior.Forever });
+        } else { dot.BeginAnimation(OpacityProperty, null); dot.Opacity = 1; }
+    }
 
     void Place(IntPtr control)
     {
@@ -100,7 +141,7 @@ internal sealed class LivePreview : Window
         var dpi = VisualTreeHelper.GetDpi(this);
         // Small displays: never wider than the work area, with a margin.
         double room = display.Width / dpi.DpiScaleX - 2 * Gap;
-        if (Width > room) Width = Math.Max(160, room);
+        if (Width > room) Width = Math.Max(160 + 2 * ShadowMargin, room);
         UpdateLayout();
         if (!Native.GetWindowRect(Handle, out var bounds)) return;
         var point = LivePreviewPlacement.Place(screens.Select(screen => new WorkArea(screen.WorkingArea.X, screen.WorkingArea.Y, screen.WorkingArea.Width, screen.WorkingArea.Height)).ToArray(),

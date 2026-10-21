@@ -3,6 +3,7 @@ using PFlow.Windows;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Interop;
 using System.Windows.Automation.Peers;
 using System.Windows.Automation.Provider;
 using System.Windows.Media;
@@ -12,6 +13,7 @@ internal static partial class Program
     static void NativeControls()
     {
         _ = Application.Current ?? new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        NativePreviewCard();
         double Luminance(Color color) {
             double Channel(byte x) { double c = x / 255.0; return c <= .04045 ? c / 12.92 : Math.Pow((c + .055) / 1.055, 2.4); }
             return .2126 * Channel(color.R) + .7152 * Channel(color.G) + .0722 * Channel(color.B);
@@ -49,7 +51,14 @@ internal static partial class Program
                 settings.Show(); settings.UpdateLayout(); Drain();
                 var headings = Descendants<TextBlock>(settings).Where(x => x.FontFamily.Source == "Consolas" && x.FontSize == 10).Select(x => x.Text).ToList();
                 Check("Live text has its own section right after Shortcut", headings.Count(x => x == "LIVE TEXT") == 1 && headings.IndexOf("LIVE TEXT") == headings.IndexOf("SHORTCUT") + 1);
-                Check("Settings shows the Live text control once", Descendants<ComboBox>(settings).Count(x => System.Windows.Automation.AutomationProperties.GetName(x) == "Live text") == 1);
+                var liveChoices = Descendants<RadioButton>(settings).Where(x => x.GroupName == "LiveText").ToList();
+                Check("Settings shows all three Live text choices, no drop-down", liveChoices.Select(x => (string)x.Tag).SequenceEqual(LiveTextModes.All.Select(c => c.Id))
+                    && liveChoices.All(x => x.IsVisible) && !Descendants<ComboBox>(settings).Any(x => System.Windows.Automation.AutomationProperties.GetName(x) == "Live text"));
+                Check("the saved Live text choice is the one selected", liveChoices.Single(x => x.IsChecked == true).Tag as string == LiveTextModes.Off);
+                liveChoices[1].IsChecked = true; Drain();
+                Check("picking Preview in pFlow saves it for the next take", new StateStore(root).Preferences.LiveTextMode == LiveTextModes.Preview && liveChoices.Count(x => x.IsChecked == true) == 1);
+                liveChoices[0].IsChecked = true; Drain();
+                Check("picking Off saves it again", new StateStore(root).Preferences.LiveTextMode == LiveTextModes.Off);
                 var sound = Descendants<CheckBox>(settings).Single(x => x.Content as string == "Quiet start and stop sounds");
                 bool previous = store.Preferences.Sounds;
                 var toggle = (IToggleProvider)UIElementAutomationPeer.CreatePeerForElement(sound).GetPattern(PatternInterface.Toggle);
@@ -62,7 +71,7 @@ internal static partial class Program
                 string Label(ComboBox box) => string.IsNullOrEmpty(box.DisplayMemberPath) ? box.SelectedItem!.ToString()!
                     : box.SelectedItem!.GetType().GetProperty(box.DisplayMemberPath)!.GetValue(box.SelectedItem)!.ToString()!;
                 var boxes = Descendants<ComboBox>(settings).Where(x => x.SelectedItem != null).ToList();
-                foreach (string name in new[] { "Speech language", "Activation key", "Live text" })
+                foreach (string name in new[] { "Speech language", "Activation key" })
                     Check($"closed {name} drop-down shows its label", boxes.SingleOrDefault(x => System.Windows.Automation.AutomationProperties.GetName(x) == name) is { } box && Shown(box) == Label(box) && !Shown(box).Contains('['));
                 Check("Speech language shows English before it is opened", Shown(boxes.Single(x => System.Windows.Automation.AutomationProperties.GetName(x) == "Speech language")) == "English");
                 foreach (var box in boxes) Check($"closed drop-down '{System.Windows.Automation.AutomationProperties.GetName(box)}' shows '{Label(box)}'", Shown(box) == Label(box));
@@ -77,5 +86,60 @@ internal static partial class Program
             File.WriteAllText(Path.Combine(root,"last-processing-times.json"),new string('x',16385));
             Check("oversized timing record is bounded", ProcessingTimes.Read(root) == "Processing time is unavailable.");
         } finally { Directory.Delete(root,true); }
+    }
+
+    /// The live text card: one height for the whole take, readable in both
+    /// looks, never activating. PFLOW_SHOTS=<folder> also writes PNGs to look at.
+    static void NativePreviewCard()
+    {
+        double Luminance(Color color) {
+            double Channel(byte x) { double c = x / 255.0; return c <= .04045 ? c / 12.92 : Math.Pow((c + .055) / 1.055, 2.4); }
+            return .2126 * Channel(color.R) + .7152 * Channel(color.G) + .0722 * Channel(color.B);
+        }
+        double Contrast(Brush a, Brush b) { double x = Luminance(((SolidColorBrush)a).Color), y = Luminance(((SolidColorBrush)b).Color); return (Math.Max(x,y)+.05)/(Math.Min(x,y)+.05); }
+        string? shots = Environment.GetEnvironmentVariable("PFLOW_SHOTS");
+        const string story = "The lighthouse keeper counted seven blue kites over the quiet harbor, then waved goodbye to the pelicans and walked home along the sea wall, where the orchard lanterns glowed.";
+        foreach (string theme in new[] { "dark", "light" }) {
+            string root = Path.Combine(Path.GetTempPath(), "pflow-preview-fictional-" + Guid.NewGuid().ToString("N"));
+            var store = new StateStore(root); store.Preferences.Theme = theme;
+            var preview = new LivePreview(store);
+            try {
+                preview.Begin(); preview.Show(); preview.UpdateLayout(); Drain();
+                double empty = preview.ActualHeight;
+                var style = Native.GetWindowLongPtr(new WindowInteropHelper(preview).Handle, -20).ToInt64();
+                Check($"{theme} card never activates and lets clicks through", (style & 0x08000020) == 0x08000020 && !preview.Focusable && !preview.ShowActivated && !preview.IsActive);
+                Check($"{theme} card says Listening before any words", preview.Caption == "Listening" && preview.Shown == "" && preview.Note == null);
+                preview.ShowText("Seven"); Drain();
+                preview.ShowText(story); Drain();
+                Check($"{theme} card keeps one height as words arrive", preview.ActualHeight == empty && preview.LinesHeight == preview.WordsLineHeight * 3.5 && preview.Shown.EndsWith("glowed."));
+                Check($"{theme} card words and caption are readable on the card", Contrast(preview.WordsBrush, preview.Card is Border b ? b.Background : Brushes.Black) >= 7 && Contrast(preview.CaptionBrush, ((Border)preview.Card).Background) >= 4.5);
+                if (shots != null) Shoot(preview, Path.Combine(shots, $"preview-listening-{theme}.png"), theme == "light");
+                preview.SetNote("Stopped: cursor moved"); Drain();
+                Check($"{theme} note replaces the caption without resizing", preview.Caption == "Stopped: cursor moved" && preview.ActualHeight == empty);
+                if (shots != null) Shoot(preview, Path.Combine(shots, $"preview-stopped-{theme}.png"), theme == "light");
+                preview.Finishing(); Drain();
+                Check($"{theme} finishing shows in the caption", preview.Caption == "Finishing…");
+                if (shots != null) Shoot(preview, Path.Combine(shots, $"preview-finishing-{theme}.png"), theme == "light");
+                preview.Clear();
+                Check($"{theme} a new take starts clean", preview.Caption == "Listening" && preview.Shown == "" && !preview.IsVisible);
+            } finally { preview.Close(); if (Directory.Exists(root)) Directory.Delete(root, true); }
+        }
+    }
+
+    static void Shoot(Window window, string path, bool light)
+    {
+        var content = (FrameworkElement)window.Content;
+        const int margin = 16, scale = 2;
+        int width = (int)Math.Ceiling(content.ActualWidth) + 2 * margin, height = (int)Math.Ceiling(content.ActualHeight) + 2 * margin;
+        var scene = new DrawingVisual();
+        using (var dc = scene.RenderOpen()) {
+            dc.DrawRectangle(new SolidColorBrush(light ? Color.FromRgb(0xF0, 0xF0, 0xF0) : Color.FromRgb(0x20, 0x20, 0x24)), null, new Rect(0, 0, width, height));
+            dc.DrawRectangle(new VisualBrush(content) { Stretch = Stretch.None, AlignmentX = AlignmentX.Left, AlignmentY = AlignmentY.Top }, null,
+                new Rect(margin, margin, content.ActualWidth, content.ActualHeight));
+        }
+        var shot = new System.Windows.Media.Imaging.RenderTargetBitmap(width * scale, height * scale, 96 * scale, 96 * scale, PixelFormats.Pbgra32); shot.Render(scene);
+        var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder(); encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(shot));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        using var file = File.Create(path); encoder.Save(file);
     }
 }

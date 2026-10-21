@@ -187,14 +187,18 @@ internal sealed partial class SettingsWindow : Window
         Closed += (_,_) => { CancelSelection(); timeout.Stop(); keyboard.PhysicalKey -= Mapping; keyboard.KeyCaptured -= Captured; };
         p = Section(root, "Live text");
         // Read when the next recording starts; a recording in progress keeps its choice.
-        var liveText = new ComboBox { ItemsSource = LiveTextModes.All, SelectedValuePath = "Id", SelectedValue = LiveTextModes.Resolve(store.Preferences.LiveTextMode), Margin = new Thickness(0, 0, 0, 4) };
-        System.Windows.Automation.AutomationProperties.SetName(liveText, "Live text");
+        // All three choices stay visible, like the Mac app.
+        var liveChoices = new System.Windows.Controls.Primitives.UniformGrid { Columns = 3, Margin = new Thickness(-5, 0, -5, 8) };
         var liveNote = Text(LiveTextModes.Note(store.Preferences.LiveTextMode)); liveNote.FontSize = 12; liveNote.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted");
-        liveText.SelectionChanged += (_, _) => {
-            if (liveText.SelectedValue is not string value) return;
-            store.Preferences.LiveTextMode = value; store.SavePreferences(); liveNote.Text = LiveTextModes.Note(value);
-        };
-        p.Children.Add(liveText); p.Children.Add(liveNote);
+        string saved = LiveTextModes.Resolve(store.Preferences.LiveTextMode);
+        foreach (var choice in LiveTextModes.All) {
+            var option = Option(choice.Id, choice.Title, "LiveText", saved == choice.Id, "AppearanceChoice", () => {
+                store.Preferences.LiveTextMode = choice.Id; store.SavePreferences(); liveNote.Text = LiveTextModes.Note(choice.Id);
+            });
+            option.Content = new TextBlock { Text = choice.Title, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, FontSize = 12, FontWeight = FontWeights.SemiBold };
+            option.Margin = new Thickness(5, 0, 5, 0); option.MinHeight = 52; liveChoices.Children.Add(option);
+        }
+        p.Children.Add(liveChoices); p.Children.Add(liveNote);
         p = Section(root, "Dictation");
         Check(p, "Copy dictation to clipboard after insertion", store.Preferences.CopyDictationToClipboard, x => store.Preferences.CopyDictationToClipboard = x);
         Check(p, "Quiet start and stop sounds", store.Preferences.Sounds, x => store.Preferences.Sounds = x);

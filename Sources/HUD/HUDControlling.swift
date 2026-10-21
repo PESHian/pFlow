@@ -34,6 +34,9 @@ protocol HUDControlling: AnyObject {
     func setPartial(_ text: String)
     /// A short status under the live words, or nil. Cleared by `show` and hide.
     func setLiveNote(_ note: String?)
+    /// Swaps the capsule for the text card mid-take (Type mode after typing
+    /// stopped). The card keeps the words shown so far.
+    func setLivePreview(_ on: Bool)
     func hide(after seconds: Double)
     func setActions(onConfirm: @escaping () -> Void, onCancel: @escaping () -> Void)
 }
@@ -41,4 +44,5 @@ protocol HUDControlling: AnyObject {
 extension HUDControlling {
     func show(device: String?) { show(device: device, livePreview: false) }
     func setLiveNote(_ note: String?) {}
+    func setLivePreview(_ on: Bool) {}
 }

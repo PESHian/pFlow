@@ -83,7 +83,7 @@ final class RecordingCoordinator {
         }
         pauseCapture(false)
         sounds.playStart()
-        hud.show(device: recordingDevice, livePreview: takeLiveTextMode.showsPreview)
+        hud.show(device: recordingDevice, livePreview: takeLiveTextMode.showsCard(typingLive: typingLive))
         hud.setPhase(.listening)
         if let liveNote { hud.setLiveNote(liveNote) }
         startTask = Task { [weak self] in
@@ -125,8 +125,15 @@ final class RecordingCoordinator {
         // A repeat of the same words still goes to typing: it is how the last words settle.
         guard typingLive, state == .recording, let take else { return }
         if let stop = injector.reconcileLive(session: take, transcript: transcript.text) {
-            hud.setLiveNote(stop.stoppedNote)
+            showCard(note: stop.stoppedNote)
         }
+    }
+
+    /// Typing in the app ended for this take, so the words now need the card.
+    private func showCard(note: String) {
+        hud.setLivePreview(takeLiveTextMode.showsCard(typingLive: false))
+        hud.setPartial(transcript.text)
+        hud.setLiveNote(note)
     }
 
     /// Takes provisional typed words back out when the take ends with no text.
@@ -152,7 +159,7 @@ final class RecordingCoordinator {
     /// still runs the normal final recognition.
     private func liveStopped() {
         guard state == .recording, takeLiveTextMode.showsPreview else { return }
-        hud.setLiveNote("Live words stopped")
+        showCard(note: "Live words stopped")
     }
 
     private var cancelArmed = false

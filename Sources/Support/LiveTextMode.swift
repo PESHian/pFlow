@@ -18,9 +18,20 @@ enum LiveTextMode: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Typing into the app also shows the preview, which says when typing is
-    /// not possible or has stopped and the take continues as Preview.
+    /// Live recognition runs for the take (Preview and Type).
     var showsPreview: Bool { self != .off }
+
+    /// Whether the take shows the text card or the small waveform capsule.
+    /// Type mode shows the capsule while pFlow is typing in the app: the words
+    /// are already on screen there. The card appears only when typing could
+    /// not start or has stopped, with its note. The one rule for both looks.
+    func showsCard(typingLive: Bool) -> Bool {
+        switch self {
+        case .off: return false
+        case .preview: return true
+        case .typeInApp: return !typingLive
+        }
+    }
 
     /// Missing or unknown saved values are Off, so existing installs keep
     /// today's behavior until the person picks something else.
