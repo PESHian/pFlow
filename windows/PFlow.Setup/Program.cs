@@ -61,7 +61,9 @@ internal static class Program
     {
         var running = Process.GetProcessesByName("pFlow");
         if (running.Length == 0) return true;
-        if (!quiet && MessageBox.Show("pFlow is running. Close it now and continue?", Title, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return false;
+        // Quiet (test) runs never end a copy someone is using: they stop here instead.
+        if (quiet) throw new InvalidOperationException("Quit pFlow before installing. Your settings and History will be kept.");
+        if (MessageBox.Show("pFlow is running. Close it now and continue?", Title, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return false;
         try { using var quit = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\pFlow-by-Pesh-Windows-quit"); foreach (var _ in running) quit.Set(); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
         foreach (var process in running) {
             try { if (!process.WaitForExit(4000)) { process.Kill(); process.WaitForExit(5000); } } catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception) { }
