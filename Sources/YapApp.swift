@@ -74,12 +74,16 @@ struct YapApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // A relaunch briefly leaves the previous instance alive.
-        AppRelauncher.terminateOtherInstances()
+        // A relaunch briefly leaves the previous instance alive; an older copy
+        // never quits a newer one, it steps aside.
+        if InstalledCopies.retireOtherInstances() {
+            NSApp.terminate(nil)
+            return
+        }
 
         let app = AppState.shared
         app.bootstrap()
-        InstalledCopies.retireOlderCopies()
+        InstalledCopies.retireOlderCopies(login: app.launchAtLogin)
 
         if !app.permissions.allGranted {
             app.openOnboarding()

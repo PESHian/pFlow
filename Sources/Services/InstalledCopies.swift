@@ -16,7 +16,8 @@ enum InstalledCopies {
 
     /// Which of `installed` are older copies of the running app: a lower
     /// version at another path that is a real install, not a build, backup,
-    /// cache or trash. Pure, so it is tested with fixture bundles.
+    /// cache or trash. A copy whose version cannot be read is never offered.
+    /// Pure, so it is tested with fixture bundles.
     static func older(than running: Copy, among installed: [Copy]) -> [Copy] {
         let me = running.url.standardizedFileURL.resolvingSymlinksInPath().path
         return installed.filter { copy in
@@ -26,6 +27,41 @@ enum InstalledCopies {
         }
     }
 
+    /// A copy running from a build folder, a cache, the Trash or a mounted
+    /// volume is a developer or test run: it must not quit, retire or re-point
+    /// anything that belongs to the real install.
+    static func actsForInstall(_ running: Copy) -> Bool { !isScratch(running.url) }
+
+    /// What a freshly launched copy does about other running instances of the
+    /// same bundle ID: quit older ones (and a relaunch's previous instance of
+    /// the same version), step aside when a newer one is already running,
+    /// leave unknown versions alone. A scratch copy only quits its own earlier
+    /// instance at the same path.
+    struct InstancePlan: Equatable {
+        var quit: [Copy] = []
+        var stepAside = false
+    }
+
+    static func instancePlan(running: Copy, others: [Copy]) -> InstancePlan {
+        var plan = InstancePlan()
+        let me = running.url.standardizedFileURL.resolvingSymlinksInPath().path
+        for other in others {
+            let samePath = other.url.standardizedFileURL.resolvingSymlinksInPath().path == me
+            if !actsForInstall(running) {
+                if samePath { plan.quit.append(other) }
+                continue
+            }
+            switch compare(other.version, running.version) {
+            case .orderedAscending?: plan.quit.append(other)
+            case .orderedSame?: plan.quit.append(other)
+            case .orderedDescending?: plan.stepAside = true
+            case nil: continue
+            }
+        }
+        if plan.stepAside { plan.quit = [] }
+        return plan
+    }
+
     /// Paths that hold builds, backups or trash rather than installs.
     static func isScratch(_ url: URL) -> Bool {
         let parts = url.standardizedFileURL.pathComponents
@@ -33,10 +69,17 @@ enum InstalledCopies {
         return parts.count > 1 && parts[1] == "Volumes"
     }
 
-    /// Numeric per component: "0.3.10" is newer than "0.3.9"; "0.3" equals "0.3.0".
-    static func compare(_ a: String, _ b: String) -> ComparisonResult {
-        let x = a.split(separator: ".").map { Int($0) ?? 0 }
-        let y = b.split(separator: ".").map { Int($0) ?? 0 }
+    /// Numeric components only; nil for anything else ("0.3.10-beta", "").
+    static func parse(_ version: String) -> [Int]? {
+        let parts = version.split(separator: ".", omittingEmptySubsequences: false)
+        let numbers = parts.compactMap { Int($0) }
+        return numbers.count == parts.count && !numbers.isEmpty ? numbers : nil
+    }
+
+    /// Numeric per component: "0.3.10" is newer than "0.3.9"; "0.3" equals
+    /// "0.3.0". Nil when either version cannot be read.
+    static func compare(_ a: String, _ b: String) -> ComparisonResult? {
+        guard let x = parse(a), let y = parse(b) else { return nil }
         for index in 0..<max(x.count, y.count) {
             let l = index < x.count ? x[index] : 0
             let r = index < y.count ? y[index] : 0
@@ -64,13 +107,35 @@ enum InstalledCopies {
         NSWorkspace.shared.urlsForApplications(withBundleIdentifier: bundleID).compactMap(copy(at:))
     }
 
-    /// Run once at launch, after other instances were asked to quit.
-    @MainActor static func retireOlderCopies(defaults: UserDefaults = .standard) {
-        guard let bundleID = Bundle.main.bundleIdentifier else { return }
+    /// Run first at launch. Returns true when a newer copy is already running
+    /// and this one should quit instead of starting up.
+    @MainActor static func retireOtherInstances() -> Bool {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return false }
+        let me = ProcessInfo.processInfo.processIdentifier
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .filter { $0.processIdentifier != me }
+        let copies = others.map { app in
+            app.bundleURL.flatMap(copy(at:)) ?? Copy(url: app.bundleURL ?? URL(fileURLWithPath: "/"), version: "")
+        }
+        let plan = instancePlan(running: running, others: copies)
+        if plan.stepAside {
+            NSLog("pFlow: a newer copy is already running; this one quits")
+            return true
+        }
+        for (app, copy) in zip(others, copies) where plan.quit.contains(copy) { app.terminate() }
+        return false
+    }
+
+    /// Run once at launch, after other instances were asked to quit. A scratch
+    /// copy does nothing at all.
+    @MainActor static func retireOlderCopies(login: LaunchAtLoginService, defaults: UserDefaults = .standard) {
+        guard let bundleID = Bundle.main.bundleIdentifier, actsForInstall(running) else { return }
         let found = older(than: running, among: installed(bundleID: bundleID))
         guard !found.isEmpty else { return }
         NSLog("pFlow: older copies installed: \(found.map { "\($0.version) at \($0.url.path)" })")
-        pointLoginItemAtThisCopy()
+        _ = pointLoginItemAtThisCopy(status: SMAppService.mainApp.status,
+                                     register: { try SMAppService.mainApp.register() },
+                                     refresh: { login.refresh() })
 
         let declined = Set(defaults.stringArray(forKey: declinedKey) ?? [])
         let toAsk = found.filter { !declined.contains($0.url.path) }
@@ -94,14 +159,20 @@ enum InstalledCopies {
     }
 
     /// Launch-at-login follows the bundle ID, so after a "Replace" it may still
-    /// point at the older copy. Re-registering points it at this one.
-    @MainActor private static func pointLoginItemAtThisCopy() {
-        guard SMAppService.mainApp.status == .enabled else { return }
+    /// point at the older copy. Registering again (never unregistering first,
+    /// so a failure cannot lose the login item) asks the system to use this
+    /// bundle. Whatever happens, the service state is refreshed so Settings
+    /// shows the truth. Returns true when the item is enabled afterwards.
+    static func pointLoginItemAtThisCopy(status: SMAppService.Status, register: () throws -> Void,
+                                         refresh: () -> Void) -> Bool {
+        guard status == .enabled else { return false }
+        defer { refresh() }
         do {
-            try SMAppService.mainApp.unregister()
-            try SMAppService.mainApp.register()
+            try register()
+            return true
         } catch {
             NSLog("pFlow: could not re-point launch at login: \(error.localizedDescription)")
+            return false
         }
     }
 

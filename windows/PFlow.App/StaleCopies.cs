@@ -9,6 +9,8 @@ internal static class StaleCopies
 {
     const string QuitEvent = "Local\\pFlow-by-Pesh-Windows-quit", RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run", RunValue = "pFlow by Pesh";
     static string Me => Environment.ProcessPath ?? "";
+    /// Where install-windows.ps1 (Install.cmd) puts pFlow.
+    static string InstallRoot => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "pFlow");
     static Version Mine => VersionOf(Me) ?? new Version(0, 0);
 
     internal static Version? VersionOf(string path)
@@ -58,13 +60,14 @@ internal static class StaleCopies
     }
 
     /// The Run key is only touched when it already exists (the person chose
-    /// launch at sign-in) and names a missing or older pFlow.exe.
+    /// launch at sign-in), names a missing or older pFlow.exe, and this copy
+    /// runs from the install folder.
     internal static void RepointRunKey()
     {
         try {
             using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
             if (key?.GetValue(RunValue) is not string command) return;
-            if (InstalledCopies.RunKeyNeedsRepoint(command, Me, Mine, VersionOf)) key.SetValue(RunValue, "\"" + Me + "\"");
+            if (InstalledCopies.RunKeyNeedsRepoint(command, Me, Mine, InstallRoot, VersionOf)) key.SetValue(RunValue, "\"" + Me + "\"");
         } catch { /* a locked key leaves the old value; Settings can set it again */ }
     }
 }

@@ -23,13 +23,25 @@ public static class InstalledCopies
         return space > 0 ? value[..space] : value;
     }
 
+    /// Absolute Windows paths compared as text (either separator, any case), so
+    /// the same rule holds in the Linux test run.
+    static string Normal(string path) => path.Trim().Replace('/', '\\').TrimEnd('\\');
+
     public static bool SamePath(string? a, string? b) =>
-        a != null && b != null && string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+        a != null && b != null && string.Equals(Normal(a), Normal(b), StringComparison.OrdinalIgnoreCase);
+
+    /// True when `path` is inside `root` (the install folder itself or below it).
+    public static bool Inside(string path, string root) =>
+        Normal(path).StartsWith(Normal(root) + '\\', StringComparison.OrdinalIgnoreCase);
 
     /// Launch-at-sign-in must open this copy: re-point when the Run key names
-    /// another pFlow.exe that is missing (null version) or older.
-    public static bool RunKeyNeedsRepoint(string? registeredCommand, string currentPath, Version currentVersion, Func<string, Version?> versionOf)
+    /// another pFlow.exe that is missing (null version) or older, and only
+    /// when this copy lives in the real install folder (`installRoot`, where
+    /// Install.cmd puts it). A copy run from a zip, Temp, a build or any
+    /// other folder never changes the key.
+    public static bool RunKeyNeedsRepoint(string? registeredCommand, string currentPath, Version currentVersion, string installRoot, Func<string, Version?> versionOf)
     {
+        if (!Inside(currentPath, installRoot)) return false;
         var path = CommandPath(registeredCommand);
         if (path == null || SamePath(path, currentPath)) return false;
         var version = versionOf(path);
