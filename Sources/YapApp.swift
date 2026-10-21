@@ -43,31 +43,29 @@ struct YapApp: App {
 
     var body: some Scene {
         MenuBarExtra(isInserted: $app.showInMenuBar) {
-            Button(isRecording ? "Stop Dictation" : "Start Dictation") {
-                app.toggleRecording()
-            }
-            Divider()
-            Toggle("Launch at Login", isOn: Binding(
+            Toggle(MenuBarMenu.launchAtLogin, isOn: Binding(
                 get: { app.launchAtLogin.isEnabled },
                 set: { app.launchAtLogin.set($0) }
             ))
             if app.launchAtLogin.needsApproval {
-                Button("Approve Launch at Login…") { app.launchAtLogin.openApproval() }
+                Button(MenuBarMenu.approveLogin) { app.launchAtLogin.openApproval() }
             }
-            Button("Open pFlow…") { app.openMain(page: .settings) }
-            Button("Recording History…") { app.openMain(page: .history) }
-            Menu("Format: " + (app.templates.active?.name ?? "Plain dictation")) {
+            Divider()
+            Button(MenuBarMenu.settings) { app.openMain(page: .settings) }
+                .keyboardShortcut(",", modifiers: .command)
+            Button(MenuBarMenu.history) { app.openMain(page: .history) }
+            Menu(MenuBarMenu.formatPrefix + (app.templates.active?.name ?? "Plain dictation")) {
                 Button("Plain dictation") { app.templates.activeID = nil }
                 ForEach(app.templates.templates) { template in
                     Button(template.name) { app.templates.activeID = template.id }
                 }
                 Divider()
-                Button("Edit Templates…") { app.openMain(page: .templates) }
+                Button(MenuBarMenu.editTemplates) { app.openMain(page: .templates) }
             }
             Divider()
-            Button("Check for updates…") { MacUpdates.shared.show() }
-            Button("About pFlow") { app.openAbout() }
-            Button("Quit pFlow") { NSApplication.shared.terminate(nil) }
+            Button(MenuBarMenu.updates) { MacUpdates.shared.show() }
+            Button(MenuBarMenu.about) { app.openAbout() }
+            Button(MenuBarMenu.quit) { NSApplication.shared.terminate(nil) }
         } label: {
             Image(nsImage: MenuBarIcon.image(recording: isRecording))
         }
@@ -81,6 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let app = AppState.shared
         app.bootstrap()
+        InstalledCopies.retireOlderCopies()
 
         if !app.permissions.allGranted {
             app.openOnboarding()

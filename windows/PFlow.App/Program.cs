@@ -17,6 +17,8 @@ internal sealed partial class Program : Application
     // "Type in the current app": at most one take types at a time, and only while it records.
     readonly LiveInlineSlot typing = new();
     string? typingSession;
+    // This take shows the text card; Type mode keeps only the recording control while typing works.
+    bool card;
     KeyboardHook keyboard = null!;
     Forms.NotifyIcon tray = null!;
     System.Drawing.Icon? trayIcon;
@@ -33,7 +35,8 @@ internal sealed partial class Program : Application
     [STAThread] public static int Main(string[] args)
     {
         var app = new Program();
-        if (!app.single.WaitOne(0)) return 0;
+        // An older copy left by an install elsewhere gives way; a copy of this version or newer stays.
+        if (!app.single.WaitOne(0) && !StaleCopies.TakeOverFromOlderCopy(app.single)) return 0;
         app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         app.DispatcherUnhandledException += (_, e) => { e.Handled = true; app.Failure(e.Exception); };
         app.Startup += (_, _) => app.Start(args);
@@ -43,6 +46,7 @@ internal sealed partial class Program : Application
     {
         try {
             string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "pFlow");
+            StaleCopies.RepointRunKey(); StaleCopies.ListenForNewerCopy(() => Dispatcher.InvokeAsync(Quit));
             store = new StateStore(directory); whisper = new Whisper(directory);
             textModel = new LocalTextModel(directory);
             _ = Task.Run(async () => { try { await whisper.Prewarm(); } catch { /* Recording retries and reports a load error when needed. */ } });
@@ -54,14 +58,14 @@ internal sealed partial class Program : Application
             _ = new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Background, (_, _) => ClipboardLease.RestorePending(), Dispatcher);
             keyboard = new KeyboardHook(OnTrigger, store.Preferences.ActivationKey) { Enabled = store.Preferences.Enabled };
             var menu = new Forms.ContextMenuStrip();
-            menu.Items.Add("Show recording control", null, (_, _) => Dispatcher.Invoke(capsule.Reveal));
-            menu.Items.Add("Settings", null, (_, _) => Dispatcher.Invoke(OpenSettings));
-            menu.Items.Add("Check for updates", null, (_, _) => Dispatcher.Invoke(OpenUpdates));
-            menu.Items.Add("History", null, (_, _) => Dispatcher.Invoke(OpenHistory));
-            var enabled = new Forms.ToolStripMenuItem("Dictation enabled") { Checked = store.Preferences.Enabled, CheckOnClick = true };
+            menu.Items.Add(TrayMenu.ShowControl, null, (_, _) => Dispatcher.Invoke(capsule.Reveal));
+            menu.Items.Add(TrayMenu.Settings, null, (_, _) => Dispatcher.Invoke(OpenSettings));
+            menu.Items.Add(TrayMenu.Updates, null, (_, _) => Dispatcher.Invoke(OpenUpdates));
+            menu.Items.Add(TrayMenu.History, null, (_, _) => Dispatcher.Invoke(OpenHistory));
+            var enabled = new Forms.ToolStripMenuItem(TrayMenu.Enabled) { Checked = store.Preferences.Enabled, CheckOnClick = true };
             enabled.CheckedChanged += (_, _) => { store.Preferences.Enabled = keyboard.Enabled = enabled.Checked; store.SavePreferences(); if (!enabled.Checked) Cancel(); };
-            menu.Items.Add(enabled); menu.Items.Add("Cancel", null, (_, _) => Dispatcher.Invoke(Cancel));
-            menu.Items.Add("Quit", null, (_, _) => Dispatcher.Invoke(Quit));
+            menu.Items.Add(enabled); menu.Items.Add(TrayMenu.Cancel, null, (_, _) => Dispatcher.Invoke(Cancel));
+            menu.Items.Add(TrayMenu.Quit, null, (_, _) => Dispatcher.Invoke(Quit));
             trayIcon = PeshIcon();
             tray = new Forms.NotifyIcon { Icon = trayIcon, Text = "pFlow by Pesh", Visible = true, ContextMenuStrip = menu };
             tray.DoubleClick += (_, _) => Dispatcher.Invoke(OpenSettings);
@@ -87,7 +91,7 @@ internal sealed partial class Program : Application
     {
         phase = value; capsule?.Set(value, detail);
         if (preview == null) return;
-        if (live != null && value is Phase.Recording or Phase.Continuous or Phase.Processing or Phase.Inserting) {
+        if (live != null && card && value is Phase.Recording or Phase.Continuous or Phase.Processing or Phase.Inserting) {
             if (value == Phase.Processing) preview.Finishing();
             preview.Reveal(capsule!.Handle);
         } else preview.Clear();
@@ -102,13 +106,21 @@ internal sealed partial class Program : Application
         if (changed) preview.ShowText(transcript.Text);
         // A repeat of the same words still goes to typing: it is how the last words settle.
         if (typingSession == owner.SessionName && recorder != null && typing.Reconcile(typingSession, transcript.Text) is LiveStop stop)
-            preview.SetNote(LiveInlineText.StoppedNote(stop));
+            ShowCard(LiveInlineText.StoppedNote(stop));
+    }
+    /// Typing in the app ended for this take, so the words now need the card.
+    void ShowCard(string note)
+    {
+        preview.SetNote(note);
+        if (card) return;
+        card = true;
+        if (recorder != null) preview.Reveal(capsule.Handle);
     }
     /// The words typed live for this take, as the pipeline finishes it.
     LiveTyping? TypingFor(string? session) => session == null ? null
         : new LiveTyping(text => typing.Finalize(session, text), () => typing.Typed(session), () => typing.Cancel(session));
-    void LiveStopped(LiveRecognizer owner) { if (ReferenceEquals(live, owner)) preview.SetNote("Live words stopped"); }
-    void LiveTooSlow(LiveRecognizer owner) { if (ReferenceEquals(live, owner)) preview.SetNote(LiveTake.TooSlowNote); }
+    void LiveStopped(LiveRecognizer owner) { if (ReferenceEquals(live, owner)) ShowCard("Live words stopped"); }
+    void LiveTooSlow(LiveRecognizer owner) { if (ReferenceEquals(live, owner)) ShowCard(LiveTake.TooSlowNote); }
     void EndLive()
     {
         var ending = live; live = null; transcript.Cancel(); preview.Clear();
@@ -143,7 +155,7 @@ internal sealed partial class Program : Application
                 sessionDirectory = Path.Combine(store.DirectoryPath, "recording-" + Guid.NewGuid()); Directory.CreateDirectory(sessionDirectory);
                 Cue(true);
                 string mode = LiveTextModes.Resolve(store.Preferences.LiveTextMode);
-                typing.Abandon(); typingSession = null;
+                typing.Abandon(); typingSession = null; card = false;
                 if (LiveTextModes.ShowsPreview(mode)) {
                     LiveRecognizer recognizer = null!;
                     recognizer = new LiveRecognizer(unchecked((uint)sessionId), whisper, store.Preferences.Language,
@@ -156,6 +168,7 @@ internal sealed partial class Program : Application
                         if (refused == null) typingSession = recognizer.SessionName;
                         preview.SetNote(refused is LiveStop stop ? LiveInlineText.PreviewNote(stop) : target.TypingNote);
                     }
+                    card = LiveTextModes.ShowsCard(mode, typingSession != null);
                 }
                 recorder = new WaveRecorder(Path.Combine(sessionDirectory, "audio.wav"), live == null ? null : live.Append);
                 live?.Start();
