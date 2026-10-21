@@ -151,66 +151,103 @@ internal static partial class Program
         }
     }
 
-    /// --chromium-cold: Edge just opened, the Gmail-style body focused by the page itself,
-    /// and the first UI Automation call is the app's own capture, as on the owner's PC.
-    /// Chromium builds its accessibility tree only once a client asks.
+    /// --chromium-cold: Edge just opened, the first UI Automation call is the app's own
+    /// capture, as on the owner's PC. Three pages: a Gmail-style body the page focuses
+    /// itself (two-line text, so a non-Win32 target must paste, never type Enter), a
+    /// password box, and a body left to Chromium's placeholder pane. Each outcome is
+    /// honest: delivered and confirmed, or the text on the clipboard with the paste
+    /// toast, or refused. Nothing is ever typed into a password box or a pane.
     static async Task ChromiumCold()
     {
-        string name = "pflow-fictional-cold-" + Guid.NewGuid().ToString("N");
+        var log = new List<string>(); InsertionLog.Written += line => log.Add(line);
+        foreach (var page in new[] { ("body", true, "Fictional cold words.\nSecond fictional line."), ("password", true, "Fictional secret words."), ("placeholder", false, "Fictional pane words.") })
+            await ColdPage(page.Item1, page.Item2, page.Item3, log);
+        await PasteNoticeEveryTime();
+    }
+    static async Task ColdPage(string variant, bool scriptFocus, string text, List<string> log)
+    {
+        string name = "pflow-fictional-cold-" + variant + "-" + Guid.NewGuid().ToString("N");
         string html = Path.Combine(root, name + ".html");
+        string field = variant == "password" ? "<input id=body type=password aria-label='Fictional secret' autofocus>"
+            : "<div id=body contenteditable=true role=textbox aria-multiline=true aria-label='Fictional body' autofocus><div><br></div></div>";
         File.WriteAllText(html, "<!doctype html><meta charset=utf-8><title>" + name + "</title><style>body{font:16px sans-serif;margin:24px}[contenteditable]{min-height:120px;border:1px solid #888;padding:8px}</style>"
-            + "<p>Fictional compose</p><div id=body contenteditable=true role=textbox aria-multiline=true aria-label='Fictional body' autofocus><div><br></div></div>"
-            + "<script>var b=document.getElementById('body');function mirror(){document.title='" + name + " | focus:'+(document.activeElement&&document.activeElement.id)+' | '+b.innerText.replace(/\\s+/g,' ').trim();}"
-            + "b.addEventListener('input',mirror);document.addEventListener('focusin',mirror);document.addEventListener('focusout',mirror);window.addEventListener('load',function(){b.focus();mirror();});</script>");
+            + "<p>Fictional compose</p>" + field
+            + "<script>var b=document.getElementById('body');function mirror(){var t=b.value!==undefined?('len:'+b.value.length):b.innerText.replace(/\\s+/g,' ').trim();document.title='" + name + " | focus:'+(document.activeElement&&document.activeElement.id)+' | '+t;}"
+            + "b.addEventListener('input',mirror);document.addEventListener('focusin',mirror);document.addEventListener('focusout',mirror);window.addEventListener('load',function(){" + (scriptFocus ? "b.focus();" : "") + "mirror();});</script>");
         string edgePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe");
         var edge = new ProcessStartInfo(edgePath) { UseShellExecute = false };
         foreach (var arg in new[] { "--user-data-dir=" + Path.Combine(root, EdgeProfile(name)), "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--app=" + new Uri(html).AbsoluteUri })
             edge.ArgumentList.Add(arg);
         foreach (var p in Process.GetProcessesByName("msedge")) { try { if (p.MainWindowTitle.Contains("pflow-fictional")) p.CloseMainWindow(); } catch { } }
-        Console.WriteLine("COLD profile " + EdgeProfile(name));
-        using var owner = new HwndSource(new HwndSourceParameters("pFlow fictional cold owner") { Width = 10, Height = 10 });
+        using var owner = new HwndSource(new HwndSourceParameters("pFlow fictional cold owner " + variant) { Width = 10, Height = 10 });
         var process = Process.Start(edge)!;
         try {
-            // Win32 only until the capture: no UI Automation call wakes Chromium's tree early.
             IntPtr window = IntPtr.Zero;
             for (int i = 0; i < 100 && window == IntPtr.Zero; i++) {
                 await Task.Delay(100);
                 foreach (var p in Process.GetProcessesByName("msedge")) { try { if (p.MainWindowTitle.Contains(name)) window = p.MainWindowHandle; } catch { } }
             }
-            Check("Edge window appeared", window != IntPtr.Zero);
+            Check(variant + ": Edge window appeared", window != IntPtr.Zero);
             await Task.Delay(1500);
-            // Win32 activation only (no UI Automation element for the window).
             uint foregroundThread = Native.GetWindowThreadProcessId(Native.GetForegroundWindow(), out _), me = GetCurrentThreadId();
             bool attached = foregroundThread != me && AttachThreadInput(me, foregroundThread, true);
             try { SetForegroundWindow(window); } finally { if (attached) AttachThreadInput(me, foregroundThread, false); }
             await Task.Delay(700);
-            { var t = new System.Text.StringBuilder(512); GetWindowText(window, t, t.Capacity); Console.WriteLine($"COLD foreground is Edge={Native.GetForegroundWindow() == window}; title before=[{t}]"); }
-            var clock = Stopwatch.StartNew();
-            for (int attempt = 1; attempt <= 34; attempt++) {
-                // Sustained use, as a screen reader would: the classic knock on the focused window each time.
-                string knock = attempt >= 3 ? MsaaNudge(window) : "none";
+            string Title() { var t = new System.Text.StringBuilder(512); GetWindowText(window, t, t.Capacity); return t.ToString(); }
+            Console.WriteLine($"COLD {variant}: foreground is Edge={Native.GetForegroundWindow() == window}; title before=[{Title()}]");
+            // The app's take start: capture; a placeholder pane is knocked and captured again at 300 and 700 ms (Program.CaptureAgainSoon).
+            string outcome; string result;
+            try {
                 var target = InsertionTarget.Capture();
-                if (attempt <= 3 || target.CanInsert || attempt % 5 == 0) Console.WriteLine($"COLD capture {attempt} at {clock.ElapsedMilliseconds} ms (knock {knock}): CanInsert={target.CanInsert} field={target.Kind} refusal={target.Refusal} app={target.ApplicationName}");
-                if (target.CanInsert) {
-                    string result;
-                    try { result = await target.Insert("Fictional cold words.", owner.Handle, false, CancellationToken.None); }
-                    catch (Exception error) { result = "EXCEPTION " + error.GetType().Name + ": " + error.Message; }
-                    await Task.Delay(800);
-                    var title = new System.Text.StringBuilder(512); GetWindowText(window, title, title.Capacity);
-                    Console.WriteLine($"COLD insert result=[{result}] unverifiable={target.Unverifiable} title now=[{title}]");
-                    Check("cold Chromium body got the typed words (page title mirrors its text)", title.ToString().Contains("Fictional cold words."));
-                    // Chromium exposes its tree to some captures and not others: a readable field is confirmed
-                    // and reported Inserted; an unreadable one is typed and reported as not checked.
-                    Check("the take is honest about the check", result == (target.Unverifiable ? InsertionTarget.Unchecked : "Inserted"));
-                    break;
+                Console.WriteLine($"COLD {variant}: capture CanInsert={target.CanInsert} placeholder={target.Placeholder} field={target.Kind} refusal={target.Refusal}");
+                foreach (int wait in new[] { 300, 700 }) {
+                    if (!target.Placeholder) break;
+                    await Task.Delay(wait);
+                    var again = InsertionTarget.Capture();
+                    Console.WriteLine($"COLD {variant}: capture again after {wait} ms: CanInsert={again.CanInsert} placeholder={again.Placeholder} field={again.Kind} same window={target.SameWindow(again)}");
+                    if (target.SameWindow(again) && again.CanInsert && !again.Placeholder) { target = again; break; }
                 }
-                await Task.Delay(300);
+                result = await target.Insert(text, owner.Handle, false, CancellationToken.None);
+                outcome = result == "Inserted" ? "delivered" : result == InsertionTarget.PasteReady ? "clipboard" : "other";
+            } catch (InvalidOperationException error) { result = error.Message; outcome = "refused"; }
+            await Task.Delay(800);
+            string title = Title();
+            Console.WriteLine($"COLD OUTCOME {variant}: {outcome} result=[{result}] title now=[{title}]");
+            Check(variant + ": the outcome is delivered, clipboard or refused; never typing without a check", outcome != "other");
+            Check(variant + ": never a bare 'Inserted' without the words on the page", result != "Inserted" || title.Contains("Second fictional line") || (variant != "body" && title.Contains(text)));
+            if (variant == "password") Check("password: nothing was typed into the password box", title.Contains("len:0") && result != "Inserted");
+            if (variant == "placeholder" && outcome == "clipboard") Check("placeholder: the pane got no keystrokes", !title.Contains("Fictional pane words"));
+            if (outcome == "delivered" && variant == "body") Check("body: two lines went in by paste, never typed Enter", log.Any(l => l.Contains("path=clipboard")) && !log.Any(l => l.Contains("path=type")));
+            if (outcome == "clipboard") {
+                string clip = ""; try { clip = Clipboard.GetText(); } catch (Exception error) { clip = "EXCEPTION " + error.GetType().Name; }
+                Check(variant + ": the paste toast comes with the text on the clipboard", clip == text);
+                Check(variant + ": the log names the reason", log.Any(l => l.Contains("placeholder pane at insert time")));
+                try { Clipboard.Clear(); } catch { }
             }
+            log.Clear();
         } finally {
             try { process.CloseMainWindow(); } catch { }
             foreach (var p in Process.GetProcessesByName("msedge")) { try { if (p.MainWindowTitle.Contains(name)) p.CloseMainWindow(); } catch { } }
             await Task.Delay(500);
             try { File.Delete(html); } catch { }
         }
+    }
+    /// "Press Ctrl+V to paste" is said on every such take, never only the first.
+    static async Task PasteNoticeEveryTime()
+    {
+        string directory = Path.Combine(root, "paste-fictional-" + Guid.NewGuid()); Directory.CreateDirectory(directory);
+        try {
+            var store = new StateStore(directory); await using var whisper = new Whisper(directory); var model = new LocalTextModel(directory);
+            var pipeline = new DictationPipeline(store, whisper, model);
+            var prepared = new DictationPipeline.Prepared("Fictional paste words.", null, 3, false, false, false);
+            var notices = new List<string?>();
+            for (int i = 0; i < 3; i++) { var r = await pipeline.Deliver(prepared, 1.0, new PasteOnlyTarget(), IntPtr.Zero, (_, _) => { }, CancellationToken.None); notices.Add(r.Notice); }
+            Check("the paste toast is shown on every take (3 of 3)", notices.All(n => n == InsertionTarget.PasteReady));
+        } finally { Directory.Delete(directory, true); }
+    }
+    sealed class PasteOnlyTarget : IInsertionTarget
+    {
+        public bool CanInsert => true; public string ApplicationName => "Fictional"; public string ApplicationId => "fictional";
+        public Task<string> Insert(string text, IntPtr owner, bool keep, CancellationToken cancel, string? rtf = null) => Task.FromResult(InsertionTarget.PasteReady);
     }
 }

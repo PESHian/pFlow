@@ -20,21 +20,22 @@ internal sealed class InsertionTarget : IInsertionTarget
     readonly int start, length;
     readonly bool readable;
     /// A Chromium host (Chrome, Edge, Electron apps) builds its accessibility
-    /// tree only for a screen reader, so its field cannot be read or checked:
-    /// the text goes in as keystrokes and the person is told it was not checked,
-    /// like the Mac's unconfirmed fallback for unreadable web fields.
-    readonly bool blind;
+    /// tree only when asked; until then the focus is its placeholder pane, which
+    /// says nothing about the field under the caret. Such a take is knocked for
+    /// the tree and captured again a moment later; if the pane is all there is,
+    /// nothing is typed: the finished text goes on the clipboard with a toast.
+    readonly bool placeholder;
     readonly IntPtr foreground;
     readonly uint processId;
     FieldState State => new(foreground.ToInt64(), processId, string.Join(".", runtimeId), before, start, length);
     public const string SavedToHistory = "Saved to History. Open History to copy your dictation.";
-    public const string Unchecked = "Typed into the app; it did not let pFlow check the result. Look at the field before copying from History.";
+    public const string PasteReady = "Couldn't reach that box. Press Ctrl+V to paste.";
     /// Chromium's top-level window class (Chrome, Edge, Electron) and its legacy content window.
     static readonly string[] ChromiumHosts = ["Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND"];
     public const string PlainOnly = "Inserted as plain text; bold headings could not be applied safely.";
-    public bool CanInsert => readable || blind;
-    /// Typed without a read-back: the field cannot be checked (see `blind`).
-    internal bool Unverifiable => blind;
+    public bool CanInsert => readable || placeholder;
+    /// Chromium's placeholder pane: worth capturing again shortly (see `placeholder`).
+    internal bool Placeholder => placeholder;
     public string ApplicationName { get; }
     public string ApplicationId { get; }
     /// The preview's "Typing in …" note for this app.
@@ -47,15 +48,25 @@ internal sealed class InsertionTarget : IInsertionTarget
     {
         element = e; runtimeId = e.GetRuntimeId(); before = text; this.start = start; this.length = length; this.readable = readable; Refusal = refusal;
         foreground = Native.GetForegroundWindow(); Native.GetWindowThreadProcessId(foreground, out processId);
-        blind = !readable && refusal != null && ChromiumFocused();
-        if (blind) Refusal = refusal + "; Chromium field, typed without a check";
+        placeholder = !readable && refusal != null && ChromiumFocused();
+        if (placeholder) { Refusal = refusal + "; Chromium placeholder pane"; Knock(); }
         using var process = Process.GetProcessById((int)processId); ApplicationName = process.ProcessName; ApplicationId = process.ProcessName;
         TypingNote = TypingNoteFor(processId, ApplicationName); Kind = Describe(e);
     }
+    /// The classic screen-reader knock on the focused Chromium window: WM_GETOBJECT
+    /// with OBJID_CLIENT, which is what makes Chromium start building its tree.
+    void Knock()
+    {
+        IntPtr control = LiveTextField.FocusedControl(foreground);
+        if (control == IntPtr.Zero) return;
+        var iid = new Guid("618736e0-3c3d-11cf-810c-00aa00389b71");
+        if (AccessibleObjectFromWindow(control, 0xFFFFFFFC, ref iid, out IntPtr accessible) == 0 && accessible != IntPtr.Zero) Marshal.Release(accessible);
+    }
+    [System.Runtime.InteropServices.DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr window, uint objectId, ref Guid iid, out IntPtr accessible);
+    /// The same window and process as this capture: a later capture may stand in for it.
+    internal bool SameWindow(InsertionTarget other) => other.foreground == foreground && other.processId == processId;
     /// The keyboard focus sits in a Chromium window whose tree is not built: the
     /// focused element is Chromium's placeholder pane, not a field and not a page.
-    /// A built tree that shows a non-editable element is a refusal, never typing:
-    /// keystrokes into a page without a field could fire its single-key shortcuts.
     bool ChromiumFocused()
     {
         if (!ChromiumHosts.Contains(LiveTextField.ClassName(LiveTextField.FocusedControl(foreground)))) return false;
@@ -161,32 +172,18 @@ internal sealed class InsertionTarget : IInsertionTarget
     public async Task<string> Insert(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf = null)
     {
         cancel.ThrowIfCancellationRequested();
-        if (!readable && !blind) { Log("saved to History: " + Refusal); return SavedToHistory; }
-        try { return readable ? await Deliver(text, clipboardOwner, keepClipboard, cancel, rtf) : await TypeUnchecked(text, clipboardOwner, keepClipboard, cancel, rtf); }
+        if (placeholder) return OfferPaste(text, clipboardOwner);
+        if (!readable) { Log("saved to History: " + Refusal); return SavedToHistory; }
+        try { return await Deliver(text, clipboardOwner, keepClipboard, cancel, rtf); }
         catch (Exception error) when (error is not OperationCanceledException) { Log("refused: " + error.Message); throw; }
     }
-    /// The same app, window and focused control as when the take began; the field itself cannot be read.
-    void ValidateHost()
+    /// The field never became readable: the text goes on the clipboard (the same copy
+    /// rule as "Copy dictation to clipboard") and the person pastes it. Never typed.
+    string OfferPaste(string text, IntPtr clipboardOwner)
     {
-        if (Native.GetForegroundWindow() != foreground) throw new InvalidOperationException("Focus changed. Your text is in History.");
-        Native.GetWindowThreadProcessId(foreground, out var current);
-        if (current != processId || !ChromiumHosts.Contains(LiveTextField.ClassName(LiveTextField.FocusedControl(foreground)))) throw new InvalidOperationException("Focus changed. Your text is in History.");
-    }
-    /// Keystrokes (or one paste when the clipboard copy is wanted) into a field pFlow cannot read back.
-    async Task<string> TypeUnchecked(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf)
-    {
-        ValidateHost(); cancel.ThrowIfCancellationRequested();
-        if (new[] { 0x10, 0x11, 0x12, 0x5B, 0x5C }.Any(x => Native.GetAsyncKeyState(x) < 0)) throw new InvalidOperationException("Release the shortcut keys first. Your text is in History.");
-        if (keepClipboard) {
-            Log("path=unchecked paste " + InsertionLog.Length(text));
-            using var lease = new ClipboardLease(clipboardOwner, false);
-            lease.Put(text, rtf); ValidateHost(); lease.DispatchPaste(); lease.Keep();
-        } else {
-            Log("path=unchecked typing " + InsertionLog.Length(text));
-            Native.Send(Native.UnicodeText(text));
-        }
-        await Task.Delay(100);
-        return Unchecked;
+        Log("placeholder pane at insert time: " + Refusal + "; text put on the clipboard for Ctrl+V");
+        ClipboardLease.KeepCopy(clipboardOwner, text);
+        return PasteReady;
     }
     async Task<string> Deliver(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf)
     {
@@ -201,10 +198,13 @@ internal sealed class InsertionTarget : IInsertionTarget
             Log(applied ? "confirmed" : "not confirmed: field reads " + InsertionLog.Length(Read()));
             return applied ? "Inserted" : Unconfirmed;
         }
-        if (rtf == null && !keepClipboard) return await TypeUnicode(text, expected, cancel);
+        // Typed keystrokes turn a line break into Enter, which sends the message in chat apps and
+        // web forms: only Win32 controls, or text without a line break, are typed. The rest is pasted.
+        bool typeable = TypingSafe(Win32, text);
+        if (rtf == null && !keepClipboard && typeable) return await TypeUnicode(text, expected, cancel);
         ClipboardLease lease;
         try { lease = new ClipboardLease(clipboardOwner, !keepClipboard); }
-        catch (InvalidOperationException error) when (!keepClipboard) {
+        catch (InvalidOperationException error) when (!keepClipboard && typeable) {
             // Unsupported clipboard formats never block plain dictation or change the clipboard.
             Log("clipboard not saved (" + error.Message + "); typing instead");
             string fallback = await TypeUnicode(text, expected, cancel);
@@ -271,6 +271,8 @@ internal sealed class InsertionTarget : IInsertionTarget
         return placed;
     }
     public const string Unconfirmed = "Insertion could not be confirmed; check the field before copying from History.";
+    /// One rule: keystrokes are safe for a Win32 control, or for text with no line break anywhere else.
+    internal static bool TypingSafe(bool win32, string text) => win32 || (!text.Contains('\n') && !text.Contains('\r'));
     string Read() => ReadText(element);
     static string ReadText(AutomationElement field)
     {

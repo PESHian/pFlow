@@ -31,6 +31,8 @@ internal static partial class Program
                 });
                 var deadline = Stopwatch.StartNew();
                 while (!work.IsCompleted && deadline.Elapsed < TimeSpan.FromSeconds(10)) { Drain(); Thread.Sleep(1); }
+                Check("keystrokes are safe for a Win32 control, or for text with no line break elsewhere (chat apps send on Enter)",
+                    InsertionTarget.TypingSafe(true, "two\nlines") && InsertionTarget.TypingSafe(false, "one line") && !InsertionTarget.TypingSafe(false, "two\nlines") && !InsertionTarget.TypingSafe(false, "two\rlines"));
                 Check("native field operation completes", work.IsCompleted);
                 return work.GetAwaiter().GetResult();
             }

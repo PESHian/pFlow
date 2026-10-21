@@ -197,10 +197,16 @@ internal static partial class Program
         var start = new ProcessStartInfo("notepad.exe") { UseShellExecute = true }; start.ArgumentList.Add(file); Process.Start(start);
         var notepad = await WindowWith(name); var edit = await Editor(notepad); await Focus(notepad, edit); End(edit);
         var target = InsertionTarget.Capture(); string before = Read(edit);
+        // Which Notepad and which Windows this run drives, and the path the app took for it.
+        var notepadLog = new List<string>(); InsertionLog.Written += line => notepadLog.Add(line);
+        string notepadVersion = "unknown"; try { notepadVersion = Process.GetProcessById(notepad.Current.ProcessId).MainModule?.FileVersionInfo.ProductVersion ?? "unknown"; } catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        Console.WriteLine($"NOTEPAD Windows {Environment.OSVersion.Version} ({RuntimeInformation.OSArchitecture}, test process {RuntimeInformation.ProcessArchitecture}); Notepad {notepadVersion}; field {target.Kind}");
         string transcript = File.ReadAllText(Path.Combine(root, "fictional-output.txt")).Trim();
         string result = await target.Insert(transcript, owner.Handle, false, CancellationToken.None);
         Check("Notepad offline speech fixture inserted", Normalize(Read(edit)) == Normalize(before + transcript));
         Check("Notepad insertion acknowledged", result == "Inserted");
+        Check("Windows 11 Notepad (RichEditD2DPT, a Win32 rich edit inside XAML) takes the whole-value path and confirms it; classic Notepad (Edit) the same",
+            (target.Kind.Contains("RichEditD2DPT") || target.Kind.Contains("/Edit/")) && target.Kind.EndsWith("/Win32") && notepadLog.Any(l => l.Contains("path=value")) && notepadLog.Any(l => l.Contains(": confirmed")));
         End(edit); target = InsertionTarget.Capture(); before = Read(edit);
         string narration = string.Concat(Enumerable.Repeat("Fictional 李 👮🏽‍♀️ 123.\n\nRelated sentence. ", 1000));
         result = await target.Insert(narration, owner.Handle, false, CancellationToken.None);

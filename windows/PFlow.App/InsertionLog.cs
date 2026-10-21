@@ -12,7 +12,7 @@ internal static class InsertionLog
     internal static event Action<string>? Written;
     internal static void Record(string line)
     {
-        string entry = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss.fff zzz") + " " + line;
+        string entry = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss.fff zzz") + " " + PrivateLog.Scrub(line);
         Written?.Invoke(entry);
         if (Path == null) return;
         lock (sync) {
@@ -25,6 +25,8 @@ internal static class InsertionLog
             } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { /* the log is never worth a failure */ }
         }
     }
+    /// An exception as a reason: type and path-free message (one rule: PrivateLog.Reason).
+    internal static string Reason(Exception error) => PrivateLog.Reason(error);
     /// A length in place of text: enough to see a mismatch, nothing to read.
     internal static string Length(string? text) => text == null ? "null" : text.Length + " chars";
 }

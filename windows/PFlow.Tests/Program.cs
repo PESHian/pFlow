@@ -141,6 +141,9 @@ void CapsuleSpacingChecks()
       foreach (int db in speech) { for (int i = 0; i < 6; i++) trace.Advance(AudioLevels.FromDecibels(db), .016); peak = Math.Max(peak, trace.Levels().Max()); }
       Check("a speech-shaped trace at normal microphone levels peaks above 0.4 of full scale (was 0.2 with the old -45 dB floor)", peak > 0.4); }
     Check("same words: line breaks and spaces may differ, words may not", TextProcessing.SameWords("one two\n\nthree", "one  two three") && !TextProcessing.SameWords("one two", "onetwo") && !TextProcessing.SameWords("one two", "one two three") && TextProcessing.SameWords(" a ", "a"));
+    Check("log lines lose every path, so an account name never reaches the log", PrivateLog.Scrub(@"Could not find file 'C:\Users\Fictional\AppData\Local\pFlow\x.json'.") == "Could not find file '<path>'."
+        && PrivateLog.Scrub(@"\\server\share\Fictional\f.txt was locked") == "<path> was locked" && PrivateLog.Scrub("/Users/fictional/Library/x failed") == "<path> failed"
+        && PrivateLog.Scrub("Focus changed. Your text is in History.") == "Focus changed. Your text is in History." && PrivateLog.Reason(new IOException(@"locked D:\Fictional\a.b")) == "IOException: locked <path>");
     // Setup carries the package at its end, found only through the trailer.
     { var trailer = SetupPackage.Trailer(123456); var bytes = new byte[500000];
       Check("the setup trailer names where the ZIP starts", trailer.Length == 16 && SetupPackage.ZipStart(trailer, 500000) == 123456);

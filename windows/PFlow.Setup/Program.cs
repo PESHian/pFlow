@@ -21,10 +21,11 @@ internal static class Program
         string local = Environment.GetEnvironmentVariable("LOCALAPPDATA") ?? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         string temp = Path.Combine(local, "pFlow.setup-" + Guid.NewGuid().ToString("N"));
         using var window = new Progress();
+        string? previous = null;
         try {
             string me = Environment.ProcessPath ?? throw new InvalidOperationException("Setup could not find its own file.");
             long zipStart = ZipStart(me) ?? throw new InvalidOperationException("This copy of pFlow Setup carries no package. Download it again.");
-            if (!EndRunningCopy(quiet)) return 1;
+            if (!EndRunningCopy(quiet, out previous)) return 1;
             bool desktop = askDesktop && !quiet && MessageBox.Show("Add a pFlow shortcut on the desktop too?", Title, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes;
             window.Show(); window.Say("Unpacking pFlow…");
             Extract(me, zipStart, temp, window);
@@ -38,8 +39,11 @@ internal static class Program
             return 0;
         } catch (Exception error) {
             window.Hide();
-            if (!quiet) MessageBox.Show(error.Message, "pFlow was not installed", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            else Console.Error.WriteLine(error.Message);
+            // The copy that was closed for the install is opened again, so nothing is lost by trying.
+            bool reopened = previous != null && File.Exists(previous) && Reopen(previous);
+            string message = error.Message + (reopened ? " Your previous pFlow was opened again." : previous != null ? " Open your previous pFlow from the Start menu." : "");
+            if (!quiet) MessageBox.Show(message, "pFlow was not installed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            else Console.Error.WriteLine(message);
             return 1;
         } finally {
             try { if (Directory.Exists(temp)) Directory.Delete(temp, true); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
@@ -57,10 +61,17 @@ internal static class Program
 
     /// A running pFlow holds files the install replaces. Copies from 0.1.18 on
     /// listen for the quit signal; older ones are closed after the person says so.
-    static bool EndRunningCopy(bool quiet)
+    static bool Reopen(string path)
     {
+        try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(path) }); return true; }
+        catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException or IOException) { return false; }
+    }
+    static bool EndRunningCopy(bool quiet, out string? previous)
+    {
+        previous = null;
         var running = Process.GetProcessesByName("pFlow");
         if (running.Length == 0) return true;
+        try { previous = running[0].MainModule?.FileName; } catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException) { }
         // Quiet (test) runs never end a copy someone is using: they stop here instead.
         if (quiet) throw new InvalidOperationException("Quit pFlow before installing. Your settings and History will be kept.");
         if (MessageBox.Show("pFlow is running. Close it now and continue?", Title, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return false;
@@ -96,8 +107,10 @@ internal static class Program
         foreach (string arg in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", Path.Combine(root, "install-universal.ps1"), "-Root", root }) start.ArgumentList.Add(arg);
         if (desktop) start.ArgumentList.Add("-DesktopShortcut");
         using var process = Process.Start(start) ?? throw new InvalidOperationException("The install script could not start.");
-        string output = process.StandardOutput.ReadToEnd(), errors = process.StandardError.ReadToEnd();
-        process.WaitForExit();
+        // Both streams drained at once (one full pipe would otherwise stall the script) while the window keeps painting.
+        var outputTask = process.StandardOutput.ReadToEndAsync(); var errorTask = process.StandardError.ReadToEndAsync();
+        while (!process.WaitForExit(100)) Application.DoEvents();
+        string output = outputTask.GetAwaiter().GetResult(), errors = errorTask.GetAwaiter().GetResult();
         if (process.ExitCode != 0) {
             // The script's own plain sentence, when it threw one; otherwise its last lines.
             var lines = (errors + "\n" + output).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

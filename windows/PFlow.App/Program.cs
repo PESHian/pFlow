@@ -175,6 +175,7 @@ internal sealed partial class Program : Application
                 }
                 recorder = new WaveRecorder(Path.Combine(sessionDirectory, "audio.wav"), live == null ? null : live.Append);
                 live?.Start();
+                if (target.Placeholder) _ = CaptureAgainSoon(sessionId);
                 Set(action == TriggerAction.Continuous ? Phase.Continuous : Phase.Recording);
             } catch (Exception error) {
                 Cancel();
@@ -216,7 +217,7 @@ internal sealed partial class Program : Application
             InsertionLog.Record("take done: " + seconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s, status=" + result.Status);
             if (result.Notice != null) Notify(result.Notice);
         } catch (OperationCanceledException) { InsertionLog.Record("take canceled"); Set(Phase.Canceled); }
-        catch (Exception error) { InsertionLog.Record("take failed: " + error.GetType().Name + ": " + error.Message); Failure(error); }
+        catch (Exception error) { InsertionLog.Record("take failed: " + InsertionLog.Reason(error)); Failure(error); }
         finally {
             // Whatever happened, this take never writes again; typed words stay where they are.
             if (takeTyping != null && typingSession == takeTyping) { typing.Abandon(); typingSession = null; }
@@ -235,6 +236,24 @@ internal sealed partial class Program : Application
             }
             // One private, overwritten timing record. No words, audio, paths, or application names.
             try { store.Write("last-processing-times.json", timing); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+    /// Chromium answered the take's first capture with its placeholder pane and was
+    /// knocked for its tree. A moment later, still at the start of the take and still
+    /// in the same window, the field may be readable: then it is this take's target
+    /// and the finished text goes in the normal checked way. Otherwise the pane stays
+    /// and the text is offered on the clipboard at the end. Never a different window.
+    async Task CaptureAgainSoon(long owner)
+    {
+        foreach (int wait in new[] { 300, 700 }) {
+            await Task.Delay(wait);
+            if (sessionId != owner || recorder == null || target is not { Placeholder: true } first) return;
+            InsertionTarget again;
+            try { again = InsertionTarget.Capture(); }
+            catch (InvalidOperationException error) { InsertionLog.Record("take: capture again refused: " + InsertionLog.Reason(error)); return; }
+            if (!first.SameWindow(again)) { InsertionLog.Record("take: focus left the window; placeholder kept"); return; }
+            if (again.CanInsert && !again.Placeholder) { target = again; InsertionLog.Record("take: field readable after " + wait + " ms: " + again.Kind); return; }
+            InsertionLog.Record("take: still the placeholder after " + wait + " ms");
         }
     }
     /// Takes this take's typed words back out, only while the field is exactly
