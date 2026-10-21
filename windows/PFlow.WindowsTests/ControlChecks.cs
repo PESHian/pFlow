@@ -134,8 +134,9 @@ internal static partial class Program
         var scene = new DrawingVisual();
         using (var dc = scene.RenderOpen()) {
             dc.DrawRectangle(new SolidColorBrush(light ? Color.FromRgb(0xF0, 0xF0, 0xF0) : Color.FromRgb(0x20, 0x20, 0x24)), null, new Rect(0, 0, width, height));
-            dc.DrawRectangle(new VisualBrush(content) { Stretch = Stretch.None, AlignmentX = AlignmentX.Left, AlignmentY = AlignmentY.Top }, null,
-                new Rect(margin, margin, content.ActualWidth, content.ActualHeight));
+            // The card's own coordinates, with room for its shadow: the drop shadow widens the visual's bounds, so a plain brush would shift and clip it.
+            dc.DrawRectangle(new VisualBrush(content) { Stretch = Stretch.None, ViewboxUnits = BrushMappingMode.Absolute,
+                Viewbox = new Rect(-margin, -margin, width, height), ViewportUnits = BrushMappingMode.Absolute, Viewport = new Rect(0, 0, width, height) }, null, new Rect(0, 0, width, height));
         }
         var shot = new System.Windows.Media.Imaging.RenderTargetBitmap(width * scale, height * scale, 96 * scale, 96 * scale, PixelFormats.Pbgra32); shot.Render(scene);
         var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder(); encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(shot));
