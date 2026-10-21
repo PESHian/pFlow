@@ -9,6 +9,9 @@ internal static class SpeechChecks
     public static void Run()
     {
         passed = 0;
+        Check("Settings names the architecture and the speech engine in use", SpeechEngine.Describe("X64", SpeechEngine.Avx2) == "x64, fast speech engine (AVX2)"
+            && SpeechEngine.Describe("X64", SpeechEngine.Baseline) == "x64, standard speech engine (no AVX2)" && SpeechEngine.Describe("Arm64", SpeechEngine.Baseline) == "ARM64 speech engine"
+            && SpeechEngine.Describe("X86", SpeechEngine.Baseline) == "x86 (32-bit) speech engine");
         Check("the finished-text pass keeps the 0.1.15 thread count: all but one logical processor, 1 to 8",
             SpeechThreads.Final(1) == 1 && SpeechThreads.Final(2) == 1 && SpeechThreads.Final(4) == 3 && SpeechThreads.Final(8) == 7 && SpeechThreads.Final(24) == 8);
         Check("live windows get half the logical processors, 1 to 4",

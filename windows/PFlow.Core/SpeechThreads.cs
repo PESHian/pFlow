@@ -20,4 +20,12 @@ public static class SpeechEngine
     public const string Baseline = "pflow-whisper.exe", Avx2 = "pflow-whisper-avx2.exe";
     public static string Choose(bool x64Process, bool avx2Ready, Func<string, bool> present) =>
         x64Process && avx2Ready && present(Avx2) ? Avx2 : Baseline;
+    /// One plain line for Settings: the architecture this copy runs as and which
+    /// speech worker it uses, so a tester can say what their PC runs.
+    public static string Describe(string processArchitecture, string chosenExecutable) => processArchitecture.ToUpperInvariant() switch {
+        "X64" => chosenExecutable == Avx2 ? "x64, fast speech engine (AVX2)" : "x64, standard speech engine (no AVX2)",
+        "ARM64" => "ARM64 speech engine",
+        "X86" => "x86 (32-bit) speech engine",
+        var other => other + " speech engine"
+    };
 }

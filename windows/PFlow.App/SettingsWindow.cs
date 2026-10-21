@@ -227,7 +227,7 @@ internal sealed partial class SettingsWindow : Window
         p = Section(root, "General");
         using (var run = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run"))
             Check(p, "Launch pFlow when I sign in", run?.GetValue("pFlow by Pesh") != null, SetStartup);
-        p = Section(root, "Updates"); p.Children.Add(Text("pFlow " + UpdateWindow.CurrentVersion));
+        p = Section(root, "Updates"); p.Children.Add(Text("pFlow " + UpdateWindow.CurrentVersion + " · " + whisper.EngineDescription));
         p.Children.Add(Button("Check for updates", () => this.checkUpdates?.Invoke()));
         p.Children.Add(Text("Checks GitHub only when you ask. Settings and History are kept during updates."));
         p = Section(root, "Privacy"); p.Children.Add(Text("Recordings are deleted after processing. Settings and History stay in your Windows user folder. Model downloads need the internet; recording and transcription do not. No cloud model or account is used."));

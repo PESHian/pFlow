@@ -5,6 +5,9 @@ namespace PFlow.Core;
 public static class TextProcessing
 {
     public static bool SameText(string left, string right) => left.Replace("\r\n", "\n").Replace('\r', '\n') == right.Replace("\r\n", "\n").Replace('\r', '\n');
+    /// The same words in the same order, whatever the line breaks and spaces between them.
+    public static bool SameWords(string left, string right) => Words(left) == Words(right);
+    static string Words(string text) => string.Join(" ", Regex.Split(text.Trim(), @"\s+"));
     public static int WordCount(string text) => Regex.Matches(text, @"\S+").Count;
     public static string Replace(string text, IEnumerable<DictionaryEntry> entries)
     {

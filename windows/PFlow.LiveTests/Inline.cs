@@ -383,7 +383,7 @@ internal static partial class Program
                 store.Preferences.Theme = theme; preview.ApplyTheme(); preview.Begin(); preview.SetNote(note);
                 preview.ShowText("The lighthouse keeper counted the copper lanterns while the pelicans waited.");
                 Render(preview, $"inline-{tag}-{theme}", 2, 1);
-                Check($"{theme} preview shows the note '{note}'", preview.Header == note);
+                Check($"{theme} preview shows the note '{note}'", preview.Caption == note);
             }
             preview.Clear();
         } finally { preview.Close(); capsule.Close(); }

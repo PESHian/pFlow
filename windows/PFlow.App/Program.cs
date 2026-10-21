@@ -34,6 +34,7 @@ internal sealed partial class Program : Application
     readonly Mutex single = new(true, "Local\\pFlow-by-Pesh-Windows", out _);
     [STAThread] public static int Main(string[] args)
     {
+        if (InstalledCopies.RunsFromPackage(Environment.ProcessPath ?? "")) { MessageBox.Show("Install pFlow first: double-click pFlow Setup.", "pFlow by Pesh"); return 0; }
         var app = new Program();
         // An older copy left by an install elsewhere gives way; a copy of this version or newer stays.
         if (!app.single.WaitOne(0) && !StaleCopies.TakeOverFromOlderCopy(app.single)) return 0;
@@ -48,6 +49,7 @@ internal sealed partial class Program : Application
             string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "pFlow");
             StaleCopies.RepointRunKey(); StaleCopies.ListenForNewerCopy(() => Dispatcher.InvokeAsync(Quit));
             store = new StateStore(directory); whisper = new Whisper(directory);
+            InsertionLog.Path = Path.Combine(directory, "insertion.log");
             textModel = new LocalTextModel(directory);
             _ = Task.Run(async () => { try { await whisper.Prewarm(); } catch { /* Recording retries and reports a load error when needed. */ } });
             // Only our abandoned private recording folders are removed. History/settings remain.
@@ -150,6 +152,7 @@ internal sealed partial class Program : Application
             try {
                 if (!whisper.FilesPresent) throw new InvalidOperationException("Install the Whisper model in Settings first. The complete Windows package must include its engine.");
                 target = InsertionTarget.Capture();
+                InsertionLog.Record("take: app=" + target.ApplicationName + " field=" + target.Kind + (target.CanInsert ? " insertable" : " not insertable: " + target.Refusal) + " live=" + LiveTextModes.Resolve(store.Preferences.LiveTextMode) + " copy=" + store.Preferences.CopyDictationToClipboard);
                 sessionId = operations.Start();
                 session = new CancellationTokenSource(TimeSpan.FromHours(2));
                 sessionDirectory = Path.Combine(store.DirectoryPath, "recording-" + Guid.NewGuid()); Directory.CreateDirectory(sessionDirectory);
@@ -210,9 +213,10 @@ internal sealed partial class Program : Application
             Cue(false);
             processing = true; var pipeline = new DictationPipeline(store, whisper, textModel) { Timing = (name, ms) => timing[name] = ms };
             var result = await pipeline.Run(path, seconds, originalTarget, folder, capsule.Handle, Set, cancellation.Token, liveWords, TypingFor(takeTyping));
+            InsertionLog.Record("take done: " + seconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s, status=" + result.Status);
             if (result.Notice != null) Notify(result.Notice);
-        } catch (OperationCanceledException) { Set(Phase.Canceled); }
-        catch (Exception error) { Failure(error); }
+        } catch (OperationCanceledException) { InsertionLog.Record("take canceled"); Set(Phase.Canceled); }
+        catch (Exception error) { InsertionLog.Record("take failed: " + error.GetType().Name + ": " + error.Message); Failure(error); }
         finally {
             // Whatever happened, this take never writes again; typed words stay where they are.
             if (takeTyping != null && typingSession == takeTyping) { typing.Abandon(); typingSession = null; }

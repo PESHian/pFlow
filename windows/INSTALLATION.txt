@@ -2,24 +2,28 @@ pFlow by Pesh: Windows and Mac installation
 
 WINDOWS: x64 (Intel/AMD), ARM64, or x86 (32-bit)
 
-Use pFlow-Windows-Universal-0.1.18-testing.zip. It contains all three builds.
+Use pFlow-Setup-0.1.19-testing.exe. One file installs the right build (x64,
+ARM64 or x86) for your Windows user account. No administrator password, no
+.NET installation and no architecture choice is needed.
 Windows 11 and Windows 10 version 1607 or later are required. Older Windows
 cannot run the included .NET 10 runtime. Microsoft's supported Windows 10
 editions are LTSC/Enterprise; Windows 10/older hardware is not fully tested here.
 
-1. Quit pFlow from its tray menu before updating.
-2. Download the universal ZIP from https://github.com/PESHian/pFlow/releases
-3. Right-click the ZIP and choose Extract All. Keep the whole folder together.
-4. Double-click Install.cmd. It detects your native Windows architecture,
-   checks the files, and installs the matching build for your user account.
-   No administrator password, .NET installation, or architecture choice is needed.
-5. Open pFlow by Pesh from Start. Its speaking-pig icon appears in the tray
-   (possibly under the up-arrow). Open Settings there and choose your language.
-   Under Shortcut, choose Press a key, then press and release one key. Right Alt,
+1. Download pFlow-Setup-0.1.19-testing.exe from https://github.com/PESHian/pFlow/releases
+2. Double-click it. This test build is not signed, so Windows may show
+   "Windows protected your PC": click "More info", then "Run anyway".
+3. If pFlow is already running, Setup asks to close it, then asks whether you
+   want a desktop shortcut. It unpacks, checks the files, installs for your
+   account, adds pFlow by Pesh to the Start menu, and opens pFlow.
+4. pFlow's speaking-pig icon appears in the tray (possibly under the up-arrow).
+   Open Settings there and choose your language.
+5. Under Shortcut, choose Press a key, then press and release one key. Right Alt,
    either Ctrl, Menu/App, other F keys, and detectable vehicle buttons can be used.
    Common choices remain in the picker. The chosen key records when used alone
    instead of typing or opening its usual action. Ordinary shortcuts still work.
    Escape stays available to cancel. Right Windows is the unchanged default.
+   Settings > Updates shows one line with your version, architecture and speech
+   engine (for example "x64, fast speech engine (AVX2)"): quote it when reporting.
 6. Allow desktop microphone access in Windows Settings > Privacy & security >
    Microphone. On Windows 10, this is Settings > Privacy > Microphone.
 7. Open Notepad. Hold your chosen key, speak, and release to insert. Double-tap

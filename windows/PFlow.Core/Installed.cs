@@ -48,6 +48,11 @@ public static class InstalledCopies
         return version == null || version < currentVersion;
     }
 
+    /// pFlow.exe started from inside a package (`payloads\win-<arch>\`, as
+    /// extracted from a download or by Setup) is not installed: it must not run
+    /// half-working from there. Install folders and build folders are not packages.
+    public static bool RunsFromPackage(string path) => Normal(path).Contains(@"\payloads\win-", StringComparison.OrdinalIgnoreCase);
+
     /// Single instance: a running older copy at another path gives way to
     /// this one instead of keeping the newer one from starting.
     public static bool OlderCopyShouldYield(string? otherPath, Version? otherVersion, string currentPath, Version currentVersion) =>

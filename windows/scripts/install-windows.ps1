@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Source, [string]$SharedModelDirectory)
+param([Parameter(Mandatory=$true)][string]$Source, [string]$SharedModelDirectory, [switch]$DesktopShortcut)
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\WindowsArchitecture.ps1"
 Assert-PFlowArchitecture $Source
@@ -39,6 +39,11 @@ $startMenu = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs"
 New-Item -ItemType Directory -Force $startMenu | Out-Null
 $link = $shell.CreateShortcut("$startMenu\pFlow by Pesh.lnk")
 $link.IconLocation = "$destination\pFlow.exe,0"; $link.TargetPath = "$destination\pFlow.exe"; $link.WorkingDirectory = $destination; $link.Save()
+if ($DesktopShortcut) {
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    $onDesktop = $shell.CreateShortcut("$desktop\pFlow by Pesh.lnk")
+    $onDesktop.IconLocation = "$destination\pFlow.exe,0"; $onDesktop.TargetPath = "$destination\pFlow.exe"; $onDesktop.WorkingDirectory = $destination; $onDesktop.Save()
+}
 Write-Output "Installed $destination\pFlow.exe"
 
 if (-not ('PFlowShellIconRefresh' -as [type])) { Add-Type @'

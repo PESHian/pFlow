@@ -58,7 +58,7 @@ internal sealed class Capsule : Window
         var cancel = new MenuItem { Header = "Cancel recording" }; cancel.Click += (_, _) => Cancel?.Invoke(); menu.Items.Add(cancel); ContextMenu = menu;
         SourceInitialized += (_, _) => {
             Native.SetWindowLongPtr(Handle, -20, (IntPtr)(Native.GetWindowLongPtr(Handle, -20).ToInt64() | 0x08000000 | 0x80));
-            HwndSource.FromHwnd(Handle)?.AddHook((IntPtr hwnd, int msg, IntPtr wp, IntPtr lp, ref bool handled) => { if (msg == 0x21) { handled = true; return (IntPtr)3; } if ((msg == 0x2E0 || msg == 0x7E) && !dragReady && IsVisible) Dispatcher.BeginInvoke(new Action(() => Place())); return IntPtr.Zero; });
+            HwndSource.FromHwnd(Handle)?.AddHook((IntPtr hwnd, int msg, IntPtr wp, IntPtr lp, ref bool handled) => { if (msg is 0x21 or 0x24B) { handled = true; return (IntPtr)3; } if ((msg == 0x2E0 || msg == 0x7E) && !dragReady && IsVisible) Dispatcher.BeginInvoke(new Action(() => Place())); return IntPtr.Zero; });
         };
         Loaded += (_, _) => Place();
         IsVisibleChanged += (_, _) => SyncAnimation();

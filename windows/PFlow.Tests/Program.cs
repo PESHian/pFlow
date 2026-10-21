@@ -132,6 +132,20 @@ void CapsuleSpacingChecks()
     Check("meter is independent of display cadence", single.Levels().Zip(frames.Levels()).All(pair => Math.Abs(pair.First - pair.Second) < 1e-8));
     wave.Reset(); wave.Advance(double.NaN, .1); Check("silence and invalid input stay flat", wave.Levels().All(x => x == 0));
     for(int i = 0; i < 100; i++) wave.Advance(1, .016); Check("loud levels bounded", wave.Levels().All(x => x >= 0 && x <= 1));
+    // Waveform loudness: a fixture trace of a Windows microphone at ordinary speech levels must move the bars.
+    Check("ordinary speech on a Windows microphone (-35 dBFS) rises above the capsule's 0.25 peak floor, so syllables fill the bars",
+        AudioLevels.FromDecibels(-35) > 0.25 && AudioLevels.FromDecibels(-25) > 0.45 && AudioLevels.FromDecibels(-15) > 0.6);
+    Check("room noise stays flat and the level is monotonic and bounded", AudioLevels.FromDecibels(-60) == 0 && AudioLevels.FromDecibels(-52) < 0.06 && AudioLevels.FromRms(0) == 0 && AudioLevels.FromRms(1) == 1 && AudioLevels.FromRms(2) == 1
+        && AudioLevels.FromDecibels(-40) < AudioLevels.FromDecibels(-30) && AudioLevels.FromDecibels(-30) < AudioLevels.FromDecibels(-20));
+    { var trace = new WaveMotion(); double peak = 0; var speech = new[] { -50, -38, -32, -28, -30, -36, -48, -50, -31, -27, -33, -47 };
+      foreach (int db in speech) { for (int i = 0; i < 6; i++) trace.Advance(AudioLevels.FromDecibels(db), .016); peak = Math.Max(peak, trace.Levels().Max()); }
+      Check("a speech-shaped trace at normal microphone levels peaks above 0.4 of full scale (was 0.2 with the old -45 dB floor)", peak > 0.4); }
+    Check("same words: line breaks and spaces may differ, words may not", TextProcessing.SameWords("one two\n\nthree", "one  two three") && !TextProcessing.SameWords("one two", "onetwo") && !TextProcessing.SameWords("one two", "one two three") && TextProcessing.SameWords(" a ", "a"));
+    // Setup carries the package at its end, found only through the trailer.
+    { var trailer = SetupPackage.Trailer(123456); var bytes = new byte[500000];
+      Check("the setup trailer names where the ZIP starts", trailer.Length == 16 && SetupPackage.ZipStart(trailer, 500000) == 123456);
+      Check("no trailer, a wrong magic, or an offset past the end means no package", SetupPackage.ZipStart(new byte[16], 500000) == null && SetupPackage.ZipStart(trailer, 100) == null && SetupPackage.ZipStart(trailer[..15], 500000) == null);
+      Check("package paths stay under the unpack folder", SetupPackage.SafeEntry("payloads/win-x64/pFlow.exe") && SetupPackage.SafeEntry("shared/models/") && !SetupPackage.SafeEntry("../x") && !SetupPackage.SafeEntry("a/../b") && !SetupPackage.SafeEntry("/etc") && !SetupPackage.SafeEntry("C:\\x") && !SetupPackage.SafeEntry("")); }
     var areas = new[] { new WorkArea(0, 0, 1920, 1040), new WorkArea(-1920, 0, 1920, 1040) };
     Check("default bottom center", CapsulePlacement.Place(areas, 0, 120, 32, null, null) == (900, 968));
     Check("focused negative display bottom center", CapsulePlacement.Place(areas, 1, 120, 32, null, null) == (-1020, 968));

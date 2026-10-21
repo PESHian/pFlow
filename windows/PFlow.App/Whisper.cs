@@ -25,6 +25,8 @@ internal sealed class Whisper : IAsyncDisposable
     public string Executable => System.IO.Path.Combine(assets, "engine", SpeechEngine.Choose(
         RuntimeInformation.ProcessArchitecture == Architecture.X64, Native.Avx2Ready, name => File.Exists(System.IO.Path.Combine(assets, "engine", name))));
     public bool FilesPresent => File.Exists(ModelPath) && File.Exists(Executable);
+    /// For Settings: "x64, fast speech engine (AVX2)" and the like (one rule: SpeechEngine.Describe).
+    public string EngineDescription => SpeechEngine.Describe(RuntimeInformation.ProcessArchitecture.ToString(), System.IO.Path.GetFileName(Executable));
     public Whisper(string root, string? assetsRoot = null) { this.root = root; assets = assetsRoot ?? AppContext.BaseDirectory; }
     public async Task Verify(string path, CancellationToken cancel)
     {

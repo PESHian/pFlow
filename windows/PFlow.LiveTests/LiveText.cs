@@ -286,7 +286,7 @@ internal static partial class Program
                 Check(take + " preview never took focus, the caret or the clipboard", checks > 10 && focusKept);
                 Check(take + " preview is no-activate and click-through", styleKept);
                 Check(take + " preview stays above the control inside the work area", inside);
-                if (take != "preview") Check(take + " live failure is shown, words kept", report.FailedAtMs > 0 && preview.Header == "Live words stopped" && report.LiveWords.Length > 0);
+                if (take != "preview") Check(take + " live failure is shown, words kept", report.FailedAtMs > 0 && preview.Caption == "Live words stopped" && report.LiveWords.Length > 0);
                 capsule.Set(PFlow.Core.Phase.Processing); preview.Finishing();
                 string audio = Path.Combine(directory, take + ".wav"); File.Copy(Path.Combine(root, "latency-long.wav"), audio, true);
                 var result = await pipeline.Run(audio, report.AudioMs / 1000, target, directory, owner.Handle, (phase, detail) => capsule.Set(phase, detail), CancellationToken.None, report.LiveWords);

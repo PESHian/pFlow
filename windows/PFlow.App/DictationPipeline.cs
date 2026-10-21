@@ -14,6 +14,7 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
     }
     internal TimeSpan CleanupBudget { get; init; } = TimeSpan.FromSeconds(8);
     internal const string CopyFailed = "Inserted, but it could not be copied to the clipboard. Copy it from History.";
+    internal static bool UncheckedNoticed { get; set; }
     internal readonly record struct Result(string Status, string? Notice);
     internal readonly record struct Prepared(string Text, string? Rtf, int SpokenWords, bool ReportUnavailable, bool CleanupIncomplete, bool CleanupTimedOut);
     internal async Task<Prepared> Prepare(string audio, double seconds, string folder, Action<Phase, string?> state, CancellationToken cancel)
@@ -110,13 +111,15 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         }
         if (result == null) {
             try { result = await Measure("insertionMs", () => originalTarget.Insert(text, owner, preferences.CopyDictationToClipboard, cancel, rtf)); }
-            catch (Exception error) when (error is not OperationCanceledException) { result = error.Message; }
-        }
+            catch (Exception error) when (error is not OperationCanceledException) { result = error.Message; InsertionLog.Record("insert failed: " + error.GetType().Name + ": " + error.Message); }
+        } else InsertionLog.Record("live typing final: " + result);
         int index = store.History.FindIndex(x => x.Id == entry.Id);
         if (index >= 0) { store.History[index] = entry with { InsertionStatus = result }; store.Write("history.json", store.History); }
         bool inserted = result.StartsWith("Inserted", StringComparison.Ordinal);
-        state(inserted ? Phase.Inserted : kept || result == InsertionTarget.SavedToHistory ? Phase.Saved : Phase.Failed, result);
-        string? notice = result != "Inserted" ? result : unavailable ? "Dictation inserted. AI report formatting did not finish; your words were kept."
+        state(inserted ? Phase.Inserted : kept || result is InsertionTarget.SavedToHistory or InsertionTarget.Unchecked ? Phase.Saved : Phase.Failed, result);
+        // Typed without a check: said once per run, then only in History and the log.
+        bool typedUnchecked = result == InsertionTarget.Unchecked, firstUnchecked = typedUnchecked && !UncheckedNoticed; if (typedUnchecked) UncheckedNoticed = true;
+        string? notice = typedUnchecked ? (firstUnchecked ? result : null) : result != "Inserted" ? result : unavailable ? "Dictation inserted. AI report formatting did not finish; your words were kept."
             : prepared.CleanupIncomplete ? "Dictation inserted. Cleanup did not finish; your original words were kept." : null;
         return new Result(result, notice);
     }

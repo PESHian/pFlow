@@ -1,4 +1,4 @@
-param([string]$Root = $PSScriptRoot)
+param([string]$Root = $PSScriptRoot, [switch]$DesktopShortcut)
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\WindowsArchitecture.ps1"
 $arch = Get-PFlowArchitecture
@@ -18,4 +18,4 @@ foreach ($entry in $entries) {
     }
 }
 Write-Output "Installing pFlow for $arch Windows..."
-& "$source\install-windows.ps1" -Source $source -SharedModelDirectory $shared
+& "$source\install-windows.ps1" -Source $source -SharedModelDirectory $shared -DesktopShortcut:$DesktopShortcut

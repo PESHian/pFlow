@@ -48,7 +48,7 @@ internal sealed class LiveTextField : ILiveTextField
         IntPtr control = FocusedControl(window);
         return $"focus={BaseClass(control)}/{ClassName(control)} element={element.Current.ClassName} sameWindow={element.Current.NativeWindowHandle == control.ToInt32()}";
     }
-    static string ClassName(IntPtr control)
+    internal static string ClassName(IntPtr control)
     {
         var name = new System.Text.StringBuilder(256);
         return GetClassName(control, name, name.Capacity) > 0 ? name.ToString() : "";
@@ -127,7 +127,7 @@ internal sealed class LiveTextField : ILiveTextField
         return start >= 0 && end >= start ? new TextSpan(start, end - start) : null;
     }
 
-    static IntPtr FocusedControl(IntPtr window)
+    internal static IntPtr FocusedControl(IntPtr window)
     {
         uint thread = GetWindowThreadProcessId(window, out _);
         var info = new GuiThreadInfo { Size = Marshal.SizeOf<GuiThreadInfo>() };

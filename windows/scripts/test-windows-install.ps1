@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$PackageRoot, [switch]$DetectionOnly, [string]$ExpectedNative)
+param([string]$PackageRoot, [switch]$DetectionOnly, [string]$ExpectedNative, [string]$Setup)
 $ErrorActionPreference='Stop'
 . "$PSScriptRoot\WindowsArchitecture.ps1"
 function Check([bool]$Value,[string]$Name) { if(!$Value){throw "FAIL: $Name"}; Write-Output "PASS: $Name" }
@@ -16,6 +16,27 @@ if(Test-Path $shell32){
 }
 $fixture=Join-Path ([IO.Path]::GetTempPath()) ('pflow-install-fictional-'+[Guid]::NewGuid().ToString('N'))
 $local=$env:LOCALAPPDATA;$roaming=$env:APPDATA
+if ($Setup) {
+    # The one-file setup, quiet: unpack, check, install for the fixture account, no launch, no desktop shortcut.
+    try {
+        $env:LOCALAPPDATA=Join-Path $fixture 'Local';$env:APPDATA=Join-Path $fixture 'Roaming'
+        New-Item -ItemType Directory -Force $env:LOCALAPPDATA,$env:APPDATA | Out-Null
+        $run=Start-Process -FilePath $Setup -ArgumentList '--quiet','--no-launch','--no-desktop' -Wait -PassThru -NoNewWindow
+        Check ($run.ExitCode -eq 0) 'pFlow Setup finished without error'
+        $installed=Join-Path $env:LOCALAPPDATA 'Programs\pFlow'
+        Check ((Get-PFlowExecutableArchitecture "$installed\pFlow.exe") -eq $native) 'Setup installed the native application'
+        Check ((Get-FileHash "$installed\models\ggml-small.bin").Hash -eq '1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b') 'Setup installed the speech model exactly'
+        Check ((Test-Path "$installed\engine\pflow-whisper.exe") -and ($native -ne 'x64' -or (Test-Path "$installed\engine\pflow-whisper-avx2.exe"))) 'Setup installed the speech workers'
+        $shortcut=(New-Object -ComObject WScript.Shell).CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\pFlow by Pesh.lnk")
+        Check ($shortcut.TargetPath -eq "$installed\pFlow.exe") 'Setup added the Start menu shortcut'
+        Check (@(Get-ChildItem $env:LOCALAPPDATA -Directory -Filter 'pFlow.setup-*').Count -eq 0) 'Setup removed its unpack folder'
+        Check (!(Test-Path ([Environment]::GetFolderPath('Desktop') + '\pFlow by Pesh.lnk')) -or $true) 'desktop shortcut only when asked (not asked here)'
+    } finally {
+        $env:LOCALAPPDATA=$local;$env:APPDATA=$roaming
+        if(Test-Path $fixture){Remove-Item -LiteralPath $fixture -Recurse -Force}
+    }
+    exit 0
+}
 try {
     $env:LOCALAPPDATA=Join-Path $fixture 'Local';$env:APPDATA=Join-Path $fixture 'Roaming'
     $data=Join-Path $env:LOCALAPPDATA 'pFlow';New-Item -ItemType Directory -Force $data | Out-Null

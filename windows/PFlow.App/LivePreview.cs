@@ -17,7 +17,7 @@ namespace PFlow.Windows;
 /// through, has no taskbar entry, and never uses the clipboard.
 internal sealed class LivePreview : Window
 {
-    const int ExStyle = -20, NoActivate = 0x08000000, ToolWindow = 0x80, Transparent = 0x20, MouseActivate = 0x21, NoActivateReply = 3;
+    const int ExStyle = -20, NoActivate = 0x08000000, ToolWindow = 0x80, Transparent = 0x20, MouseActivate = 0x21, PointerActivate = 0x24B, NoActivateReply = 3;
     const double BaseWidth = 380, Gap = 4, ShadowMargin = 12, BoxLines = 4;
     readonly StateStore store;
     readonly Border card, dot, rule;
@@ -79,7 +79,7 @@ internal sealed class LivePreview : Window
         SourceInitialized += (_, _) => {
             Native.SetWindowLongPtr(Handle, ExStyle, (IntPtr)(Native.GetWindowLongPtr(Handle, ExStyle).ToInt64() | NoActivate | ToolWindow | Transparent));
             HwndSource.FromHwnd(Handle)?.AddHook((IntPtr hwnd, int msg, IntPtr wp, IntPtr lp, ref bool handled) => {
-                if (msg == MouseActivate) { handled = true; return (IntPtr)NoActivateReply; }
+                if (msg is MouseActivate or PointerActivate) { handled = true; return (IntPtr)NoActivateReply; }
                 return IntPtr.Zero;
             });
         };

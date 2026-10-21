@@ -12,6 +12,7 @@ import xml.etree.ElementTree as ET
 parser = argparse.ArgumentParser()
 parser.add_argument('artifacts', type=Path)
 parser.add_argument('output', type=Path)
+parser.add_argument('--setup-stub', type=Path, help='published PFlow.Setup (win-x86, single file); makes pFlow-Setup-<version>-testing.exe')
 args = parser.parse_args()
 scripts = Path(__file__).resolve().parent
 version = ET.parse(scripts.parent / 'PFlow.App/PFlow.App.csproj').findtext('.//Version')
@@ -138,7 +139,24 @@ with zipfile.ZipFile(archive) as z:
         assert hashlib.sha256(z.read(entry['path'])).hexdigest() == entry['sha256'], entry['path']
 digest = sha(archive)
 archive.with_suffix('.zip.sha256').write_text(digest + '  ' + archive.name + '\n')
-print(json.dumps({'file': archive.name, 'bytes': archive.stat().st_size, 'sha256': digest,
-                  'architectures': list(machines), 'entries': len(entries) + 1,
-                  'unchanged_tested_assemblies': True, 'native_dependency_check': True,
-                  'full_crc_and_manifest': True, 'owner_paths_absent': True}))
+result = {'file': archive.name, 'bytes': archive.stat().st_size, 'sha256': digest,
+          'architectures': list(machines), 'entries': len(entries) + 1,
+          'unchanged_tested_assemblies': True, 'native_dependency_check': True,
+          'full_crc_and_manifest': True, 'owner_paths_absent': True}
+if args.setup_stub:
+    # pFlow Setup.exe = the x86 setup program, the ZIP above unchanged, then the 16-byte trailer
+    # (PFlow.Core SetupPackage.Trailer: "PFLOWSET" + little-endian offset of the ZIP).
+    stub = args.setup_stub.read_bytes()
+    machine, _ = pe(args.setup_stub)
+    assert machine == 0x14c, 'the setup program must be x86 so it runs on every Windows'
+    assert stub[:2] == b'MZ' and len(stub) < 200 * 1024 * 1024
+    setup = args.output / f'pFlow-Setup-{version}-testing.exe'
+    with open(setup, 'xb') as out:
+        out.write(stub)
+        out.write(archive.read_bytes())
+        out.write(b'PFLOWSET' + struct.pack('<q', len(stub)))
+    assert setup.stat().st_size == len(stub) + archive.stat().st_size + 16
+    setup_digest = sha(setup)
+    setup.with_suffix('.exe.sha256').write_text(setup_digest + '  ' + setup.name + '\n')
+    result.update({'setup': setup.name, 'setup_bytes': setup.stat().st_size, 'setup_sha256': setup_digest, 'setup_stub_bytes': len(stub)})
+print(json.dumps(result))

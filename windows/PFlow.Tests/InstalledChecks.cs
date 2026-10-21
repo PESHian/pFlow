@@ -25,6 +25,9 @@ internal static class InstalledChecks
             && !InstalledCopies.OlderCopyShouldYield(@"C:\Fixture\Old\pFlow.exe", new Version(0, 2, 0), current, mine));
         Check("the same file or an unknown version never gives way", !InstalledCopies.OlderCopyShouldYield(current, new Version(0, 1, 17), current, mine)
             && !InstalledCopies.OlderCopyShouldYield(@"C:\Fixture\Old\pFlow.exe", null, current, mine) && !InstalledCopies.OlderCopyShouldYield(null, new Version(0, 1, 17), current, mine));
+        Check("pFlow.exe inside an unpacked package is not installed, so it must say so instead of running", InstalledCopies.RunsFromPackage(@"C:\Fixture\Downloads\pFlow-Windows-Universal-0.1.19-testing\payloads\win-x64\pFlow.exe")
+            && InstalledCopies.RunsFromPackage(@"C:\Fixture\Local\pFlow.setup-abc\payloads\win-arm64\pFlow.exe") && InstalledCopies.RunsFromPackage("C:/Fixture/x/PAYLOADS/WIN-X86/pFlow.exe"));
+        Check("the install folder, a build folder and a plain Downloads copy are not packages", !InstalledCopies.RunsFromPackage(current) && !InstalledCopies.RunsFromPackage(@"C:\Fixture\src\windows\dist\win-x64\pFlow.exe") && !InstalledCopies.RunsFromPackage(@"C:\Fixture\Downloads\pFlow.exe"));
         Check("the tray menu has Settings and no start item", TrayMenu.Items.Contains(TrayMenu.Settings) && TrayMenu.Items.Contains(TrayMenu.Quit)
             && !TrayMenu.Items.Any(x => x.StartsWith("Start", StringComparison.OrdinalIgnoreCase) || x.Contains("Open pFlow")));
         Console.WriteLine($"{passed} installed copies and tray checks passed.");
