@@ -46,7 +46,8 @@ internal static class Uninstaller
         using var running = new Mutex(true, RunningMutex);
         try {
             if (!EndRunningCopies()) {
-                if (!quiet) MessageBox.Show(UninstallEntry.CannotQuit, Title, MessageBoxButton.OK, MessageBoxImage.Warning); else Console.Error.WriteLine(UninstallEntry.CannotQuit);
+                string why = Uninspectable ? UninstallEntry.CannotInspect : UninstallEntry.CannotQuit;
+                if (!quiet) MessageBox.Show(why, Title, MessageBoxButton.OK, MessageBoxImage.Warning); else Console.Error.WriteLine(why);
                 return 1;
             }
             foreach (string link in new[] { Path.Combine(Roaming, "Microsoft", "Windows", "Start Menu", "Programs", Shortcut), Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), Shortcut) })
@@ -78,7 +79,10 @@ internal static class Uninstaller
     /// force, so a clipboard item mid-restore is never lost. False when one is still running.
     static bool EndRunningCopies()
     {
-        var running = Process.GetProcessesByName("pFlow").Where(p => p.Id != Environment.ProcessId && UninstallEntry.RunsFrom(PathOf(p), InstallRoot)).ToList();
+        var others = Process.GetProcessesByName("pFlow").Where(p => p.Id != Environment.ProcessId).ToList();
+        // A pFlow this account cannot look into (one running as administrator) might be the installed copy: stop rather than pull its folder away.
+        if (others.Any(p => PathOf(p) == null)) { Uninspectable = true; return false; }
+        var running = others.Where(p => UninstallEntry.RunsFrom(PathOf(p), InstallRoot)).ToList();
         if (running.Count == 0) return true;
         try { using var quit = new EventWaitHandle(false, EventResetMode.AutoReset, QuitEvent); foreach (var _ in running) quit.Set(); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
@@ -89,6 +93,7 @@ internal static class Uninstaller
         }
         return true;
     }
+    static bool Uninspectable;
     static string? PathOf(Process process) { try { return process.MainModule?.FileName; } catch { return null; } }
 
     /// A detached command script that removes the folders once this process has exited, trying for

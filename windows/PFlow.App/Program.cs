@@ -64,6 +64,7 @@ internal sealed partial class Program : Application
             capsule.AudioLevel = () => recorder?.Level ?? 0;
             preview = new LivePreview(store);
             prompt = new PromptCard(store); prompt.SecondaryPressed += OpenSettings;
+            foreach (var floating in new Window[] { capsule, preview, prompt }) floating.SourceInitialized += (sender, _) => InsertionTarget.RefusedWindows.Add(new System.Windows.Interop.WindowInteropHelper((Window)sender!).Handle);
             _ = new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Background, (_, _) => ClipboardLease.RestorePending(), Dispatcher);
             keyboard = new KeyboardHook(OnTrigger, store.Preferences.ActivationKey) { Enabled = store.Preferences.Enabled };
             var menu = new Forms.ContextMenuStrip();
@@ -297,10 +298,12 @@ internal sealed partial class Program : Application
         settings.Closed += (_, _) => settings = null; settings.Show();
     }
     void OpenHistory() { OpenSettings(); settings?.OpenHistoryPage(); }
-    /// The uninstaller asked: quit as soon as no insertion or clipboard restore is under way (it waits up to 90 s and never ends pFlow by force).
+    /// The uninstaller asked: quit as soon as no take (recording, recognizing, inserting) and no clipboard
+    /// restore is under way, so a take in progress still reaches the app and History (the uninstaller waits
+    /// up to 90 s and never ends pFlow by force).
     async void QuitForUninstall()
     {
-        for (int i = 0; i < 170 && (phase == Phase.Inserting || ClipboardLease.Pending.Count > 0); i++) await Task.Delay(500);
+        for (int i = 0; i < 170 && (recorder != null || operations.Busy || phase == Phase.Inserting || ClipboardLease.Pending.Count > 0); i++) await Task.Delay(500);
         Quit();
     }
     async void Quit()

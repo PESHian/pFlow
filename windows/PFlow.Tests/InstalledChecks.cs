@@ -52,6 +52,15 @@ internal static class InstalledChecks
             InsertionPrompt.Offer("Fictional words.", "Focus changed. Your text is in History.", false) == ("Fictional words.", "Focus changed. Your text is in History.")
             && InsertionPrompt.Offer("Fictional words.", "Kept in History. Recognition stopped before it finished; the words already typed stay in your app.", true) == null
             && InsertionPrompt.Offer("Fictional words.", "Inserted", false) == null && InsertionPrompt.Offer("   ", "Focus changed. Your text is in History.", false) == null);
+        Check("a maximized window is not full screen: it keeps its caption or thick frame, and with an auto-hiding taskbar its rect is the monitor plus the frame",
+            !CardAutoHide.FullScreen(0, coversMonitorExactly: false, hasCaptionOrThickFrame: true) && !CardAutoHide.FullScreen(0, coversMonitorExactly: true, hasCaptionOrThickFrame: true)
+            && !CardAutoHide.FullScreen(0, coversMonitorExactly: false, hasCaptionOrThickFrame: false));
+        Check("a borderless window covering the monitor exactly, or Windows reporting a full-screen app or presentation, is full screen",
+            CardAutoHide.FullScreen(0, true, false) && CardAutoHide.FullScreen(CardAutoHide.Direct3DFullScreen, false, true) && CardAutoHide.FullScreen(CardAutoHide.Busy, false, true)
+            && CardAutoHide.FullScreen(CardAutoHide.PresentationMode, false, true) && !CardAutoHide.FullScreen(1, false, true) && !CardAutoHide.FullScreen(5, false, true));
+        Check("the card never hides within its first 10 s, even behind a full-screen app",
+            !CardAutoHide.Hide(true, 0) && !CardAutoHide.Hide(true, 9.9) && CardAutoHide.Hide(true, 10) && !CardAutoHide.Hide(false, 600) && CardAutoHide.MinimumShownSeconds == 10);
+        Check("the uninstall stops with a plain line when a running pFlow cannot be looked into", UninstallEntry.CannotInspect.Contains("nothing was removed") && UninstallEntry.CannotInspect.Contains("administrator"));
         Check("the uninstall asks only copies running from the folder being removed to quit",
             UninstallEntry.RunsFrom(root + @"\pFlow.exe", root) && !UninstallEntry.RunsFrom(@"C:\Fixture\Other\pFlow\pFlow.exe", root) && !UninstallEntry.RunsFrom(null, root)
             && UninstallEntry.CannotQuit.Contains("nothing was removed"));

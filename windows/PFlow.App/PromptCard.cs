@@ -104,7 +104,7 @@ internal sealed class PromptCard : Window
         // A card left open goes away on its own (the words stay in History), and at once when a
         // full-screen app (a game, a video) is in front, so it never sits over one.
         watch = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        watch.Tick += (_, _) => { if (IsVisible && FullScreenInFront()) Dismiss(); };
+        watch.Tick += (_, _) => { if (IsVisible && CardAutoHide.Hide(FullScreenInFront(Native.GetForegroundWindow()), (DateTime.UtcNow - shownAt).TotalSeconds)) Dismiss(); };
         ApplyTheme(); ApplyTextSize();
     }
 
@@ -148,15 +148,21 @@ internal sealed class PromptCard : Window
     /// Hides the card and lets the words go; they stay in History.
     internal void Dismiss() { expiry.Stop(); copied.Stop(); watch.Stop(); if (IsVisible) Hide(); words.Text = ""; reason.Text = ""; }
 
-    /// True when the window in front fills its whole display (not the desktop or the taskbar).
-    static bool FullScreenInFront()
+    DateTime shownAt;
+    /// True when `front` is a real full-screen window: Windows says a full-screen app or presentation is
+    /// running, or the window covers its monitor exactly with no caption and no thick frame. A maximized
+    /// window (caption, frame, rect larger than the monitor) is not one (one rule: CardAutoHide.FullScreen).
+    internal static bool FullScreenInFront(IntPtr front)
     {
-        IntPtr front = Native.GetForegroundWindow();
         if (front == IntPtr.Zero || !Native.GetWindowRect(front, out var at)) return false;
+        int state = Native.SHQueryUserNotificationState(out var notification) == 0 ? notification : 0;
         var screen = System.Windows.Forms.Screen.FromHandle(front).Bounds;
-        if (at.Left > screen.Left || at.Top > screen.Top || at.Right < screen.Right || at.Bottom < screen.Bottom) return false;
+        bool exact = at.Left == screen.Left && at.Top == screen.Top && at.Right == screen.Right && at.Bottom == screen.Bottom;
+        long style = Native.GetWindowLongPtr(front, -16).ToInt64();
+        bool framed = (style & 0x00C00000) == 0x00C00000 || (style & 0x00040000) != 0; // WS_CAPTION, WS_THICKFRAME
         var name = new System.Text.StringBuilder(64); Native.GetClassName(front, name, name.Capacity);
-        return name.ToString() is not ("Progman" or "WorkerW" or "Shell_TrayWnd");
+        if (name.ToString() is "Progman" or "WorkerW" or "Shell_TrayWnd") return false;
+        return CardAutoHide.FullScreen(state, exact, framed);
     }
 
     void CopyWords()
@@ -167,6 +173,7 @@ internal sealed class PromptCard : Window
 
     void Reveal(IntPtr anchor)
     {
+        shownAt = DateTime.UtcNow;
         if (!IsVisible) Show();
         Place(anchor);
         watch.Start();

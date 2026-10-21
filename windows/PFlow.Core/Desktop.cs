@@ -52,6 +52,20 @@ public static class InsertionPrompt
     }
 }
 
+/// When the words card hides on its own behind a full-screen app. A maximized
+/// window is not full screen: it keeps its caption and thick frame, and with an
+/// auto-hiding taskbar its rect is the monitor plus the frame, never the monitor
+/// exactly. The card is never hidden before the person could read it.
+public static class CardAutoHide
+{
+    public const int MinimumShownSeconds = 10;
+    /// SHQueryUserNotificationState values that mean a full-screen app or presentation is in front.
+    public const int Busy = 2, Direct3DFullScreen = 3, PresentationMode = 4;
+    public static bool FullScreen(int notificationState, bool coversMonitorExactly, bool hasCaptionOrThickFrame) =>
+        notificationState is Busy or Direct3DFullScreen or PresentationMode || (coversMonitorExactly && !hasCaptionOrThickFrame);
+    public static bool Hide(bool fullScreen, double shownSeconds) => fullScreen && shownSeconds >= MinimumShownSeconds;
+}
+
 /// The one short notice at a fresh start: where pFlow is and how to dictate.
 public static class StartNotice
 {
@@ -95,6 +109,7 @@ public static class UninstallEntry
     public const string Done = "pFlow was removed.";
     /// A running copy that will not quit (it may be finishing a dictation or putting the clipboard back) is never ended by force.
     public const string CannotQuit = "pFlow is still busy, so nothing was removed. Quit pFlow from its tray icon, then run the uninstall again.";
+    public const string CannotInspect = "A running pFlow could not be checked (it may be running as administrator), so nothing was removed. Quit it, then run the uninstall again.";
     /// Only copies running from the folder being removed are asked to quit; another pFlow elsewhere is left alone.
     public static bool RunsFrom(string? processPath, string installRoot) => processPath != null && InstalledCopies.Inside(processPath, installRoot);
 }

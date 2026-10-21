@@ -162,13 +162,28 @@ internal static partial class Program
                 copy!.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent)); Drain();
                 Check($"{theme} Copy puts exactly the words on the clipboard and says Copied", card.Copies == 1 && Native.GetClipboardSequenceNumber() != clipboard && Clipboard.GetText() == words && card.CopyLabel == InsertionPrompt.Copied);
                 // The words box focused inside pFlow's own window: a take must refuse, never target whatever hides behind the card.
-                // The cursor in the card's words box: a take must refuse, never target whatever hides behind the card. A process
-                // started by a scheduled task cannot bring its window to the front, so the foreground process is supplied.
-                words_focus(card); Drain();
-                string refusal = ""; try { var got = InsertionTarget.Capture(() => (uint)Environment.ProcessId); refusal = "captured " + got.Kind; } catch (InvalidOperationException error) { refusal = error.Message; }
-                Check($"{theme} dictating with the cursor in pFlow's own window is refused", refusal == InsertionTarget.OwnWindow);
-                string elsewhere = ""; try { InsertionTarget.Capture(() => (uint)Environment.ProcessId + 1); elsewhere = "captured"; } catch (InvalidOperationException error) { elsewhere = error.Message; }
-                Check($"{theme} another process in front is not refused as pFlow's own window", elsewhere != InsertionTarget.OwnWindow);
+                // The cursor in the card: a take must refuse, never target whatever hides behind the card. Only pFlow's floating
+                // windows are refused; a window like Settings (not registered) with its own editable fields is not. A process started
+                // by a scheduled task cannot bring its window to the front, so the foreground window is supplied.
+                InsertionTarget.RefusedWindows.Add(card.Handle); words_focus(card); Drain();
+                string refusal = ""; try { var got = InsertionTarget.Capture(() => card.Handle); refusal = "captured " + got.Kind; } catch (InvalidOperationException error) { refusal = error.Message; }
+                Check($"{theme} dictating with the cursor in the words card is refused", refusal == InsertionTarget.OwnWindow);
+                string settingsLike = ""; try { InsertionTarget.Capture(() => new WindowInteropHelper(anchor).Handle); settingsLike = "captured"; } catch (InvalidOperationException error) { settingsLike = error.Message; }
+                Check($"{theme} one of pFlow's own windows that is not a floating card (Settings and its editable fields) is not refused", settingsLike != InsertionTarget.OwnWindow);
+                Check($"{theme} the focused-element guard refuses the card's window and no other", InsertionTarget.Refused(card.Handle) && !InsertionTarget.Refused(new WindowInteropHelper(anchor).Handle) && !InsertionTarget.Refused(IntPtr.Zero));
+                // Auto-hide: a maximized window (caption, frame, rect beyond the monitor) is never full screen; a borderless window covering the monitor exactly is.
+                var maximized = new Window { Title = "Fictional maximized", WindowState = WindowState.Maximized, ShowActivated = false, ShowInTaskbar = false };
+                var bounds = System.Windows.Forms.Screen.PrimaryScreen!.Bounds; var dpi = VisualTreeHelper.GetDpi(card);
+                var borderless = new Window { Title = "Fictional full screen", WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize, ShowActivated = false, ShowInTaskbar = false,
+                    Left = bounds.Left / dpi.DpiScaleX, Top = bounds.Top / dpi.DpiScaleY, Width = bounds.Width / dpi.DpiScaleX, Height = bounds.Height / dpi.DpiScaleY };
+                try {
+                    maximized.Show(); borderless.Show(); Drain();
+                    IntPtr maximizedHandle = new WindowInteropHelper(maximized).Handle, borderlessHandle = new WindowInteropHelper(borderless).Handle;
+                    Native.GetWindowRect(maximizedHandle, out var m); Native.GetWindowRect(borderlessHandle, out var f);
+                    Console.WriteLine($"FULLSCREEN {theme}: maximized {m.Left},{m.Top},{m.Right},{m.Bottom} borderless {f.Left},{f.Top},{f.Right},{f.Bottom} monitor {bounds}");
+                    Check($"{theme} a maximized window in front does not count as full screen", !PromptCard.FullScreenInFront(maximizedHandle));
+                    Check($"{theme} a borderless window covering the monitor exactly counts as full screen", PromptCard.FullScreenInFront(borderlessHandle));
+                } finally { maximized.Close(); borderless.Close(); Drain(); }
                 card.Dismiss(); Drain();
                 Check($"{theme} close hides the card and lets the words go", !card.IsVisible && card.Words == "" && card.Reason == "");
                 card.ShowNotice(StartNotice.Body("Right Ctrl"), StartNotice.Settings, TimeSpan.Zero); Drain();

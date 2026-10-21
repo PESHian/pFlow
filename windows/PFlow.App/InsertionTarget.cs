@@ -116,18 +116,19 @@ internal sealed class InsertionTarget : IInsertionTarget
             if (node.Current.IsPassword) throw new InvalidOperationException("Dictation is off in password fields.");
     }
     public const string OwnWindow = "Click in the app where the words should go, then dictate. The cursor was in pFlow's own window.";
-    /// `foregroundProcess` stands in for the real foreground window's process in a test (a test process
-    /// started by a scheduled task is never allowed to bring its own window to the front).
-    public static InsertionTarget Capture(Func<uint>? foregroundProcess = null)
+    /// pFlow's floating windows (the words card, the recording control, the live text card): never a
+    /// target, because one that hides at take start would hand the take to whatever Windows activates
+    /// next. Settings' own editable fields (templates, dictionary) are not listed and work as before.
+    internal static readonly HashSet<IntPtr> RefusedWindows = [];
+    internal static bool Refused(IntPtr window) => window != IntPtr.Zero && RefusedWindows.Contains(window);
+    /// `foreground` stands in for the real foreground window in a test (a test process started by a
+    /// scheduled task is never allowed to bring its own window to the front).
+    public static InsertionTarget Capture(Func<IntPtr>? foreground = null)
     {
-        // pFlow's own windows (the card, Settings) are never a target: a card that then hides would hand
-        // the take to whatever window Windows activates next.
-        uint owner;
-        if (foregroundProcess != null) owner = foregroundProcess();
-        else Native.GetWindowThreadProcessId(Native.GetForegroundWindow(), out owner);
-        if (owner == (uint)Environment.ProcessId) throw new InvalidOperationException(OwnWindow);
+        IntPtr front = foreground != null ? foreground() : Native.GetForegroundWindow();
+        if (Refused(front)) throw new InvalidOperationException(OwnWindow);
         var e = AutomationElement.FocusedElement ?? throw new InvalidOperationException("Place the cursor in a text field first.");
-        if (e.Current.ProcessId == Environment.ProcessId) throw new InvalidOperationException(OwnWindow);
+        if (e.Current.ProcessId == Environment.ProcessId && Refused((IntPtr)e.Current.NativeWindowHandle)) throw new InvalidOperationException(OwnWindow);
         CheckSecure(e);
         if (!e.Current.IsEnabled || !e.Current.IsKeyboardFocusable) return new(e, "", 0, 0, false, "disabled or not keyboard-focusable");
         if (e.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)) {
