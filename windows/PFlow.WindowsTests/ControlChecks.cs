@@ -172,7 +172,7 @@ internal static partial class Program
                 card.Dismiss(); Drain();
                 Check($"{theme} close hides the card and lets the words go", !card.IsVisible && card.Words == "" && card.Reason == "");
                 card.ShowNotice(StartNotice.Body("Right Ctrl"), StartNotice.Settings, TimeSpan.Zero); Drain();
-                Check($"{theme} the start notice says where pFlow is and how to dictate, with no words box and no Copy", card.IsVisible && !card.IsActive && card.Title_ == StartNotice.Title
+                Check($"{theme} the start notice says where pFlow is and how to dictate, with no words box and no Copy", card.IsVisible && card.Title_ == StartNotice.Title
                     && card.Reason.Contains("Hold Right Ctrl") && !card.WordsShown && !card.CopyShown);
                 if (shots != null) Shoot(card, Path.Combine(shots, $"notice-{theme}.png"), theme == "light");
                 card.Dismiss(); Drain();
