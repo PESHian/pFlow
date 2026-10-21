@@ -16,7 +16,16 @@ if ($Setup) {
     try {
         $env:LOCALAPPDATA=Join-Path $fixture 'Local';$env:APPDATA=Join-Path $fixture 'Roaming'
         New-Item -ItemType Directory -Force $env:LOCALAPPDATA,$env:APPDATA | Out-Null
-        $run=Start-Process -FilePath $Setup -ArgumentList '--quiet','--no-launch','--no-desktop' -Wait -PassThru -NoNewWindow
+        $running=@(Get-Process pFlow -ErrorAction SilentlyContinue)
+        $errors=Join-Path $fixture 'setup-errors.txt'
+        $run=Start-Process -FilePath $Setup -ArgumentList '--quiet','--no-launch','--no-desktop' -Wait -PassThru -NoNewWindow -RedirectStandardError $errors
+        if ($running.Count -gt 0) {
+            # A quiet run never ends a copy someone is using: it must refuse, and the rest of this check needs a quiet machine.
+            Check ($run.ExitCode -ne 0 -and (Get-Content $errors -Raw) -like '*Quit pFlow before installing*') 'quiet Setup refuses while pFlow is running, instead of ending it'
+            Check (!(Test-Path (Join-Path $env:LOCALAPPDATA 'Programs\pFlow'))) 'a refused Setup installs nothing'
+            Write-Output "SKIPPED: install, model, shortcut and cleanup checks need no running pFlow (pid $($running[0].Id) is running)"
+            exit 0
+        }
         Check ($run.ExitCode -eq 0) 'pFlow Setup finished without error'
         $installed=Join-Path $env:LOCALAPPDATA 'Programs\pFlow'
         Check ((Get-PFlowExecutableArchitecture "$installed\pFlow.exe") -eq $native) 'Setup installed the native application'
