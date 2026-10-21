@@ -13,14 +13,17 @@ internal sealed class SpeechWorkerLost(string message, Exception? inner = null) 
 internal sealed class SpeechWorker : IDisposable
 {
     readonly FileStream modelLease;
+    readonly FileStream? liveModelLease;
     readonly Process process;
     readonly Stream input, output;
     internal bool Exited => process.HasExited;
     internal int Id => process.Id;
     internal double LoadMs { get; private set; }
-    SpeechWorker(FileStream lease, Process process)
+    /// True when this worker runs live windows on the small live model.
+    internal bool LiveModelLoaded => liveModelLease != null;
+    SpeechWorker(FileStream lease, FileStream? liveLease, Process process)
     {
-        modelLease = lease; this.process = process; input = process.StandardInput.BaseStream; output = process.StandardOutput.BaseStream;
+        modelLease = lease; liveModelLease = liveLease; this.process = process; input = process.StandardInput.BaseStream; output = process.StandardOutput.BaseStream;
         _ = Drain(process.StandardError.BaseStream);
     }
     static async Task Drain(Stream errors) { try { await errors.CopyToAsync(Stream.Null); } catch (IOException) { } catch (ObjectDisposedException) { } }
@@ -33,29 +36,28 @@ internal sealed class SpeechWorker : IDisposable
     internal int StartHeartbeats { get; private set; }
     /// Starting has no fixed time limit: hashing the 487 MB model and loading it both report progress
     /// (a chunk hashed, a frame from the worker), and only `StallLimit` without any progress ends it. A slow
-    /// disk or a virus scanner reading the file makes a start slow, not stuck.
-    internal static async Task<SpeechWorker> Start(string executable, string model, CancellationToken cancel)
+    /// disk or a virus scanner reading the file makes a start slow, not stuck. `liveModel` (null when the
+    /// file is not installed) is checked the same way; a present but damaged live model stops the start,
+    /// like a damaged main model, instead of quietly running live words on the main model.
+    internal static async Task<SpeechWorker> Start(string executable, string model, string? liveModel, CancellationToken cancel)
     {
         if (FailNextStarts > 0) { FailNextStarts--; throw new SpeechWorkerLost(Stalled); }
-        // Keep the checked file open without write/delete sharing for the worker's entire life.
-        var lease = new FileStream(model, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        // Keep the checked files open without write/delete sharing for the worker's entire life.
+        var lease = Lease(model); FileStream? liveLease = null;
         SpeechWorker? worker = null;
         using var stall = CancellationTokenSource.CreateLinkedTokenSource(cancel); stall.CancelAfter(StallLimit);
         var token = stall.Token;
         try {
-            if (lease.Length != Whisper.ModelBytes) throw new InvalidDataException("The Whisper model has the wrong size. Download it again in Settings.");
-            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            var chunk = new byte[1024 * 1024]; int count;
-            while ((count = await lease.ReadAsync(chunk, token)) > 0) {
-                hash.AppendData(chunk, 0, count); stall.CancelAfter(StallLimit);
-                if (StartThrottle != null) await StartThrottle();
+            await Verify(lease, Whisper.ModelBytes, Whisper.ModelSha, "The Whisper model", "Download it again in Settings.", stall, token);
+            if (liveModel != null) {
+                liveLease = Lease(liveModel);
+                await Verify(liveLease, LiveSpeechModel.Bytes, LiveSpeechModel.Sha, "The live speech model", "Install a complete pFlow package.", stall, token);
             }
-            if (!Convert.ToHexString(hash.GetHashAndReset()).Equals(Whisper.ModelSha, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The Whisper model checksum did not match. Download it again in Settings.");
             var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
-            worker = new(lease, Process.Start(info) ?? throw new SpeechWorkerLost("The speech engine could not start."));
+            worker = new(lease, liveLease, Process.Start(info) ?? throw new SpeechWorkerLost("The speech engine could not start."));
             using var kill = token.Register(worker.Abort);
             int finalThreads = SpeechThreads.Final(LogicalProcessors), liveThreads = SpeechThreads.Live(LogicalProcessors);
-            await worker.Send(writer => { writer.Write(LiveWorkerProtocol.Hello); writer.Write(finalThreads); writer.Write(liveThreads); WriteText(writer, model, 32768); }, token);
+            await worker.Write(LiveWorkerProtocol.EncodeHello(finalThreads, liveThreads, model, liveModel), token);
             uint kind;
             while ((kind = await worker.Number(token)) == LiveWorkerProtocol.Progress) { worker.StartHeartbeats++; stall.CancelAfter(StallLimit); }
             if (kind == 3) throw new IOException(await worker.Text(token));
@@ -64,9 +66,22 @@ internal sealed class SpeechWorker : IDisposable
             if (await worker.Number(token) != LiveWorkerProtocol.Version) throw new IOException("The speech engine is from another pFlow version. Install a complete pFlow package.");
             token.ThrowIfCancellationRequested(); return worker;
         } catch (Exception error) when (error is OperationCanceledException or IOException && token.IsCancellationRequested && !cancel.IsCancellationRequested) {
-            if (worker != null) worker.Dispose(); else lease.Dispose();
+            if (worker != null) worker.Dispose(); else { lease.Dispose(); liveLease?.Dispose(); }
             throw new SpeechWorkerLost(Stalled, error);
-        } catch { if (worker != null) worker.Dispose(); else lease.Dispose(); throw; }
+        } catch { if (worker != null) worker.Dispose(); else { lease.Dispose(); liveLease?.Dispose(); } throw; }
+    }
+    static FileStream Lease(string path) => new(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+    /// Size and SHA-256 of a model file, chunk by chunk; each chunk resets the stall limit.
+    static async Task Verify(FileStream file, long bytes, string sha, string name, string remedy, CancellationTokenSource stall, CancellationToken token)
+    {
+        if (file.Length != bytes) throw new InvalidDataException(name + " has the wrong size. " + remedy);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var chunk = new byte[1024 * 1024]; int count;
+        while ((count = await file.ReadAsync(chunk, token)) > 0) {
+            hash.AppendData(chunk, 0, count); stall.CancelAfter(StallLimit);
+            if (StartThrottle != null) await StartThrottle();
+        }
+        if (!Convert.ToHexString(hash.GetHashAndReset()).Equals(sha, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException(name + " checksum did not match. " + remedy);
     }
     static void WriteText(BinaryWriter writer, string value, int maximum)
     {
@@ -143,5 +158,5 @@ internal sealed class SpeechWorker : IDisposable
     }
     internal int StaleLiveReplies { get; private set; }
     internal void Abort() { try { if (!process.HasExited) process.Kill(true); } catch (InvalidOperationException) { } }
-    public void Dispose() { Abort(); input.Dispose(); output.Dispose(); process.Dispose(); modelLease.Dispose(); }
+    public void Dispose() { Abort(); input.Dispose(); output.Dispose(); process.Dispose(); modelLease.Dispose(); liveModelLease?.Dispose(); }
 }

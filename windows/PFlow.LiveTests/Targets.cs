@@ -155,14 +155,14 @@ internal static partial class Program
     /// capture, as on the owner's PC. Three pages: a Gmail-style body the page focuses
     /// itself (two-line text, so a non-Win32 target must paste, never type Enter), a
     /// password box, and a body left to Chromium's placeholder pane. Each outcome is
-    /// honest: delivered and confirmed, or the text on the clipboard with the paste
-    /// toast, or refused. Nothing is ever typed into a password box or a pane.
+    /// honest: delivered and confirmed, or the words offered in pFlow's card (the
+    /// clipboard untouched), or refused. Nothing is ever typed into a password box or a pane.
     static async Task ChromiumCold()
     {
         var log = new List<string>(); InsertionLog.Written += line => log.Add(line);
         foreach (var page in new[] { ("body", true, "Fictional cold words.\nSecond fictional line."), ("password", true, "Fictional secret words."), ("placeholder", false, "Fictional pane words.") })
             await ColdPage(page.Item1, page.Item2, page.Item3, log);
-        await PasteNoticeEveryTime();
+        await CardEveryTime();
     }
     static async Task ColdPage(string variant, bool scriptFocus, string text, List<string> log)
     {
@@ -196,7 +196,7 @@ internal static partial class Program
             string Title() { var t = new System.Text.StringBuilder(512); GetWindowText(window, t, t.Capacity); return t.ToString(); }
             Console.WriteLine($"COLD {variant}: foreground is Edge={Native.GetForegroundWindow() == window}; title before=[{Title()}]");
             // The app's take start: capture; a placeholder pane is knocked and captured again at 300 and 700 ms (Program.CaptureAgainSoon).
-            string outcome; string result;
+            string outcome; string result; uint clipboardBefore = Native.GetClipboardSequenceNumber();
             try {
                 var target = InsertionTarget.Capture();
                 Console.WriteLine($"COLD {variant}: capture CanInsert={target.CanInsert} placeholder={target.Placeholder} field={target.Kind} refusal={target.Refusal}");
@@ -208,21 +208,19 @@ internal static partial class Program
                     if (target.SameWindow(again) && again.CanInsert && !again.Placeholder) { target = again; break; }
                 }
                 result = await target.Insert(text, owner.Handle, false, CancellationToken.None);
-                outcome = result == "Inserted" ? "delivered" : result == InsertionTarget.PasteReady ? "clipboard" : "other";
+                outcome = result == "Inserted" ? "delivered" : result == InsertionTarget.Unreachable ? "card" : "other";
             } catch (InvalidOperationException error) { result = error.Message; outcome = "refused"; }
             await Task.Delay(800);
             string title = Title();
             Console.WriteLine($"COLD OUTCOME {variant}: {outcome} result=[{result}] title now=[{title}]");
-            Check(variant + ": the outcome is delivered, clipboard or refused; never typing without a check", outcome != "other");
+            Check(variant + ": the outcome is delivered, card or refused; never typing without a check", outcome != "other");
             Check(variant + ": never a bare 'Inserted' without the words on the page", result != "Inserted" || title.Contains("Second fictional line") || (variant != "body" && title.Contains(text)));
             if (variant == "password") Check("password: nothing was typed into the password box", title.Contains("len:0") && result != "Inserted");
-            if (variant == "placeholder" && outcome == "clipboard") Check("placeholder: the pane got no keystrokes", !title.Contains("Fictional pane words"));
+            if (variant == "placeholder" && outcome == "card") Check("placeholder: the pane got no keystrokes", !title.Contains("Fictional pane words"));
             if (outcome == "delivered" && variant == "body") Check("body: two lines went in by paste, never typed Enter", log.Any(l => l.Contains("path=clipboard")) && !log.Any(l => l.Contains("path=type")));
-            if (outcome == "clipboard") {
-                string clip = ""; try { clip = Clipboard.GetText(); } catch (Exception error) { clip = "EXCEPTION " + error.GetType().Name; }
-                Check(variant + ": the paste toast comes with the text on the clipboard", clip == text);
+            if (outcome == "card") {
+                Check(variant + ": the card outcome leaves the clipboard alone", Native.GetClipboardSequenceNumber() == clipboardBefore);
                 Check(variant + ": the log names the reason", log.Any(l => l.Contains("placeholder pane at insert time")));
-                try { Clipboard.Clear(); } catch { }
             }
             log.Clear();
         } finally {
@@ -232,22 +230,32 @@ internal static partial class Program
             try { File.Delete(html); } catch { }
         }
     }
-    /// "Press Ctrl+V to paste" is said on every such take, never only the first.
-    static async Task PasteNoticeEveryTime()
+    /// The card with the words is offered on every such take, never only the first,
+    /// the words are in History, and the clipboard is never touched for it.
+    static async Task CardEveryTime()
     {
-        string directory = Path.Combine(root, "paste-fictional-" + Guid.NewGuid()); Directory.CreateDirectory(directory);
+        string directory = Path.Combine(root, "card-fictional-" + Guid.NewGuid()); Directory.CreateDirectory(directory);
         try {
             var store = new StateStore(directory); await using var whisper = new Whisper(directory); var model = new LocalTextModel(directory);
             var pipeline = new DictationPipeline(store, whisper, model);
-            var prepared = new DictationPipeline.Prepared("Fictional paste words.", null, 3, false, false, false);
-            var notices = new List<string?>();
-            for (int i = 0; i < 3; i++) { var r = await pipeline.Deliver(prepared, 1.0, new PasteOnlyTarget(), IntPtr.Zero, (_, _) => { }, CancellationToken.None); notices.Add(r.Notice); }
-            Check("the paste toast is shown on every take (3 of 3)", notices.All(n => n == InsertionTarget.PasteReady));
+            var prepared = new DictationPipeline.Prepared("Fictional card words.", null, 3, false, false, false);
+            var results = new List<DictationPipeline.Result>(); uint clipboard = Native.GetClipboardSequenceNumber();
+            for (int i = 0; i < 3; i++) results.Add(await pipeline.Deliver(prepared, 1.0, new UnreachableTarget(), IntPtr.Zero, (_, _) => { }, CancellationToken.None));
+            Check("the card is offered on every take (3 of 3), with the words and the plain reason", results.All(r => r.Prompt is { } p && p.Text == "Fictional card words." && p.Reason == InsertionTarget.Unreachable));
+            Check("each such take is in History with its status", store.History.Count == 3 && store.History.All(h => h.Text == "Fictional card words." && h.InsertionStatus == InsertionTarget.Unreachable));
+            Check("the clipboard was never touched for the card", Native.GetClipboardSequenceNumber() == clipboard);
+            var typed = await pipeline.Deliver(prepared, 1.0, new InsertingTarget(), IntPtr.Zero, (_, _) => { }, CancellationToken.None);
+            Check("an inserted take never offers the card", typed.Prompt == null && typed.Status == "Inserted");
         } finally { Directory.Delete(directory, true); }
     }
-    sealed class PasteOnlyTarget : IInsertionTarget
+    sealed class UnreachableTarget : IInsertionTarget
     {
         public bool CanInsert => true; public string ApplicationName => "Fictional"; public string ApplicationId => "fictional";
-        public Task<string> Insert(string text, IntPtr owner, bool keep, CancellationToken cancel, string? rtf = null) => Task.FromResult(InsertionTarget.PasteReady);
+        public Task<string> Insert(string text, IntPtr owner, bool keep, CancellationToken cancel, string? rtf = null) => Task.FromResult(InsertionTarget.Unreachable);
+    }
+    sealed class InsertingTarget : IInsertionTarget
+    {
+        public bool CanInsert => true; public string ApplicationName => "Fictional"; public string ApplicationId => "fictional";
+        public Task<string> Insert(string text, IntPtr owner, bool keep, CancellationToken cancel, string? rtf = null) => Task.FromResult("Inserted");
     }
 }

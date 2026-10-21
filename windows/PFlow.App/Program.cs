@@ -11,6 +11,8 @@ internal sealed partial class Program : Application
     LocalTextModel textModel = null!;
     Capsule capsule = null!;
     LivePreview preview = null!;
+    // The "couldn't type this" card and the start notice share one card.
+    PromptCard prompt = null!;
     // Live text for the current take only; the setting is read once when a take starts.
     LiveRecognizer? live;
     readonly LiveTranscriptReconciler transcript = new();
@@ -35,9 +37,11 @@ internal sealed partial class Program : Application
     [STAThread] public static int Main(string[] args)
     {
         if (InstalledCopies.RunsFromPackage(Environment.ProcessPath ?? "")) { MessageBox.Show("Install pFlow first: double-click pFlow Setup.", "pFlow by Pesh"); return 0; }
+        if (args.Contains(UninstallEntry.UninstallSwitch)) return Uninstaller.Run(args.Contains("--quiet"));
         var app = new Program();
-        // An older copy left by an install elsewhere gives way; a copy of this version or newer stays.
-        if (!app.single.WaitOne(0) && !StaleCopies.TakeOverFromOlderCopy(app.single)) return 0;
+        // An older copy left by an install elsewhere gives way; a copy of this version or newer stays,
+        // and opening pFlow again (desktop or Start shortcut) opens that copy's Settings.
+        if (!app.single.WaitOne(0) && !StaleCopies.TakeOverFromOlderCopy(app.single)) { StaleCopies.AskRunningCopyToOpenSettings(); return 0; }
         app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         app.DispatcherUnhandledException += (_, e) => { e.Handled = true; app.Failure(e.Exception); };
         app.Startup += (_, _) => app.Start(args);
@@ -48,6 +52,8 @@ internal sealed partial class Program : Application
         try {
             string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "pFlow");
             StaleCopies.RepointRunKey(); StaleCopies.ListenForNewerCopy(() => Dispatcher.InvokeAsync(Quit));
+            StaleCopies.ListenForOpenSettings(() => Dispatcher.InvokeAsync(OpenSettings)); StaleCopies.ListenForUninstall(() => Dispatcher.InvokeAsync(Quit));
+            _ = Task.Run(Uninstaller.Register);
             store = new StateStore(directory); whisper = new Whisper(directory);
             InsertionLog.Path = Path.Combine(directory, "insertion.log");
             textModel = new LocalTextModel(directory);
@@ -57,6 +63,7 @@ internal sealed partial class Program : Application
             capsule = new Capsule(store); capsule.OpenSettings += OpenSettings; capsule.Cancel += Cancel; capsule.ToggleRecording += ToggleRecording; capsule.OpenHistory += OpenHistory;
             capsule.AudioLevel = () => recorder?.Level ?? 0;
             preview = new LivePreview(store);
+            prompt = new PromptCard(store); prompt.SecondaryPressed += OpenSettings;
             _ = new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Background, (_, _) => ClipboardLease.RestorePending(), Dispatcher);
             keyboard = new KeyboardHook(OnTrigger, store.Preferences.ActivationKey) { Enabled = store.Preferences.Enabled };
             var menu = new Forms.ContextMenuStrip();
@@ -72,6 +79,8 @@ internal sealed partial class Program : Application
             tray = new Forms.NotifyIcon { Icon = trayIcon, Text = "pFlow by Pesh", Visible = true, ContextMenuStrip = menu };
             tray.DoubleClick += (_, _) => Dispatcher.Invoke(OpenSettings);
             if (args.Contains("--settings")) OpenSettings();
+            // Once per start: where pFlow is and how to dictate. Goes away on its own.
+            prompt.ShowNotice(StartNotice.Body(KeyLabels.Name(ActivationKeys.Resolve(store.Preferences.ActivationKey))), StartNotice.Settings, TimeSpan.FromSeconds(12));
         } catch (Exception error) { MessageBox.Show(error.Message, "pFlow could not start"); Quit(); }
     }
     static System.Drawing.Icon PeshIcon()
@@ -151,6 +160,7 @@ internal sealed partial class Program : Application
             if (operations.Busy) { keyboard.Reset(); return; }
             try {
                 if (!whisper.FilesPresent) throw new InvalidOperationException("Install the Whisper model in Settings first. The complete Windows package must include its engine.");
+                prompt.Dismiss();
                 target = InsertionTarget.Capture();
                 InsertionLog.Record("take: app=" + target.ApplicationName + " field=" + target.Kind + (target.CanInsert ? " insertable" : " not insertable: " + target.Refusal) + " live=" + LiveTextModes.Resolve(store.Preferences.LiveTextMode) + " copy=" + store.Preferences.CopyDictationToClipboard);
                 sessionId = operations.Start();
@@ -215,7 +225,9 @@ internal sealed partial class Program : Application
             processing = true; var pipeline = new DictationPipeline(store, whisper, textModel) { Timing = (name, ms) => timing[name] = ms };
             var result = await pipeline.Run(path, seconds, originalTarget, folder, capsule.Handle, Set, cancellation.Token, liveWords, TypingFor(takeTyping));
             InsertionLog.Record("take done: " + seconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s, status=" + result.Status);
-            if (result.Notice != null) Notify(result.Notice);
+            // Words that did not go in are shown in the card to copy; the card says why, so no balloon then.
+            if (result.Prompt is { } offer) prompt.ShowWords(offer.Text, offer.Reason, capsule.Handle);
+            else if (result.Notice != null) Notify(result.Notice);
         } catch (OperationCanceledException) { InsertionLog.Record("take canceled"); Set(Phase.Canceled); }
         catch (Exception error) { InsertionLog.Record("take failed: " + InsertionLog.Reason(error)); Failure(error); }
         finally {
@@ -280,7 +292,7 @@ internal sealed partial class Program : Application
     void OpenSettings()
     {
         if (settings != null) { settings.Activate(); return; }
-        settings = new SettingsWindow(store, whisper, textModel, keyboard, () => { capsule.ApplyTheme(); preview.ApplyTheme(); }, () => operations.Busy || updateApplying, OpenUpdates);
+        settings = new SettingsWindow(store, whisper, textModel, keyboard, () => { capsule.ApplyTheme(); preview.ApplyTheme(); prompt.ApplyTheme(); }, () => operations.Busy || updateApplying, OpenUpdates);
         settings.Closed += (_, _) => settings = null; settings.Show();
     }
     void OpenHistory() { OpenSettings(); settings?.OpenHistoryPage(); }
@@ -289,7 +301,7 @@ internal sealed partial class Program : Application
         if (phase == Phase.Inserting || ClipboardLease.Pending.Count > 0) { Notify("pFlow is restoring your clipboard. Quit when insertion ends."); return; }
         quitting = true; Cancel();
         while (operations.Busy) await Task.Delay(25);
-        await whisper.DisposeAsync(); keyboard?.Dispose(); tray?.Dispose(); capsule?.Close(); Shutdown();
+        await whisper.DisposeAsync(); keyboard?.Dispose(); tray?.Dispose(); prompt?.Close(); capsule?.Close(); Shutdown();
     }
     protected override void OnExit(ExitEventArgs e) { whisper?.Abort(); keyboard?.Dispose(); tray?.Dispose(); trayIcon?.Dispose(); single.Dispose(); base.OnExit(e); }
 }

@@ -33,7 +33,8 @@ internal static class Program
             RunInstall(temp, desktop);
             string installed = Path.Combine(local, "Programs", "pFlow", "pFlow.exe");
             if (!File.Exists(installed)) throw new InvalidOperationException("The install finished without pFlow.exe in place.");
-            if (launch) Process.Start(new ProcessStartInfo(installed) { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(installed) });
+            // The first start after Setup opens Settings, so the person sees pFlow is there and how it works.
+            if (launch) Process.Start(new ProcessStartInfo(installed, "--settings") { UseShellExecute = true, WorkingDirectory = Path.GetDirectoryName(installed) });
             window.Hide();
             if (!quiet) MessageBox.Show(launch ? "pFlow is installed and open. Look for its icon in the tray, near the clock." : "pFlow is installed.", Title, MessageBoxButtons.OK, MessageBoxIcon.Information);
             return 0;
@@ -72,8 +73,9 @@ internal static class Program
         var running = Process.GetProcessesByName("pFlow");
         if (running.Length == 0) return true;
         try { previous = running[0].MainModule?.FileName; } catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException) { }
-        // Quiet (test) runs never end a copy someone is using: they stop here instead.
-        if (quiet) throw new InvalidOperationException("Quit pFlow before installing. Your settings and History will be kept.");
+        // Quiet (test) runs never end a copy someone is using: they stop here instead, and that copy
+        // never closed, so there is nothing to open again and nothing to say about it.
+        if (quiet) { previous = null; throw new InvalidOperationException("Quit pFlow before installing. Your settings and History will be kept."); }
         if (MessageBox.Show("pFlow is running. Close it now and continue?", Title, MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return false;
         try { using var quit = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\pFlow-by-Pesh-Windows-quit"); foreach (var _ in running) quit.Set(); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
         foreach (var process in running) {

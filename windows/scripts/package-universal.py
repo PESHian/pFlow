@@ -109,6 +109,10 @@ shutil.copytree(args.artifacts / 'shared', stage / 'shared')
 model = stage / 'shared/models/ggml-small.bin'
 assert model.stat().st_size == 487601967
 assert sha(model) == '1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b'
+# The small live-words model (PFlow.Core LiveSpeechModel): base, 5-bit, used only for live windows.
+live_model = stage / 'shared/models/ggml-base-q5_1.bin'
+assert live_model.stat().st_size == 59707625
+assert sha(live_model) == '422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898'
 for name in ('Install.cmd', 'install-universal.ps1', 'WindowsArchitecture.ps1'):
     shutil.copyfile(scripts / name, stage / name)
 shutil.copyfile(scripts.parent / 'INSTALLATION.txt', stage / 'INSTALLATION.txt')
@@ -120,7 +124,7 @@ for path in sorted(stage.rglob('*')):
     name = path.relative_to(stage).as_posix()
     assert not path.suffix.lower() in ('.pdb', '.wav', '.gguf', '.cs', '.cpp', '.sqlite', '.jsonl'), name
     assert path.name.lower() not in ('settings.json', 'history.json', 'last-processing-times.json'), name
-    if path != model:
+    if path not in (model, live_model):
         data = path.read_bytes()
         for raw in (data, data[::2], data[1::2]):
             assert not re.search(rb'(?:/home/(?!runner/)[^/\x00\r\n ]+|/Users/[^/\x00\r\n ]+|[a-z]:[\\/]Users[\\/](?!runneradmin[\\/])[^\\/\x00\r\n ]+)', raw, re.I), name

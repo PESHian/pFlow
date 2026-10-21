@@ -327,10 +327,10 @@ internal static class LiveTextChecks
     {
         var request = LiveWorkerProtocol.EncodeRequest(3, 4, "es", new float[] { .5f, -.25f });
         Check("live request carries its magic, version, take and window", BinaryPrimitives.ReadUInt32LittleEndian(request) == 0x31534650
-            && BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(4)) == 3 && BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(8)) == 3 && BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(12)) == 4);
+            && BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(4)) == LiveWorkerProtocol.Version && LiveWorkerProtocol.Version == 4 && BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(8)) == 3 && BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(12)) == 4);
         Check("live request carries the language and samples exactly", request.Length == 20 + 2 + 4 + 8 && Encoding.UTF8.GetString(request, 20, 2) == "es"
             && BinaryPrimitives.ReadUInt32LittleEndian(request.AsSpan(22)) == 2 && BinaryPrimitives.ReadSingleLittleEndian(request.AsSpan(26)) == .5f);
-        Check("cancel frame names its window", LiveWorkerProtocol.EncodeCancel(3, 4).SequenceEqual(Reply(0x31434650, 3, 3, 4, _ => { })));
+        Check("cancel frame names its window", LiveWorkerProtocol.EncodeCancel(3, 4).SequenceEqual(Reply(0x31434650, LiveWorkerProtocol.Version, 3, 4, _ => { })));
         bool Throws(Action action) { try { action(); return false; } catch (InvalidDataException) { return true; } }
         Check("empty and oversized windows are never sent", Throws(() => LiveWorkerProtocol.EncodeRequest(1, 1, "en", [])) && Throws(() => LiveWorkerProtocol.EncodeRequest(1, 1, "en", new float[30 * 16000 + 1])));
         Check("an empty or oversized language is never sent", Throws(() => LiveWorkerProtocol.EncodeRequest(1, 1, "", new float[1])) && Throws(() => LiveWorkerProtocol.EncodeRequest(1, 1, new string('e', 65), new float[1])));

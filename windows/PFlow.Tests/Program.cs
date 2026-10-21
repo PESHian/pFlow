@@ -144,6 +144,13 @@ void CapsuleSpacingChecks()
     Check("log lines lose every path, so an account name never reaches the log", PrivateLog.Scrub(@"Could not find file 'C:\Users\Fictional\AppData\Local\pFlow\x.json'.") == "Could not find file '<path>'."
         && PrivateLog.Scrub(@"\\server\share\Fictional\f.txt was locked") == "<path> was locked" && PrivateLog.Scrub("/Users/fictional/Library/x failed") == "<path> failed"
         && PrivateLog.Scrub("Focus changed. Your text is in History.") == "Focus changed. Your text is in History." && PrivateLog.Reason(new IOException(@"locked D:\Fictional\a.b")) == "IOException: locked <path>");
+    Check("a path with a space in the account name is scrubbed whole, quoted or not",
+        PrivateLog.Scrub(@"Could not find file 'C:\Users\John Smith\AppData\Local\pFlow\x.json'.") == "Could not find file '<path>'."
+        && PrivateLog.Scrub(@"Access to C:\Users\John Smith\Documents\notes.txt was denied") == "Access to <path> was denied"
+        && PrivateLog.Scrub(@"Access to the path 'C:\Users\John Smith' is denied.") == "Access to the path '<path>' is denied."
+        && PrivateLog.Scrub("open \"/Users/John Smith/Library/x\" failed") == "open \"<path>\" failed"
+        && PrivateLog.Scrub("/home/john smith/a b/x failed") == "<path> failed"
+        && !PrivateLog.Scrub(@"saved C:\Users\John Smith\Desktop\a.txt and D:\Users\Jane Smith\b.txt").Contains("Smith"));
     // Setup carries the package at its end, found only through the trailer.
     { var trailer = SetupPackage.Trailer(123456); var bytes = new byte[500000];
       Check("the setup trailer names where the ZIP starts", trailer.Length == 16 && SetupPackage.ZipStart(trailer, 500000) == 123456);

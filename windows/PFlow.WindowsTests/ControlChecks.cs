@@ -14,6 +14,7 @@ internal static partial class Program
     {
         _ = Application.Current ?? new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         NativePreviewCard();
+        NativePromptCard();
         double Luminance(Color color) {
             double Channel(byte x) { double c = x / 255.0; return c <= .04045 ? c / 12.92 : Math.Pow((c + .055) / 1.055, 2.4); }
             return .2126 * Channel(color.R) + .7152 * Channel(color.G) + .0722 * Channel(color.B);
@@ -123,6 +124,49 @@ internal static partial class Program
                 preview.Clear();
                 Check($"{theme} a new take starts clean", preview.Caption == "Listening" && preview.Shown == "" && !preview.IsVisible);
             } finally { preview.Close(); if (Directory.Exists(root)) Directory.Delete(root, true); }
+        }
+    }
+
+    /// The "couldn't type this" card and the start notice: shown without taking
+    /// focus, readable in both looks, a touch-sized Copy button that is the only
+    /// thing that writes the clipboard. PFLOW_SHOTS=<folder> also writes PNGs.
+    static void NativePromptCard()
+    {
+        double Luminance(Color color) {
+            double Channel(byte x) { double c = x / 255.0; return c <= .04045 ? c / 12.92 : Math.Pow((c + .055) / 1.055, 2.4); }
+            return .2126 * Channel(color.R) + .7152 * Channel(color.G) + .0722 * Channel(color.B);
+        }
+        double Contrast(Brush a, Brush b) { double x = Luminance(((SolidColorBrush)a).Color), y = Luminance(((SolidColorBrush)b).Color); return (Math.Max(x,y)+.05)/(Math.Min(x,y)+.05); }
+        string? shots = Environment.GetEnvironmentVariable("PFLOW_SHOTS");
+        const string words = "The lighthouse keeper counted seven blue kites over the quiet harbor, then waved goodbye to the pelicans.\nSecond fictional line.";
+        foreach (string theme in new[] { "dark", "light" }) {
+            string root = Path.Combine(Path.GetTempPath(), "pflow-prompt-fictional-" + Guid.NewGuid().ToString("N"));
+            var store = new StateStore(root); store.Preferences.Theme = theme;
+            var anchor = new Window { Width = 120, Height = 40, WindowStyle = WindowStyle.None, ShowInTaskbar = false, ShowActivated = false, Left = 300, Top = 300 };
+            var card = new PromptCard(store);
+            try {
+                anchor.Show(); Drain();
+                uint clipboard = Native.GetClipboardSequenceNumber();
+                card.ShowWords(words, "Focus changed. Your text is in History.", new WindowInteropHelper(anchor).Handle); Drain();
+                Check($"{theme} card shows without taking focus", card.IsVisible && !card.ShowActivated && !card.IsActive);
+                Check($"{theme} card shows the title, the plain reason and the exact words to copy", card.Title_ == InsertionPrompt.Title && card.Reason == "Focus changed." && card.Words == words && card.WordsShown && card.CopyShown);
+                var face = card.Card is Border b ? b.Background : Brushes.Black;
+                Check($"{theme} card text is readable: title, reason, words and the Copy label", Contrast(card.TitleBrush, face) >= 7 && Contrast(card.ReasonBrush, face) >= 4.5
+                    && Contrast(card.WordsBrush, card.WordsBackground) >= 7 && Contrast(card.CopyBrush, card.CopyBackground) >= 4.5);
+                Check($"{theme} Copy is touch-sized (44 px or more)", card.CopyHeight >= 44);
+                Check($"{theme} showing the card never touches the clipboard", Native.GetClipboardSequenceNumber() == clipboard);
+                if (shots != null) Shoot(card, Path.Combine(shots, $"prompt-{theme}.png"), theme == "light");
+                var copy = card.Card is Border border && border.Child is StackPanel stack ? stack.Children.OfType<StackPanel>().Last().Children.OfType<Button>().First() : null;
+                copy!.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent)); Drain();
+                Check($"{theme} Copy puts exactly the words on the clipboard and says Copied", card.Copies == 1 && Native.GetClipboardSequenceNumber() != clipboard && Clipboard.GetText() == words && card.CopyLabel == InsertionPrompt.Copied);
+                card.Dismiss(); Drain();
+                Check($"{theme} close hides the card", !card.IsVisible);
+                card.ShowNotice(StartNotice.Body("Right Ctrl"), StartNotice.Settings, TimeSpan.Zero); Drain();
+                Check($"{theme} the start notice says where pFlow is and how to dictate, with no words box and no Copy", card.IsVisible && !card.IsActive && card.Title_ == StartNotice.Title
+                    && card.Reason.Contains("Hold Right Ctrl") && !card.WordsShown && !card.CopyShown);
+                if (shots != null) Shoot(card, Path.Combine(shots, $"notice-{theme}.png"), theme == "light");
+                card.Dismiss(); Drain();
+            } finally { card.Close(); anchor.Close(); try { Clipboard.Clear(); } catch { } if (Directory.Exists(root)) Directory.Delete(root, true); }
         }
     }
 

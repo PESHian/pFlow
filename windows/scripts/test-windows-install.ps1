@@ -30,6 +30,7 @@ if ($Setup) {
         $installed=Join-Path $env:LOCALAPPDATA 'Programs\pFlow'
         Check ((Get-PFlowExecutableArchitecture "$installed\pFlow.exe") -eq $native) 'Setup installed the native application'
         Check ((Get-FileHash "$installed\models\ggml-small.bin").Hash -eq '1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b') 'Setup installed the speech model exactly'
+        Check ((Get-FileHash "$installed\models\ggml-base-q5_1.bin").Hash -eq '422F1AE452ADE6F30A004D7E5C6A43195E4433BC370BF23FAC9CC591F01A8898') 'Setup installed the live-words model exactly'
         Check ((Test-Path "$installed\engine\pflow-whisper.exe") -and ($native -ne 'x64' -or (Test-Path "$installed\engine\pflow-whisper-avx2.exe"))) 'Setup installed the speech workers'
         $shortcut=(New-Object -ComObject WScript.Shell).CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\pFlow by Pesh.lnk")
         Check ($shortcut.TargetPath -eq "$installed\pFlow.exe") 'Setup added the Start menu shortcut'
@@ -56,6 +57,7 @@ try {
     $installed=Join-Path $env:LOCALAPPDATA 'Programs\pFlow'
     Check ((Get-PFlowExecutableArchitecture "$installed\pFlow.exe") -eq $native) 'universal installation selects native application'
     Check ((Get-FileHash "$installed\models\ggml-small.bin").Hash -eq '1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b') 'shared speech model installed exactly'
+    Check ((Get-FileHash "$installed\models\ggml-base-q5_1.bin").Hash -eq '422F1AE452ADE6F30A004D7E5C6A43195E4433BC370BF23FAC9CC591F01A8898') 'shared live-words model installed exactly'
     $shortcut=(New-Object -ComObject WScript.Shell).CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\pFlow by Pesh.lnk")
     Check ($shortcut.TargetPath -eq "$installed\pFlow.exe" -and $shortcut.IconLocation -eq "$installed\pFlow.exe,0") 'Start shortcut and speaking pig icon'
     & "$PackageRoot\install-universal.ps1" -Root $PackageRoot

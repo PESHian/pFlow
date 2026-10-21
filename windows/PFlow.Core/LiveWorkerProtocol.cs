@@ -7,7 +7,7 @@ namespace PFlow.Core;
 /// (windows/native/worker.cpp). Every live frame carries the protocol version,
 /// the take (session) and the window number (sequence); every length is
 /// bounded before anything is allocated. All numbers are little-endian.
-///   hello:    u32 "PFW2", u32 threads, u32 length + UTF-8 model path
+///   hello:    u32 "PFW2", u32 threads, u32 live threads, u32 length + UTF-8 model path, u32 length + UTF-8 live model path (empty: live windows use the main model)
 ///   ready:    u32 1, f64 load ms, u32 version            | failed: u32 3, u32 length + message
 ///   live:     u32 "PFS1", u32 version, u32 session, u32 sequence, u32 length + language, u32 count + count f32 samples
 ///   cancel:   u32 "PFC1", u32 version, u32 session, u32 sequence   (no reply of its own)
@@ -17,9 +17,33 @@ namespace PFlow.Core;
 public static class LiveWorkerProtocol
 {
     public const uint Hello = 0x32574650, Request = 0x31534650, Cancel = 0x31434650;
-    /// Version 3: the hello carries two thread counts (finished text, live), and
-    /// the finished-text pass (PFQ1) sends `Progress` frames while it works.
-    public const uint Version = 3, Ready = 1, Result = 4, Error = 5, Progress = 6;
+    /// Version 4: the hello carries two thread counts (finished text, live), the
+    /// main model and the live model; the finished-text pass (PFQ1) sends
+    /// `Progress` frames while it works.
+    public const uint Version = 4, Ready = 1, Result = 4, Error = 5, Progress = 6;
+    public const int MaximumPath = 32768;
+
+    /// The hello frame. `liveModel` null or empty means live windows run on the main model.
+    public static byte[] EncodeHello(int finalThreads, int liveThreads, string model, string? liveModel)
+    {
+        byte[] main = PathBytes(model), live = liveModel == null ? [] : PathBytes(liveModel);
+        var bytes = new byte[20 + main.Length + live.Length];
+        var span = bytes.AsSpan();
+        BinaryPrimitives.WriteUInt32LittleEndian(span, Hello);
+        BinaryPrimitives.WriteInt32LittleEndian(span[4..], finalThreads);
+        BinaryPrimitives.WriteInt32LittleEndian(span[8..], liveThreads);
+        BinaryPrimitives.WriteUInt32LittleEndian(span[12..], (uint)main.Length); main.CopyTo(span[16..]);
+        int at = 16 + main.Length;
+        BinaryPrimitives.WriteUInt32LittleEndian(span[at..], (uint)live.Length); live.CopyTo(span[(at + 4)..]);
+        return bytes;
+    }
+
+    static byte[] PathBytes(string path)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(path);
+        if (bytes.Length > MaximumPath || path.Contains('\0')) throw new InvalidDataException("A speech setting is too long or invalid.");
+        return bytes;
+    }
     public const int MaximumSamples = 30 * 16_000, MaximumSegments = 512, MaximumText = 4096, MaximumTotalText = 256 * 1024, MaximumLanguage = 64;
     /// Responses for older windows that may be skipped before giving up.
     public const int MaximumStale = 2;

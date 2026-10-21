@@ -1,8 +1,11 @@
 // MIT. Private stdin/stdout worker; no listener, transcript files, or console output.
-// Protocol PFW2 version 3: whole recordings (PFQ1, with progress frames while
+// Protocol PFW2 version 4: whole recordings (PFQ1, with progress frames while
 // the pass runs) and live windows (PFS1, canceled by PFC1). The hello carries
-// two thread counts: finished text, then live. Frames are documented in
-// windows/PFlow.Core/LiveWorkerProtocol.cs.
+// two thread counts (finished text, then live), the main model and the live
+// model: a small, fast model used only for live windows, so words show up
+// about as fast as they are spoken while the finished text keeps the main
+// model's accuracy. An empty live model path keeps live windows on the main
+// model. Frames are documented in windows/PFlow.Core/LiveWorkerProtocol.cs.
 #include "whisper.h"
 #include "common-whisper.h"
 #include <algorithm>
@@ -25,7 +28,7 @@
 #include <io.h>
 
 constexpr uint32_t kHello = 0x32574650, kWhole = 0x31514650, kLive = 0x31534650, kCancel = 0x31434650; // PFW2 PFQ1 PFS1 PFC1
-constexpr uint32_t kVersion = 3, kLiveResult = 4, kLiveError = 5, kProgress = 6;
+constexpr uint32_t kVersion = 4, kLiveResult = 4, kLiveError = 5, kProgress = 6;
 constexpr uint32_t kMaxLiveSamples = 30 * 16000, kMaxSegments = 512;
 constexpr size_t kMaxSegmentText = 4096, kMaxLiveText = 256 * 1024;
 
@@ -137,6 +140,9 @@ static void live_error(const Job & job, const char * message) {
     put(kLiveError); put(kVersion); put(job.session); put(job.sequence); put(std::string(message)); fflush(stdout);
 }
 
+// The live context: the small live model when one was given, else the main model.
+static whisper_context * live_ctx = nullptr;
+
 static void recognize_live(whisper_context * ctx, int threads, const Job & job) {
     if (abort_live) { live_error(job, "Canceled."); return; }
     if (job.language.empty() || job.language == "auto" || whisper_lang_id(job.language.c_str()) < 0) { live_error(job, "Choose a supported speech language in Settings."); return; }
@@ -218,29 +224,44 @@ static void transcribe_file(whisper_context * ctx, int threads, const Job & job)
     put(2); put(result); metric(elapsed(start)); metric(0); metric(0); put(static_cast<uint32_t>(params.audio_ctx)); fflush(stdout);
 }
 
+using Context = std::unique_ptr<whisper_context, decltype(&whisper_free)>;
+
+// Loads one model file without a state. A slow disk or a virus scanner can make the 487 MB load take a
+// while: progress frames go out (one as reading begins, then every 250 ms), so the app can tell a slow
+// load from a stuck worker. The C# lease pins the checked file. Paths retain Unicode on MinGW and MSVC.
+static Context load_model(const std::string & path, const char ** failure) {
+    auto options = whisper_context_default_params(); options.use_gpu = false; options.flash_attn = true;
+    std::ifstream model_file(std::filesystem::u8path(path), std::ios::binary);
+    if (!model_file) { *failure = "Speech model could not open."; return Context(nullptr, whisper_free); }
+    whisper_model_loader loader{}; loader.context = &model_file;
+    loader.read = [](void * user, void * data, size_t size) -> size_t { auto & file = *static_cast<std::ifstream *>(user); file.read(static_cast<char *>(data), size); progress_frame(std::chrono::milliseconds(250)); return static_cast<size_t>(file.gcount()); };
+    loader.eof = [](void * user) { return static_cast<std::ifstream *>(user)->eof(); };
+    loader.close = [](void * user) { static_cast<std::ifstream *>(user)->close(); };
+    Context ctx(whisper_init_with_params_no_state(&loader, options), whisper_free);
+    if (!ctx) *failure = "Speech model could not load.";
+    return ctx;
+}
+
 int main() {
     _setmode(_fileno(stdin), _O_BINARY); _setmode(_fileno(stdout), _O_BINARY);
     whisper_log_set(quiet, nullptr);
     try {
-        if (number() != kHello) return 2; // PFW2, protocol version 3.
+        if (number() != kHello) return 2; // PFW2, protocol version 4.
         int threads = std::clamp(static_cast<int>(number()), 1, 8);      // finished-text pass
         int live_threads = std::clamp(static_cast<int>(number()), 1, 8); // live windows, fewer so the final pass and the computer keep room
-        auto model = text(32768); auto start = Clock::now();
-        auto options = whisper_context_default_params(); options.use_gpu = false; options.flash_attn = true;
-        // The C# lease pins the checked file. Filesystem paths retain Unicode on MinGW and MSVC.
-        std::ifstream model_file(std::filesystem::u8path(model), std::ios::binary);
-        if (!model_file) { put(3); put(std::string("Speech model could not open.")); fflush(stdout); return 3; }
-        whisper_model_loader loader{}; loader.context = &model_file;
-        // A slow disk or a virus scanner can make the 487 MB load take a while: progress frames go out before
-        // the ready reply (one as reading begins, then every 250 ms), so the app can tell a slow load from a
-        // stuck worker.
+        auto model = text(32768); auto live_model = text(32768); auto start = Clock::now();
         last_progress = start - std::chrono::hours(1);
-        loader.read = [](void * user, void * data, size_t size) -> size_t { auto & file = *static_cast<std::ifstream *>(user); file.read(static_cast<char *>(data), size); progress_frame(std::chrono::milliseconds(250)); return static_cast<size_t>(file.gcount()); };
-        loader.eof = [](void * user) { return static_cast<std::ifstream *>(user)->eof(); };
-        loader.close = [](void * user) { static_cast<std::ifstream *>(user)->close(); };
-        std::unique_ptr<whisper_context, decltype(&whisper_free)> ctx(whisper_init_with_params_no_state(&loader, options), whisper_free);
+        const char * failure = nullptr;
+        Context ctx = load_model(model, &failure);
         // Made at load, before any live window, for the full 30 s context (as the context's own state was).
-        if (!ctx || !final_state_for(ctx.get(), 0)) { put(3); put(std::string("Speech model could not load.")); fflush(stdout); return 3; }
+        if (!ctx || !final_state_for(ctx.get(), 0)) { put(3); put(std::string(failure ? failure : "Speech model could not load.")); fflush(stdout); return 3; }
+        // The live model is checked by the app before the hello; a copy that still fails to load is reported, never worked around.
+        Context live(nullptr, whisper_free);
+        if (!live_model.empty()) {
+            live = load_model(live_model, &failure);
+            if (!live) { put(3); put(std::string("The live speech model could not load. Install a complete pFlow package.")); fflush(stdout); return 3; }
+        }
+        live_ctx = live ? live.get() : ctx.get();
         put(1); metric(elapsed(start)); put(kVersion); fflush(stdout);
         std::thread(read_requests).detach();
         for (;;) {
@@ -253,7 +274,7 @@ int main() {
                 live_running = job.kind == kLive; running_session = job.session; running_sequence = job.sequence;
                 abort_live = live_running && pending_canceled; pending_canceled = false;
             }
-            if (job.kind == kLive) recognize_live(ctx.get(), live_threads, job); else transcribe_file(ctx.get(), threads, job);
+            if (job.kind == kLive) recognize_live(live_ctx, live_threads, job); else transcribe_file(ctx.get(), threads, job);
             std::lock_guard<std::mutex> guard(state_lock);
             live_running = false; abort_live = false;
         }

@@ -44,6 +44,31 @@ internal static class StaleCopies
         return single.WaitOne(TimeSpan.FromSeconds(5));
     }
 
+    const string SettingsEvent = "Local\\pFlow-by-Pesh-Windows-settings";
+
+    /// Opening pFlow while it already runs: the running copy is asked to open
+    /// its Settings window, and this launch ends.
+    internal static void AskRunningCopyToOpenSettings()
+    {
+        try { using var open = new EventWaitHandle(false, EventResetMode.AutoReset, SettingsEvent); open.Set(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+    }
+
+    /// The running copy's side of `AskRunningCopyToOpenSettings`.
+    internal static void ListenForOpenSettings(Action openSettings) => Listen(SettingsEvent, openSettings, "pFlow open settings");
+
+    /// The uninstaller's request to quit (Uninstaller.QuitEvent).
+    internal static void ListenForUninstall(Action quit) => Listen(Uninstaller.QuitEvent, quit, "pFlow uninstall quit");
+
+    static void Listen(string eventName, Action action, string threadName)
+    {
+        var listener = new Thread(() => {
+            using var signal = new EventWaitHandle(false, EventResetMode.AutoReset, eventName);
+            while (true) { signal.WaitOne(); action(); }
+        }) { IsBackground = true, Name = threadName };
+        listener.Start();
+    }
+
     /// Waits for a newer copy's request to quit. A stale signal with no newer
     /// copy running is ignored.
     internal static void ListenForNewerCopy(Action quit)

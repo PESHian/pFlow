@@ -23,13 +23,14 @@ internal sealed class InsertionTarget : IInsertionTarget
     /// tree only when asked; until then the focus is its placeholder pane, which
     /// says nothing about the field under the caret. Such a take is knocked for
     /// the tree and captured again a moment later; if the pane is all there is,
-    /// nothing is typed: the finished text goes on the clipboard with a toast.
+    /// nothing is typed: the finished text is shown in pFlow's card to copy, and
+    /// is in History. The clipboard is never touched for it.
     readonly bool placeholder;
     readonly IntPtr foreground;
     readonly uint processId;
     FieldState State => new(foreground.ToInt64(), processId, string.Join(".", runtimeId), before, start, length);
     public const string SavedToHistory = "Saved to History. Open History to copy your dictation.";
-    public const string PasteReady = "Couldn't reach that box. Press Ctrl+V to paste.";
+    public const string Unreachable = "Couldn't reach that box. Your words are in History.";
     /// Chromium's top-level window class (Chrome, Edge, Electron) and its legacy content window.
     static readonly string[] ChromiumHosts = ["Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND"];
     public const string PlainOnly = "Inserted as plain text; bold headings could not be applied safely.";
@@ -172,18 +173,10 @@ internal sealed class InsertionTarget : IInsertionTarget
     public async Task<string> Insert(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf = null)
     {
         cancel.ThrowIfCancellationRequested();
-        if (placeholder) return OfferPaste(text, clipboardOwner);
+        if (placeholder) { Log("placeholder pane at insert time: " + Refusal + "; nothing typed, words offered in the card"); return Unreachable; }
         if (!readable) { Log("saved to History: " + Refusal); return SavedToHistory; }
         try { return await Deliver(text, clipboardOwner, keepClipboard, cancel, rtf); }
         catch (Exception error) when (error is not OperationCanceledException) { Log("refused: " + error.Message); throw; }
-    }
-    /// The field never became readable: the text goes on the clipboard (the same copy
-    /// rule as "Copy dictation to clipboard") and the person pastes it. Never typed.
-    string OfferPaste(string text, IntPtr clipboardOwner)
-    {
-        Log("placeholder pane at insert time: " + Refusal + "; text put on the clipboard for Ctrl+V");
-        ClipboardLease.KeepCopy(clipboardOwner, text);
-        return PasteReady;
     }
     async Task<string> Deliver(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf)
     {

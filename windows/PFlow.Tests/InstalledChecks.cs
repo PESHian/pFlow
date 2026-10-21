@@ -30,6 +30,25 @@ internal static class InstalledChecks
         Check("the install folder, a build folder and a plain Downloads copy are not packages", !InstalledCopies.RunsFromPackage(current) && !InstalledCopies.RunsFromPackage(@"C:\Fixture\src\windows\dist\win-x64\pFlow.exe") && !InstalledCopies.RunsFromPackage(@"C:\Fixture\Downloads\pFlow.exe"));
         Check("the tray menu has Settings and no start item", TrayMenu.Items.Contains(TrayMenu.Settings) && TrayMenu.Items.Contains(TrayMenu.Quit)
             && !TrayMenu.Items.Any(x => x.StartsWith("Start", StringComparison.OrdinalIgnoreCase) || x.Contains("Open pFlow")));
+        Check("the couldn't-type card is needed for every outcome that did not put the words in, never for an inserted take or words typed live",
+            InsertionPrompt.Needed("Saved to History. Open History to copy your dictation.", false) && InsertionPrompt.Needed("Focus changed. Your text is in History.", false)
+            && InsertionPrompt.Needed("Dictation is off in password fields.", false) && InsertionPrompt.Needed("Insertion could not be confirmed; check the field before copying from History.", false)
+            && !InsertionPrompt.Needed("Inserted", false) && !InsertionPrompt.Needed("Inserted as plain text; bold headings could not be applied safely.", false)
+            && !InsertionPrompt.Needed("Inserted, but it could not be copied to the clipboard. Copy it from History.", false) && !InsertionPrompt.Needed("Kept as typed", true));
+        Check("the card's reason line drops the 'in History' trailer and never comes out empty",
+            InsertionPrompt.Reason("Focus changed. Your text is in History.") == "Focus changed." && InsertionPrompt.Reason("Saved to History. Open History to copy your dictation.") == "Saved to History."
+            && InsertionPrompt.Reason("Couldn't reach that box. Your words are in History.") == "Couldn't reach that box." && InsertionPrompt.Reason("Dictation is off in password fields.") == "Dictation is off in password fields."
+            && InsertionPrompt.Reason("  Your text is in History. ") == "The words could not go into that box.");
+        Check("the start notice names the tray and the activation key", StartNotice.Body("Right Ctrl") == "Find it in the tray, near the clock. Hold Right Ctrl and speak; let go to put the words in." && StartNotice.Title == "pFlow is running");
+        { var values = UninstallEntry.Values(current, root, new Version(0, 1, 20), 760L * 1024 * 1024 + 1, new DateTimeOffset(2026, 10, 21, 9, 0, 0, TimeSpan.Zero));
+          Check("the Installed apps row names pFlow by Pesh, Pesh, the version, the icon, the folder, the size in KB and a no-admin uninstall command",
+              (string)values["DisplayName"] == "pFlow by Pesh" && (string)values["Publisher"] == "Pesh" && (string)values["DisplayVersion"] == "0.1.20" && (string)values["DisplayIcon"] == current + ",0"
+              && (string)values["InstallLocation"] == root && (string)values["InstallDate"] == "20261021" && (string)values["UninstallString"] == "\"" + current + "\" --uninstall"
+              && (string)values["QuietUninstallString"] == "\"" + current + "\" --uninstall --quiet" && (int)values["EstimatedSize"] == 760 * 1024 + 1 && (int)values["NoModify"] == 1 && (int)values["NoRepair"] == 1
+              && UninstallEntry.KeyPath == @"Software\Microsoft\Windows\CurrentVersion\Uninstall\pFlow by Pesh");
+          Check("a version without a build number shows 0, never -1", (string)UninstallEntry.Values(current, root, new Version(1, 2), 0, DateTimeOffset.UnixEpoch)["DisplayVersion"] == "1.2.0"); }
+        Check("uninstall removes only pFlow's own folders under Programs", UninstallEntry.OwnsFolder("pFlow") && UninstallEntry.OwnsFolder("pflow.new") && UninstallEntry.OwnsFolder("pFlow.previous-abc")
+            && UninstallEntry.OwnsFolder("pFlow.failed-abc") && !UninstallEntry.OwnsFolder("pFlowOther") && !UninstallEntry.OwnsFolder("Microsoft VS Code") && !UninstallEntry.OwnsFolder("pFlow Setup"));
         Console.WriteLine($"{passed} installed copies and tray checks passed.");
     }
 }

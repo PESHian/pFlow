@@ -18,6 +18,14 @@ if ($SharedModelDirectory) {
     }
     New-Item -ItemType Directory -Force "$staging\models" | Out-Null
     Copy-Item -LiteralPath $model -Destination "$staging\models\ggml-small.bin"
+    # The small live-words model (PFlow.Core LiveSpeechModel). Without it live words run on the main model.
+    $live = Join-Path $SharedModelDirectory 'ggml-base-q5_1.bin'
+    if (Test-Path -LiteralPath $live) {
+        if ((Get-Item -LiteralPath $live).Length -ne 59707625 -or (Get-PFlowFileSha256 $live) -ne '422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898') {
+            throw 'The live speech model is incomplete or damaged. Your installed app was not changed.'
+        }
+        Copy-Item -LiteralPath $live -Destination "$staging\models\ggml-base-q5_1.bin"
+    }
 }
 } catch {
     Remove-Item -LiteralPath $staging -Recurse -Force

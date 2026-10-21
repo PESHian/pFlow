@@ -14,7 +14,9 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
     }
     internal TimeSpan CleanupBudget { get; init; } = TimeSpan.FromSeconds(8);
     internal const string CopyFailed = "Inserted, but it could not be copied to the clipboard. Copy it from History.";
-    internal readonly record struct Result(string Status, string? Notice);
+    /// `Prompt` carries the words for pFlow's "couldn't type this" card, with the
+    /// reason line, whenever the words did not go into the app (one rule: InsertionPrompt.Needed).
+    internal readonly record struct Result(string Status, string? Notice, (string Text, string Reason)? Prompt = null);
     internal readonly record struct Prepared(string Text, string? Rtf, int SpokenWords, bool ReportUnavailable, bool CleanupIncomplete, bool CleanupTimedOut);
     internal async Task<Prepared> Prepare(string audio, double seconds, string folder, Action<Phase, string?> state, CancellationToken cancel)
     {
@@ -77,7 +79,7 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
             store.Add(new Transcript(Guid.NewGuid(), kept, DateTimeOffset.Now, seconds, "Windows default microphone", TextProcessing.WordCount(kept),
                 originalTarget.ApplicationName, originalTarget.ApplicationId, status));
             state(Phase.Failed, status);
-            return new Result(status, status + " " + error.Message);
+            return new Result(status, status + " " + error.Message, (kept, status + " " + error.Message));
         }
         return await Deliver(prepared, seconds, originalTarget, owner, state, cancel, typing);
     }
@@ -115,11 +117,11 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         int index = store.History.FindIndex(x => x.Id == entry.Id);
         if (index >= 0) { store.History[index] = entry with { InsertionStatus = result }; store.Write("history.json", store.History); }
         bool inserted = result.StartsWith("Inserted", StringComparison.Ordinal);
-        state(inserted ? Phase.Inserted : kept || result is InsertionTarget.SavedToHistory or InsertionTarget.PasteReady ? Phase.Saved : Phase.Failed, result);
-        // Anything short of "Inserted" is said every time, including "press Ctrl+V to paste".
+        state(inserted ? Phase.Inserted : kept || result is InsertionTarget.SavedToHistory or InsertionTarget.Unreachable ? Phase.Saved : Phase.Failed, result);
+        // Anything short of "Inserted" is said every time; words that did not go in are shown in the card to copy.
         string? notice = result != "Inserted" ? result : unavailable ? "Dictation inserted. AI report formatting did not finish; your words were kept."
             : prepared.CleanupIncomplete ? "Dictation inserted. Cleanup did not finish; your original words were kept." : null;
-        return new Result(result, notice);
+        return new Result(result, notice, InsertionPrompt.Needed(result, kept) && !string.IsNullOrWhiteSpace(text) ? (text, result) : null);
     }
 }
 

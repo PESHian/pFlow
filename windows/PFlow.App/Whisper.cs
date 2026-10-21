@@ -21,12 +21,16 @@ internal sealed class Whisper : IAsyncDisposable
     internal int WorkerHeartbeats => worker?.Heartbeats ?? 0;
     string DownloadPath => System.IO.Path.Combine(root, "ggml-small.bin");
     public string ModelPath => File.Exists(DownloadPath) ? DownloadPath : System.IO.Path.Combine(assets, "models", "ggml-small.bin");
+    /// The small live-words model next to the main model, or null when it is not installed (then live
+    /// windows run on the main model and Settings says so). Checked by size and hash when the worker starts.
+    public string? LiveModelPath { get { string path = System.IO.Path.Combine(assets, "models", LiveSpeechModel.FileName); return File.Exists(path) ? path : null; } }
+    public bool LiveModelPresent => LiveModelPath != null;
     /// The AVX2 build on x64 processors that have it, else the baseline build (one rule: SpeechEngine.Choose).
     public string Executable => System.IO.Path.Combine(assets, "engine", SpeechEngine.Choose(
         RuntimeInformation.ProcessArchitecture == Architecture.X64, Native.Avx2Ready, name => File.Exists(System.IO.Path.Combine(assets, "engine", name))));
     public bool FilesPresent => File.Exists(ModelPath) && File.Exists(Executable);
     /// For Settings: "x64, fast speech engine (AVX2)" and the like (one rule: SpeechEngine.Describe).
-    public string EngineDescription => SpeechEngine.Describe(RuntimeInformation.ProcessArchitecture.ToString(), System.IO.Path.GetFileName(Executable));
+    public string EngineDescription => SpeechEngine.Describe(RuntimeInformation.ProcessArchitecture.ToString(), System.IO.Path.GetFileName(Executable), LiveModelPresent);
     public Whisper(string root, string? assetsRoot = null) { this.root = root; assets = assetsRoot ?? AppContext.BaseDirectory; }
     public async Task Verify(string path, CancellationToken cancel)
     {
@@ -56,7 +60,7 @@ internal sealed class Whisper : IAsyncDisposable
     async Task EnsureWorker(CancellationToken cancel)
     {
         if (worker != null && !worker.Exited) return;
-        ResetWorker(); worker = await SpeechWorker.Start(Executable, ModelPath, cancel);
+        ResetWorker(); worker = await SpeechWorker.Start(Executable, ModelPath, LiveModelPath, cancel);
     }
     internal async Task Prewarm(CancellationToken cancel = default)
     {
