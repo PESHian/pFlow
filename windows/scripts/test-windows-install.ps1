@@ -50,15 +50,20 @@ if ($Setup) {
             # A copy running from the install folder that will not quit (a renamed cmd.exe standing in for pFlow busy
             # with a take): the uninstall must wait, then stop and remove nothing, never end it by force.
             Copy-Item "$env:SystemRoot\System32\cmd.exe" "$installed\engine\pFlow.exe"
-            $busy=Start-Process -FilePath "$installed\engine\pFlow.exe" -ArgumentList '/c','timeout /t 300 /nobreak' -PassThru -WindowStyle Hidden
+            $busy=Start-Process -FilePath "$installed\engine\pFlow.exe" -ArgumentList '/c','ping -n 400 127.0.0.1 >nul' -PassThru -WindowStyle Hidden
+            Start-Sleep 1; Check (!$busy.HasExited) 'the stand-in busy copy is running from the install folder'
             try {
-                $refused=Start-Process -FilePath "$installed\pFlow.exe" -ArgumentList '--uninstall','--quiet' -PassThru -NoNewWindow
+                $said=Join-Path $fixture 'uninstall-refused.txt'
+                $refused=Start-Process -FilePath "$installed\pFlow.exe" -ArgumentList '--uninstall','--quiet' -PassThru -NoNewWindow -RedirectStandardError $said
+                $null=$refused.Handle   # PowerShell fills ExitCode only for a process whose handle was taken before it ended
                 for($k=0;$k -lt 150 -and !$refused.HasExited;$k++){Start-Sleep 1}
+                Write-Output ("busy uninstall: exited=" + $refused.HasExited + " code=" + $refused.ExitCode + " after " + $k + " s; folder=" + (Test-Path "$installed\pFlow.exe") + "; said: " + ((Get-Content $said -Raw -ErrorAction SilentlyContinue) -replace "\s+"," "))
                 Check ($refused.HasExited -and $refused.ExitCode -eq 1) 'uninstall with a busy copy that will not quit stops with exit 1 (waited, never killed)'
                 Check (!$busy.HasExited) 'the busy copy was not ended by force'
                 Check ((Test-Path "$installed\pFlow.exe") -and (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\pFlow by Pesh.lnk")) 'a refused uninstall removes nothing'
             } finally { if(!$busy.HasExited){Stop-Process -Id $busy.Id -Force}; Start-Sleep 1; Remove-Item "$installed\engine\pFlow.exe" -Force }
             $u=Start-Process -FilePath "$installed\pFlow.exe" -ArgumentList '--uninstall','--quiet' -PassThru -NoNewWindow
+            $null=$u.Handle
             for($k=0;$k -lt 60 -and !$u.HasExited;$k++){Start-Sleep 1}
             Check ($u.HasExited -and $u.ExitCode -eq 0) 'quiet uninstall finished without error'
             for($k=0;$k -lt 40 -and (Test-Path $installed);$k++){Start-Sleep 1}
