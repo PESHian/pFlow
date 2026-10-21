@@ -9,11 +9,6 @@ Check ((ConvertTo-PFlowArchitecture 9) -eq 'x64') 'x64 selection'
 Check ((ConvertTo-PFlowArchitecture 12) -eq 'arm64') 'ARM64 selection'
 $rejected=$false;try{ConvertTo-PFlowArchitecture 5}catch{$rejected=$true}
 Check $rejected 'unavailable ARM32 rejected'
-$shell32="$env:WINDIR\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
-if(Test-Path $shell32){
-    & $shell32 -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -PackageRoot $PackageRoot -DetectionOnly -ExpectedNative $native
-    if($LASTEXITCODE){throw '32-bit shell architecture selection failed.'}
-}
 $fixture=Join-Path ([IO.Path]::GetTempPath()) ('pflow-install-fictional-'+[Guid]::NewGuid().ToString('N'))
 $local=$env:LOCALAPPDATA;$roaming=$env:APPDATA
 if ($Setup) {
@@ -36,6 +31,11 @@ if ($Setup) {
         if(Test-Path $fixture){Remove-Item -LiteralPath $fixture -Recurse -Force}
     }
     exit 0
+}
+$shell32="$env:WINDIR\SysWOW64\WindowsPowerShell\v1.0\powershell.exe"
+if(Test-Path $shell32){
+    & $shell32 -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -PackageRoot $PackageRoot -DetectionOnly -ExpectedNative $native
+    if($LASTEXITCODE){throw '32-bit shell architecture selection failed.'}
 }
 try {
     $env:LOCALAPPDATA=Join-Path $fixture 'Local';$env:APPDATA=Join-Path $fixture 'Roaming'
