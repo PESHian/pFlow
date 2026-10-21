@@ -8,8 +8,8 @@ namespace PFlow.Windows;
 /// The words heard so far, in a calm floating card near the recording control
 /// while a take with Live text runs. Same shape as the Mac card: a header with
 /// the Pesh mark, a recording dot and a short caption; a hairline; then the
-/// transcript filling a fixed box from the bottom, its top fading so older
-/// lines dissolve instead of being cut. The box never changes size while the
+/// transcript filling a fixed box of whole lines from the bottom, its top line
+/// fading out. The box never changes size while the
 /// words grow. The recording control under the card already shows the
 /// waveform, so the card carries none.
 /// It never takes focus or the text cursor: shown without activation, refuses
@@ -18,7 +18,7 @@ namespace PFlow.Windows;
 internal sealed class LivePreview : Window
 {
     const int ExStyle = -20, NoActivate = 0x08000000, ToolWindow = 0x80, Transparent = 0x20, MouseActivate = 0x21, NoActivateReply = 3;
-    const double BaseWidth = 380, Gap = 4, ShadowMargin = 12, VisibleLines = 3, FadeLines = 0.5;
+    const double BaseWidth = 380, Gap = 4, ShadowMargin = 12, BoxLines = 4;
     readonly StateStore store;
     readonly Border card, dot, rule;
     readonly TextBlock caption, words;
@@ -62,10 +62,11 @@ internal sealed class LivePreview : Window
 
         words = new TextBlock { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Bottom, LineStackingStrategy = LineStackingStrategy.BlockLineHeight };
         words.SetResourceReference(TextBlock.ForegroundProperty, "PeshText");
-        // The newest lines stay in view; older ones rise into the fade at the top of the box.
+        // A box of whole lines (every line is exactly LineHeight tall), so its top falls between
+        // two lines and no glyph is cut; the top line fades out.
         lines = new Grid { ClipToBounds = true };
         lines.OpacityMask = new LinearGradientBrush(new GradientStopCollection {
-            new(Colors.Transparent, 0), new(Colors.Black, FadeLines * 2 / (VisibleLines + FadeLines)) }, new Point(0, 0), new Point(0, 1));
+            new(Colors.Transparent, 0), new(Colors.Black, 1 / BoxLines) }, new Point(0, 0), new Point(0, 1));
         lines.Children.Add(words);
 
         var stack = new StackPanel(); stack.Children.Add(header); stack.Children.Add(rule); stack.Children.Add(lines);
@@ -96,7 +97,7 @@ internal sealed class LivePreview : Window
     {
         double factor = scale ?? TextScale();
         caption.FontSize = 12 * factor; words.FontSize = 14 * factor; words.LineHeight = 20 * factor;
-        lines.Height = words.LineHeight * (VisibleLines + FadeLines);
+        lines.Height = words.LineHeight * BoxLines;
         Width = BaseWidth * (1 + (factor - 1) / 2) + 2 * ShadowMargin;
     }
 

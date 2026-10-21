@@ -357,8 +357,11 @@ struct LiveTextTests {
             heights.append(view.fittingSize.height)
         }
         #expect(Set(heights).count == 1, "the card must not change height as words arrive: \(heights)")
-        let lines = ceil(NSFont.systemFont(ofSize: NSFont.systemFontSize).ascender - NSFont.systemFont(ofSize: NSFont.systemFontSize).descender + NSFont.systemFont(ofSize: NSFont.systemFontSize).leading)
-        #expect(heights[0] >= lines * 3.5 + 20, "room for three lines, a fading half line and the header")
+        // Four whole lines: the box top falls between lines, so the fade never cuts a glyph.
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let line = ceil(font.ascender - font.descender + font.leading)
+        #expect(heights[0] >= line * 4 + 20, "room for four lines and the header")
+        #expect(heights[0] < line * 5 + 20 + 3 * Theme.s3, "not more than four lines")
     }
 
     @Test func previewFitsSmallScreensAndLargeTextInLightAndDark() throws {

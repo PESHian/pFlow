@@ -131,9 +131,8 @@ private struct LivePreviewCard<Status: View>: View {
     @Environment(\.colorScheme) private var systemScheme
     @Environment(\.dynamicTypeSize) private var typeSize
 
-    /// Lines of transcript kept in view, plus the headroom that fades out.
-    private var visibleLines: CGFloat { 3 }
-    private var fadeLines: CGFloat { 0.5 }
+    /// Whole lines of transcript in the box; the top one fades out.
+    private var boxLines: Int { 4 }
     private var headerHeight: CGFloat { 20 }
 
     var body: some View {
@@ -200,25 +199,33 @@ private struct LivePreviewCard<Status: View>: View {
         model.phase == .transcribing || model.phase == .cleaning
     }
 
-    // A fixed box, filled from the bottom: the newest words stay in view and
-    // older lines rise into the fade at the top. The box never changes size
-    // while the words grow, so the card does not jitter.
+    // A fixed box of whole lines, filled from the bottom: the newest words stay
+    // in view and the oldest visible line fades out. The box is a hidden text
+    // of the same font laid out the same way, so its top always falls between
+    // two lines and no glyph is ever cut; it never changes size while the
+    // words grow, so the card does not jitter.
     private var transcript: some View {
-        let box = lineHeight * (visibleLines + fadeLines)
-        return Text(model.partial)
+        Text(verbatim: String(repeating: "\n", count: boxLines - 1))
             .font(textFont)
-            .foregroundStyle(.primary)
-            .multilineTextAlignment(.leading)
-            .fixedSize(horizontal: false, vertical: true)
+            .hidden()
             .frame(maxWidth: .infinity, alignment: .leading)
-            .frame(height: box, alignment: .bottomLeading)
+            .overlay(alignment: .bottomLeading) {
+                Text(model.partial.isEmpty ? placeholder : model.partial)
+                    .font(textFont)
+                    .foregroundStyle(model.partial.isEmpty ? .secondary : .primary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             .clipped()
             .mask {
                 LinearGradient(stops: [.init(color: .clear, location: 0),
-                                       .init(color: .black, location: fadeLines * 2 / (visibleLines + fadeLines))],
+                                       .init(color: .black, location: 1 / CGFloat(boxLines))],
                                startPoint: .top, endPoint: .bottom)
             }
     }
+
+    private var placeholder: String { isRecordingPhase ? "Your words will show here" : "" }
 
     // macOS text styles do not grow with the text size setting on their own,
     // so the preview scales its own body size.
@@ -242,11 +249,6 @@ private struct LivePreviewCard<Status: View>: View {
     }
 
     private var textFont: Font { .system(size: textSize) }
-
-    private var lineHeight: CGFloat {
-        let font = NSFont.systemFont(ofSize: textSize)
-        return ceil(font.ascender - font.descender + font.leading)
-    }
 }
 
 /// The recording indicator in the card header: a small dot in the recording

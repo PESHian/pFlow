@@ -111,7 +111,7 @@ internal static partial class Program
                 Check($"{theme} card says Listening before any words", preview.Caption == "Listening" && preview.Shown == "" && preview.Note == null);
                 preview.ShowText("Seven"); Drain();
                 preview.ShowText(story); Drain();
-                Check($"{theme} card keeps one height as words arrive", preview.ActualHeight == empty && preview.LinesHeight == preview.WordsLineHeight * 3.5 && preview.Shown.EndsWith("glowed."));
+                Check($"{theme} card keeps one height as words arrive", preview.ActualHeight == empty && preview.LinesHeight == preview.WordsLineHeight * 4 && preview.LinesHeight % preview.WordsLineHeight == 0 && preview.Shown.EndsWith("glowed."));
                 Check($"{theme} card words and caption are readable on the card", Contrast(preview.WordsBrush, preview.Card is Border b ? b.Background : Brushes.Black) >= 7 && Contrast(preview.CaptionBrush, ((Border)preview.Card).Background) >= 4.5);
                 if (shots != null) Shoot(preview, Path.Combine(shots, $"preview-listening-{theme}.png"), theme == "light");
                 preview.SetNote("Stopped: cursor moved"); Drain();
