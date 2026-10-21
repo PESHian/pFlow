@@ -52,17 +52,17 @@ public static class InsertionPrompt
     }
 }
 
-/// When the words card hides on its own behind a full-screen app. A maximized
-/// window is not full screen: it keeps its caption and thick frame, and with an
-/// auto-hiding taskbar its rect is the monitor plus the frame, never the monitor
-/// exactly. The card is never hidden before the person could read it.
+/// When the words card hides on its own behind a full-screen app. Full screen
+/// means the window covers its monitor exactly and has no caption and no thick
+/// frame. A maximized window is not full screen: it keeps its caption and
+/// frame, and with an auto-hiding taskbar its rect is the monitor plus the
+/// frame, never the monitor exactly. (The shell's own "busy" state is not
+/// used: on the test VM it reports busy behind a plain maximized window.) The
+/// card is never hidden before the person could read it.
 public static class CardAutoHide
 {
     public const int MinimumShownSeconds = 10;
-    /// SHQueryUserNotificationState values that mean a full-screen app or presentation is in front.
-    public const int Busy = 2, Direct3DFullScreen = 3, PresentationMode = 4;
-    public static bool FullScreen(int notificationState, bool coversMonitorExactly, bool hasCaptionOrThickFrame) =>
-        notificationState is Busy or Direct3DFullScreen or PresentationMode || (coversMonitorExactly && !hasCaptionOrThickFrame);
+    public static bool FullScreen(bool coversMonitorExactly, bool hasCaptionOrThickFrame) => coversMonitorExactly && !hasCaptionOrThickFrame;
     public static bool Hide(bool fullScreen, double shownSeconds) => fullScreen && shownSeconds >= MinimumShownSeconds;
 }
 

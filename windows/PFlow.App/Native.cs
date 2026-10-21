@@ -76,5 +76,4 @@ internal static class Native
             throw new InvalidOperationException("Windows blocked keyboard input. Your text is in History.");
     }
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern int GetClassName(IntPtr window, System.Text.StringBuilder name, int size);
-    [DllImport("shell32.dll")] internal static extern int SHQueryUserNotificationState(out int state);
 }

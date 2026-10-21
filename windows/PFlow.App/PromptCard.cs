@@ -149,20 +149,19 @@ internal sealed class PromptCard : Window
     internal void Dismiss() { expiry.Stop(); copied.Stop(); watch.Stop(); if (IsVisible) Hide(); words.Text = ""; reason.Text = ""; }
 
     DateTime shownAt;
-    /// True when `front` is a real full-screen window: Windows says a full-screen app or presentation is
-    /// running, or the window covers its monitor exactly with no caption and no thick frame. A maximized
-    /// window (caption, frame, rect larger than the monitor) is not one (one rule: CardAutoHide.FullScreen).
+    /// True when `front` is a real full-screen window: it covers its monitor exactly with no caption and no
+    /// thick frame. A maximized window (caption, frame, rect larger than the monitor) is not one (one rule:
+    /// CardAutoHide.FullScreen).
     internal static bool FullScreenInFront(IntPtr front)
     {
         if (front == IntPtr.Zero || !Native.GetWindowRect(front, out var at)) return false;
-        int state = Native.SHQueryUserNotificationState(out var notification) == 0 ? notification : 0;
         var screen = System.Windows.Forms.Screen.FromHandle(front).Bounds;
         bool exact = at.Left == screen.Left && at.Top == screen.Top && at.Right == screen.Right && at.Bottom == screen.Bottom;
         long style = Native.GetWindowLongPtr(front, -16).ToInt64();
         bool framed = (style & 0x00C00000) == 0x00C00000 || (style & 0x00040000) != 0; // WS_CAPTION, WS_THICKFRAME
         var name = new System.Text.StringBuilder(64); Native.GetClassName(front, name, name.Capacity);
         if (name.ToString() is "Progman" or "WorkerW" or "Shell_TrayWnd") return false;
-        return CardAutoHide.FullScreen(state, exact, framed);
+        return CardAutoHide.FullScreen(exact, framed);
     }
 
     void CopyWords()

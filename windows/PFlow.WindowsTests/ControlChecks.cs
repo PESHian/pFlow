@@ -172,18 +172,24 @@ internal static partial class Program
                 Check($"{theme} one of pFlow's own windows that is not a floating card (Settings and its editable fields) is not refused", settingsLike != InsertionTarget.OwnWindow);
                 Check($"{theme} the focused-element guard refuses the card's window and no other", InsertionTarget.Refused(card.Handle) && !InsertionTarget.Refused(new WindowInteropHelper(anchor).Handle) && !InsertionTarget.Refused(IntPtr.Zero));
                 // Auto-hide: a maximized window (caption, frame, rect beyond the monitor) is never full screen; a borderless window covering the monitor exactly is.
-                var maximized = new Window { Title = "Fictional maximized", WindowState = WindowState.Maximized, ShowActivated = false, ShowInTaskbar = false };
+                var maximized = new Window { Title = "Fictional maximized", ShowActivated = false, ShowInTaskbar = false };
                 var bounds = System.Windows.Forms.Screen.PrimaryScreen!.Bounds; var dpi = VisualTreeHelper.GetDpi(card);
                 var borderless = new Window { Title = "Fictional full screen", WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize, ShowActivated = false, ShowInTaskbar = false,
                     Left = bounds.Left / dpi.DpiScaleX, Top = bounds.Top / dpi.DpiScaleY, Width = bounds.Width / dpi.DpiScaleX, Height = bounds.Height / dpi.DpiScaleY };
                 try {
-                    maximized.Show(); borderless.Show(); Drain();
-                    IntPtr maximizedHandle = new WindowInteropHelper(maximized).Handle, borderlessHandle = new WindowInteropHelper(borderless).Handle;
-                    Native.GetWindowRect(maximizedHandle, out var m); Native.GetWindowRect(borderlessHandle, out var f);
-                    Console.WriteLine($"FULLSCREEN {theme}: maximized {m.Left},{m.Top},{m.Right},{m.Bottom} borderless {f.Left},{f.Top},{f.Right},{f.Bottom} monitor {bounds}");
+                    // One at a time: while the borderless window covers the screen, Windows itself reports a full-screen app.
+                    maximized.Show(); maximized.WindowState = WindowState.Maximized; Drain();
+                    IntPtr maximizedHandle = new WindowInteropHelper(maximized).Handle;
+                    Native.GetWindowRect(maximizedHandle, out var m);
+                    Console.WriteLine($"FULLSCREEN {theme}: maximized {m.Left},{m.Top},{m.Right},{m.Bottom} style 0x{Native.GetWindowLongPtr(maximizedHandle, -16).ToInt64():x} monitor {bounds}");
                     Check($"{theme} a maximized window in front does not count as full screen", !PromptCard.FullScreenInFront(maximizedHandle));
+                    maximized.Close(); Drain();
+                    borderless.Show(); Drain();
+                    IntPtr borderlessHandle = new WindowInteropHelper(borderless).Handle;
+                    Native.GetWindowRect(borderlessHandle, out var f);
+                    Console.WriteLine($"FULLSCREEN {theme}: borderless {f.Left},{f.Top},{f.Right},{f.Bottom} style 0x{Native.GetWindowLongPtr(borderlessHandle, -16).ToInt64():x}");
                     Check($"{theme} a borderless window covering the monitor exactly counts as full screen", PromptCard.FullScreenInFront(borderlessHandle));
-                } finally { maximized.Close(); borderless.Close(); Drain(); }
+                } finally { if (maximized.IsVisible) maximized.Close(); borderless.Close(); Drain(); }
                 card.Dismiss(); Drain();
                 Check($"{theme} close hides the card and lets the words go", !card.IsVisible && card.Words == "" && card.Reason == "");
                 card.ShowNotice(StartNotice.Body("Right Ctrl"), StartNotice.Settings, TimeSpan.Zero); Drain();
