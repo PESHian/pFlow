@@ -169,7 +169,7 @@ struct LiveTextTests {
         mode = .off
         session.emit("shown still")
         await coordinator.finish()
-        #expect(hud.typeInApps == [false, true])
+        #expect(hud.previews == [false, true])
         #expect(hud.partials == ["shown", "shown still"])
     }
 
@@ -187,7 +187,7 @@ struct LiveTextTests {
                 #expect(injector.delivered.isEmpty)
             }
             await coordinator.finish()
-            #expect(hud.typeInApps == [true])
+            #expect(hud.previews == [true])
             #expect(injector.delivered == ["hello world"], "\(mode)")
             #expect(history.saved.count == 1, "\(mode)")
         }
@@ -200,7 +200,7 @@ struct LiveTextTests {
         await coordinator.toggle()
         session.emit("anything")
         await coordinator.finish()
-        #expect(hud.typeInApps == [false])
+        #expect(hud.previews == [false])
         #expect(hud.partials.isEmpty)
     }
 
@@ -368,7 +368,7 @@ struct LiveTextTests {
         let shots = ProcessInfo.processInfo.environment["PFLOW_HUD_SHOTS"].map { URL(fileURLWithPath: $0) }
         let text = "The lighthouse keeper counted seven blue kites over the quiet harbor, then waved goodbye to the pelicans and walked home along the sea wall, where the orchard lanterns glowed."
         var heights: [String: CGFloat] = [:]
-        for width in [HUDModel.typeInAppWidth, 288] {
+        for width in [HUDModel.previewWidth, 288] {
             for (sizeName, size) in [("normal", DynamicTypeSize.large), ("large", .accessibility2)] {
                 for (look, appearance, scheme) in [("light", NSAppearance.Name.aqua, ColorScheme.light),
                                                    ("dark", .darkAqua, .dark)] {

@@ -183,7 +183,7 @@ struct LiveSpeechHarnessTests {
             "hudPreviewAfterStop": hud.real.model.partial,
         ])
         #expect(effects == (style == "hold" ? [.start, .finish] : [.start, .pause, .resume, .finish]))
-        #expect(hud.typeInAppShown == [true])
+        #expect(hud.previewShown == [true])
         #expect(partialsBeforeEnd.count >= 3)
         #expect(!previewAtAudioEnd.isEmpty)
         #expect(injector.delivered.count == 1)

@@ -705,7 +705,7 @@ struct WhisperLiveTests {
 
     @Test func liveNoteFitsThePreviewInLightAndDark() throws {
         let shots = ProcessInfo.processInfo.environment["PFLOW_HUD_SHOTS"].map { URL(fileURLWithPath: $0) }
-        for width in [HUDModel.typeInAppWidth, 288] {
+        for width in [HUDModel.previewWidth, 288] {
             for (look, appearance, scheme) in [("light", NSAppearance.Name.aqua, ColorScheme.light),
                                                ("dark", .darkAqua, .dark)] {
                 var sizes: [CGSize] = []
