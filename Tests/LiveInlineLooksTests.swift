@@ -29,7 +29,7 @@ struct LiveInlineLooksTests {
                                            (288, "Stopped: password field"), (288, "Typing in Microsoft PowerPoint")].enumerated() {
                 let model = HUDModel()
                 model.livePreview = true
-                model.typeInAppMaxWidth = width
+                model.previewMaxWidth = width
                 model.colorScheme = scheme
                 model.partial = "The harbor opens at dawn and the boats go out"
                 model.liveNote = note

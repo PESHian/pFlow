@@ -375,7 +375,7 @@ struct LiveTextTests {
                     let model = HUDModel()
                     model.livePreview = true
                     model.colorScheme = scheme
-                    model.typeInAppMaxWidth = width
+                    model.previewMaxWidth = width
                     model.partial = LivePreviewText.tail(of: text)
                     let view = NSHostingView(rootView: RecordingHUDView(model: model)
                         .environment(\.dynamicTypeSize, size))

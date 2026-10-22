@@ -713,7 +713,7 @@ struct WhisperLiveTests {
                     let model = HUDModel()
                     model.livePreview = true
                     model.colorScheme = scheme
-                    model.typeInAppMaxWidth = width
+                    model.previewMaxWidth = width
                     model.partial = "The ferry captain counted seven gulls on the railing while the fog lifted"
                     model.liveNote = note
                     let view = NSHostingView(rootView: RecordingHUDView(model: model))
