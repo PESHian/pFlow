@@ -26,7 +26,9 @@ internal sealed class InsertionTarget : IInsertionTarget
     /// time. If the pane is all there is even then, the words go in the way a
     /// person's typing would, without a check, and the status says so (the
     /// 0.1.19 behaviour the owner's PC relies on). A built tree that shows a
-    /// non-editable element is a refusal, never typing.
+    /// non-editable element is a refusal, never typing. What stays unseen
+    /// behind a pane that never gives way: a password box takes the words as
+    /// dots, and a page with no box focused gets keystrokes.
     readonly bool placeholder;
     readonly IntPtr foreground;
     readonly uint processId;
@@ -193,17 +195,22 @@ internal sealed class InsertionTarget : IInsertionTarget
             return await Deliver(text, clipboardOwner, keepClipboard, cancel, rtf);
         } catch (Exception error) when (error is not OperationCanceledException) { Log("refused: " + error.Message); throw; }
     }
-    /// The tree had the whole take to arrive: one more capture, right now. A
-    /// readable field takes the checked path; a built tree with nothing
-    /// editable under the caret is a refusal; the pane itself is typed into.
+    /// The tree had the whole take to arrive, and gets a little longer now: a
+    /// readable field takes the checked path (and a password field is refused);
+    /// a built tree with nothing editable under the caret is a refusal; a pane
+    /// that never gives way is typed into without a check.
     async Task<string> InsertBehindPlaceholder(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf)
     {
         var again = Capture();
+        for (int look = 0; look < 3 && again.placeholder && SameWindow(again); look++) {
+            await Task.Delay(250); cancel.ThrowIfCancellationRequested();
+            again = Capture();
+        }
         if (!SameWindow(again)) throw new InvalidOperationException("Focus changed. Your text is in History.");
         if (again.readable) { Log("placeholder: field readable at insert time: " + again.Kind); return await again.Deliver(text, clipboardOwner, keepClipboard, cancel, rtf); }
         if (!again.placeholder) { Log("placeholder: tree built, nothing editable at insert time: " + again.Refusal); return SavedToHistory; }
         Log("placeholder pane at insert time: " + Refusal + "; typed without a check");
-        return await TypeUnchecked(text, clipboardOwner, keepClipboard, cancel, rtf);
+        return await TypeUnchecked(text, clipboardOwner, keepClipboard, cancel);
     }
     /// The same app, window and focused Chromium control as when the take began; the field itself cannot be read.
     void ValidateHost()
@@ -212,40 +219,23 @@ internal sealed class InsertionTarget : IInsertionTarget
         Native.GetWindowThreadProcessId(foreground, out var current);
         if (current != processId || !ChromiumHosts.Contains(LiveTextField.ClassName(LiveTextField.FocusedControl(foreground)))) throw new InvalidOperationException("Focus changed. Your text is in History.");
     }
-    /// Keystrokes into the field pFlow cannot read back, or one paste when the
-    /// clipboard copy is wanted or the text has a line break: typed, Enter
-    /// would send the message in a chat app. The result is not checked.
-    async Task<string> TypeUnchecked(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf)
+    /// Keystrokes into the field pFlow cannot read back: Chromium's pane,
+    /// knocked and captured again, still hid the field under the caret. The
+    /// words go in the way a person's typing would; a line break is Shift+Enter,
+    /// a new line in every box and never the Enter that sends a chat message.
+    /// The clipboard is not used, so a busy page can never paste something
+    /// else late. The result is not checked, and the status says so.
+    async Task<string> TypeUnchecked(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel)
     {
         ValidateHost(); cancel.ThrowIfCancellationRequested();
         if (new[] { 0x10, 0x11, 0x12, 0x5B, 0x5C }.Any(x => Native.GetAsyncKeyState(x) < 0)) throw new InvalidOperationException("Release the shortcut keys first. Your text is in History.");
-        if (!keepClipboard && rtf == null && TypingSafe(false, text)) {
-            Log("path=unchecked typing " + InsertionLog.Length(text));
-            Native.Send(Native.UnicodeText(text));
-            await Task.Delay(100);
-            return Unchecked;
-        }
-        Log("path=unchecked paste keep=" + keepClipboard + " " + InsertionLog.Length(text));
-        ClipboardLease lease;
-        try { lease = new ClipboardLease(clipboardOwner, !keepClipboard); }
-        catch (InvalidOperationException error) {
-            // The clipboard holds something pFlow cannot put back, and Enter must not be typed: nothing goes in.
-            Log("clipboard not saved (" + error.Message + "); nothing pasted");
-            throw new InvalidOperationException("The clipboard could not be saved, so nothing was pasted. Your text is in History.");
-        }
-        using var clipboardLifetime = lease;
-        try {
-            lease.Put(text, rtf); ValidateHost(); cancel.ThrowIfCancellationRequested();
-            lease.DispatchPaste();
-            // The app reads the clipboard as it handles the paste; it gets a moment before anything is put back.
-            await Task.Delay(400);
-        } finally {
-            if (keepClipboard) lease.Keep();
-            else {
-                bool restored = lease.Restore();
-                for (int i = 0; !restored && i < 10; i++) { await Task.Delay(50); restored = lease.Restore(); }
-                if (!restored) throw new InvalidOperationException("Clipboard restore was blocked. Keep pFlow open and check your clipboard.");
-            }
+        Log("path=unchecked typing " + InsertionLog.Length(text) + (text.Contains('\n') || text.Contains('\r') ? " with soft line breaks" : ""));
+        Native.Send(Native.TypedText(text));
+        await Task.Delay(100);
+        if (keepClipboard) {
+            // "Copy dictation to clipboard": the words, once, after they went in.
+            try { ClipboardLease.KeepCopy(clipboardOwner, text); }
+            catch (Exception error) when (error is InvalidOperationException or OutOfMemoryException) { Log("copy to clipboard failed: " + error.Message); }
         }
         return Unchecked;
     }

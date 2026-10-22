@@ -35,6 +35,7 @@ internal static class InstalledChecks
             && InsertionPrompt.Needed("Dictation is off in password fields.", false) && InsertionPrompt.Needed("Couldn't reach that box. Your words are in History.", false)
             && InsertionPrompt.Needed("Click in the app where the words should go, then dictate. The cursor was in pFlow's own window.", false)
             && !InsertionPrompt.Needed("Insertion could not be confirmed; check the field before copying from History.", false)
+            && !InsertionPrompt.Needed("Clipboard restore was blocked. Keep pFlow open and check your clipboard.", false)
             && !InsertionPrompt.Needed("Typed into the app; it did not let pFlow check the result. Look at the field before copying from History.", false)
             && !InsertionPrompt.Needed("Inserted", false) && !InsertionPrompt.Needed("Inserted as plain text; bold headings could not be applied safely.", false)
             && !InsertionPrompt.Needed("Inserted, but it could not be copied to the clipboard. Copy it from History.", false) && !InsertionPrompt.Needed("Kept as typed", true));

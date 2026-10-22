@@ -11,6 +11,16 @@ internal static partial class Program
 {
     static void NativeInsertion()
     {
+        // Unchecked typing into a Chromium pane: a line break is Shift+Enter (never Enter, which sends a chat message).
+        var typed = Native.TypedText("ab\ncd");
+        Check("typed text keeps every character and turns a line break into Shift+Enter", typed.Length == 2 * 4 + 4
+            && typed.Take(4).All(x => (x.Data.Keyboard.Flags & Native.KEYEVENTF_UNICODE) != 0)
+            && typed[4].Data.Keyboard.Vk == 0x10 && (typed[4].Data.Keyboard.Flags & Native.KEYEVENTF_KEYUP) == 0
+            && typed[5].Data.Keyboard.Vk == 0x0D && (typed[5].Data.Keyboard.Flags & Native.KEYEVENTF_KEYUP) == 0
+            && typed[6].Data.Keyboard.Vk == 0x0D && (typed[6].Data.Keyboard.Flags & Native.KEYEVENTF_KEYUP) != 0
+            && typed[7].Data.Keyboard.Vk == 0x10 && (typed[7].Data.Keyboard.Flags & Native.KEYEVENTF_KEYUP) != 0
+            && typed.All(x => x.Data.Keyboard.Vk != 0x0D || x.Data.Keyboard.Scan == 0)
+            && Native.TypedText("one line").Length == 16 && Native.TypedText("a\r\nb\rc").Length == 2 + 4 + 2 + 4 + 2);
         _ = Application.Current ?? new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         var editor = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap };
         AutomationProperties.SetAutomationId(editor, "FictionalInsertionField");
