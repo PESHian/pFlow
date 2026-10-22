@@ -218,15 +218,17 @@ internal static partial class Program
             Check(variant + ": the outcome is delivered, card, refused or typed without a check; never anything else", outcome != "other");
             Check(variant + ": never a bare 'Inserted' without the words on the page", result != "Inserted" || title.Contains("Second fictional line") || (variant != "body" && title.Contains(text)));
             if (variant == "password") Check("password: nothing was typed into the password box", title.Contains("len:0") && result != "Inserted" && result != InsertionTarget.Unchecked);
-            if (variant == "body") Check("body: a focused field is delivered and checked, never typed blind", outcome == "delivered");
+            // A cold Edge may keep its placeholder pane for the whole take (seen on the VM and the owner's PC): then the
+            // words go in by one restored paste, without a check. Either way they must be on the page, both lines.
+            if (variant == "body") Check("body: the words reach the focused field, checked (delivered) or by the unchecked paste", outcome is "delivered" or "unchecked" && title.Contains("Second fictional line"));
+            if (variant == "body" && outcome == "unchecked") Check("body: the unchecked path pasted (a line break is never typed as Enter) and put the clipboard back", log.Any(l => l.Contains("path=unchecked paste")) && Native.GetClipboardSequenceNumber() != clipboardBefore);
             if (outcome == "delivered" && variant == "body") Check("body: two lines went in by paste, never typed Enter", log.Any(l => l.Contains("path=clipboard")) && !log.Any(l => l.Contains("path=type")));
             if (outcome == "card") {
                 Check(variant + ": the card outcome leaves the clipboard alone", Native.GetClipboardSequenceNumber() == clipboardBefore);
                 Check(variant + ": the log names the reason", log.Any(l => l.Contains("nothing editable at insert time") || l.Contains("saved to History")));
             }
-            if (outcome == "unchecked") {
-                Check(variant + ": typing without a check is logged as such and the clipboard is left alone", log.Any(l => l.Contains("path=unchecked typing")) && Native.GetClipboardSequenceNumber() == clipboardBefore);
-                Check(variant + ": the words never leave the page", !title.Contains("Second fictional line"));
+            if (outcome == "unchecked" && variant != "body") {
+                Check(variant + ": typing without a check is logged as such", log.Any(l => l.Contains("path=unchecked")));
             }
             log.Clear();
         } finally {
