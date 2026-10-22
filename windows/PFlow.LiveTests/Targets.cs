@@ -273,7 +273,7 @@ internal static partial class Program
                 && store.History.Count(h => h.InsertionStatus == InsertionTarget.Unconfirmed) == 1);
             var nothing = await pipeline.Deliver(prepared, 1.0, new UncheckedTarget(InsertionTarget.NothingLanded), IntPtr.Zero, (phase, _) => unconfirmedPhase = phase, CancellationToken.None);
             Check("a write the app did not take at all is never quiet: the card with the words is offered",
-                nothing.Prompt is { } np && np.Text == "Fictional card words." && nothing.Notice == null && unconfirmedPhase == Phase.Failed);
+                nothing.Prompt is { } np && np.Text == "Fictional card words." && np.Reason == InsertionTarget.NothingLanded && unconfirmedPhase == Phase.Failed);
             // Recognition of the whole take fails (no engine in this folder) after live words: the card is offered only
             // when nothing was typed live; words already typed in the app stay there and get no "couldn't type this".
             var typing = new LiveTyping(_ => (LiveFinal.Applied, null), () => true, () => (LiveCancel.NothingTyped, null));
