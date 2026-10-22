@@ -26,6 +26,15 @@ internal static partial class Program
         AutomationProperties.SetAutomationId(editor, "FictionalInsertionField");
         var window = new Window { Title = "pFlow fictional caret fixture", Width = 480, Height = 240, Content = editor };
         try {
+            // The same keystrokes pFlow sends into a Chromium pane it cannot read, into a real box: both lines arrive,
+            // the line break as Shift+Enter, and nothing is sent (no Enter) that a chat box would act on.
+            window.Show(); window.Activate(); editor.Focus(); Drain();
+            if (editor.IsKeyboardFocused) {
+                Native.Send(Native.TypedText("Fictional line one.\nSecond fictional line."));
+                for (int i = 0; i < 20 && !editor.Text.Contains("Second fictional line."); i++) { Thread.Sleep(50); Drain(); }
+                Check("unchecked typing puts both lines in a real box with a soft line break between them", editor.Text == "Fictional line one.\r\nSecond fictional line.");
+                editor.Clear(); Drain();
+            } else Console.WriteLine("SKIP: unchecked typing into a real box (the fixture box did not take keyboard focus)");
             window.Show(); window.UpdateLayout(); Drain();
             _ = UIElementAutomationPeer.CreatePeerForElement(editor);
             var handle = new WindowInteropHelper(window).Handle;

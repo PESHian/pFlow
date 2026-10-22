@@ -161,14 +161,10 @@ internal static partial class Program
     static async Task ChromiumCold()
     {
         var log = new List<string>(); InsertionLog.Written += line => log.Add(line);
-        // PFLOW_NO_A11Y=1: Edge never builds its tree (--disable-renderer-accessibility), the owner's PC on a bad day:
-        // the pane stays for the whole take and the body page must still get its words, typed without a check.
-        var pages = new[] { ("body", true, "Fictional cold words.\nSecond fictional line."), ("password", true, "Fictional secret words."), ("placeholder", false, "Fictional pane words.") };
-        foreach (var page in NoAccessibility ? pages.Take(1) : pages)
+        foreach (var page in new[] { ("body", true, "Fictional cold words.\nSecond fictional line."), ("password", true, "Fictional secret words."), ("placeholder", false, "Fictional pane words.") })
             await ColdPage(page.Item1, page.Item2, page.Item3, log);
-        if (!NoAccessibility) await CardEveryTime();
+        await CardEveryTime();
     }
-    static bool NoAccessibility => Environment.GetEnvironmentVariable("PFLOW_NO_A11Y") == "1";
     static async Task ColdPage(string variant, bool scriptFocus, string text, List<string> log)
     {
         string name = "pflow-fictional-cold-" + variant + "-" + Guid.NewGuid().ToString("N");
@@ -183,7 +179,6 @@ internal static partial class Program
         var edge = new ProcessStartInfo(edgePath) { UseShellExecute = false };
         foreach (var arg in new[] { "--user-data-dir=" + Path.Combine(root, EdgeProfile(name)), "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--app=" + new Uri(html).AbsoluteUri })
             edge.ArgumentList.Add(arg);
-        if (NoAccessibility) edge.ArgumentList.Add("--disable-renderer-accessibility");
         foreach (var p in Process.GetProcessesByName("msedge")) { try { if (p.MainWindowTitle.Contains("pflow-fictional")) p.CloseMainWindow(); } catch { } }
         using var owner = new HwndSource(new HwndSourceParameters("pFlow fictional cold owner " + variant) { Width = 10, Height = 10 });
         var process = Process.Start(edge)!;
@@ -226,7 +221,6 @@ internal static partial class Program
             // A cold Edge may keep its placeholder pane for the whole take (seen on the VM and the owner's PC): then the
             // words are typed without a check, the line break as Shift+Enter. Either way they must be on the page, both lines.
             if (variant == "body") Check("body: the words reach the focused field, checked (delivered) or typed without a check", outcome is "delivered" or "unchecked" && title.Contains("Second fictional line"));
-            if (variant == "body" && NoAccessibility) Check("body without a tree: the pane never gave way and the words were typed without a check", outcome == "unchecked");
             if (variant == "body" && outcome == "unchecked") Check("body: the unchecked path typed with soft line breaks and never touched the clipboard", log.Any(l => l.Contains("path=unchecked typing") && l.Contains("soft line breaks")) && Native.GetClipboardSequenceNumber() == clipboardBefore);
             if (outcome == "delivered" && variant == "body") Check("body: two lines went in by paste, never typed Enter", log.Any(l => l.Contains("path=clipboard")) && !log.Any(l => l.Contains("path=type")));
             if (outcome == "card") {
