@@ -11,30 +11,16 @@ internal static partial class Program
 {
     static void NativeInsertion()
     {
-        // Unchecked typing into a Chromium pane: a line break is Shift+Enter (never Enter, which sends a chat message).
-        var typed = Native.TypedText("ab\ncd");
-        Check("typed text keeps every character and turns a line break into Shift+Enter", typed.Length == 2 * 4 + 4
-            && typed.Take(4).All(x => (x.Data.Keyboard.Flags & Native.KEYEVENTF_UNICODE) != 0)
-            && typed[4].Data.Keyboard.Vk == 0x10 && (typed[4].Data.Keyboard.Flags & Native.KEYEVENTF_KEYUP) == 0
-            && typed[5].Data.Keyboard.Vk == 0x0D && (typed[5].Data.Keyboard.Flags & Native.KEYEVENTF_KEYUP) == 0
-            && typed[6].Data.Keyboard.Vk == 0x0D && (typed[6].Data.Keyboard.Flags & Native.KEYEVENTF_KEYUP) != 0
-            && typed[7].Data.Keyboard.Vk == 0x10 && (typed[7].Data.Keyboard.Flags & Native.KEYEVENTF_KEYUP) != 0
-            && typed.All(x => x.Data.Keyboard.Vk != 0x0D || x.Data.Keyboard.Scan == 0)
-            && Native.TypedText("one line").Length == 16 && Native.TypedText("a\r\nb\rc").Length == 2 + 4 + 2 + 4 + 2);
+        // Unchecked typing into a Chromium pane goes in on one line: a box pFlow cannot see may send or submit on Enter.
+        Check("unchecked typing turns every run of line breaks into one space and never sends a line break",
+            InsertionTarget.OneLine("Fictional line one.\r\n\r\nSecond fictional line.") == "Fictional line one. Second fictional line."
+            && InsertionTarget.OneLine("one line") == "one line" && InsertionTarget.OneLine("a \r b\nc\n") == "a b c" && InsertionTarget.OneLine("\n") == ""
+            && !Native.UnicodeText(InsertionTarget.OneLine("x\ny")).Any(i => i.Data.Keyboard.Scan == '\r'));
         _ = Application.Current ?? new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         var editor = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap };
         AutomationProperties.SetAutomationId(editor, "FictionalInsertionField");
         var window = new Window { Title = "pFlow fictional caret fixture", Width = 480, Height = 240, Content = editor };
         try {
-            // The same keystrokes pFlow sends into a Chromium pane it cannot read, into a real box: both lines arrive,
-            // the line break as Shift+Enter, and nothing is sent (no Enter) that a chat box would act on.
-            window.Show(); window.Activate(); editor.Focus(); Drain();
-            if (editor.IsKeyboardFocused) {
-                Native.Send(Native.TypedText("Fictional line one.\nSecond fictional line."));
-                for (int i = 0; i < 20 && !editor.Text.Contains("Second fictional line."); i++) { Thread.Sleep(50); Drain(); }
-                Check("unchecked typing puts both lines in a real box with a soft line break between them", editor.Text == "Fictional line one.\r\nSecond fictional line.");
-                editor.Clear(); Drain();
-            } else Console.WriteLine("SKIP: unchecked typing into a real box (the fixture box did not take keyboard focus)");
             window.Show(); window.UpdateLayout(); Drain();
             _ = UIElementAutomationPeer.CreatePeerForElement(editor);
             var handle = new WindowInteropHelper(window).Handle;

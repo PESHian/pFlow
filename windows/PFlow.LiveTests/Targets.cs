@@ -217,11 +217,12 @@ internal static partial class Program
             Console.WriteLine($"COLD OUTCOME {variant}: {outcome} result=[{result}] title now=[{title}]");
             Check(variant + ": the outcome is delivered, card, refused or typed without a check; never anything else", outcome != "other");
             Check(variant + ": never a bare 'Inserted' without the words on the page", result != "Inserted" || title.Contains("Second fictional line") || (variant != "body" && title.Contains(text)));
-            if (variant == "password") Check("password: nothing was typed into the password box", title.Contains("len:0") && result != "Inserted" && result != InsertionTarget.Unchecked);
+            // A password box behind a pane that never gives way cannot be told apart (the decided trade-off); with a tree it is refused.
+            if (variant == "password") Check("password: nothing is typed into a password box pFlow can see", outcome == "unchecked" || (title.Contains("len:0") && result != "Inserted"));
             // A cold Edge may keep its placeholder pane for the whole take (seen on the VM and the owner's PC): then the
-            // words are typed without a check, the line break as Shift+Enter. Either way they must be on the page, both lines.
+            // words are typed without a check, on one line. Either way every word must be on the page.
             if (variant == "body") Check("body: the words reach the focused field, checked (delivered) or typed without a check", outcome is "delivered" or "unchecked" && title.Contains("Second fictional line"));
-            if (variant == "body" && outcome == "unchecked") Check("body: the unchecked path typed with soft line breaks and never touched the clipboard", log.Any(l => l.Contains("path=unchecked typing") && l.Contains("soft line breaks")) && Native.GetClipboardSequenceNumber() == clipboardBefore);
+            if (variant == "body" && outcome == "unchecked") Check("body: the unchecked path typed on one line and never touched the clipboard", log.Any(l => l.Contains("path=unchecked typing") && l.Contains("line breaks as spaces")) && Native.GetClipboardSequenceNumber() == clipboardBefore);
             if (outcome == "delivered" && variant == "body") Check("body: two lines went in by paste, never typed Enter", log.Any(l => l.Contains("path=clipboard")) && !log.Any(l => l.Contains("path=type")));
             if (outcome == "card") {
                 Check(variant + ": the card outcome leaves the clipboard alone", Native.GetClipboardSequenceNumber() == clipboardBefore);

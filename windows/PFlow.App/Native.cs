@@ -59,18 +59,6 @@ internal static class Native
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern int GetKeyNameText(int lParam, System.Text.StringBuilder text, int size);
     [DllImport("user32.dll")] internal static extern uint MapVirtualKey(uint code, uint mode);
     internal static Input Key(ushort vk, bool up = false, bool extended = false) => new() { Type = 1, Data = new() { Keyboard = new() { Vk = vk, Flags = (up ? KEYEVENTF_KEYUP : 0) | (extended ? KEYEVENTF_EXTENDEDKEY : 0) } } };
-    /// Keystrokes for `text` where every line break is Shift+Enter: a new line
-    /// in a box, never the Enter that sends a chat message.
-    internal static Input[] TypedText(string text)
-    {
-        var inputs = new List<Input>();
-        string[] lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
-        for (int i = 0; i < lines.Length; i++) {
-            if (lines[i].Length > 0) inputs.AddRange(UnicodeText(lines[i]));
-            if (i < lines.Length - 1) inputs.AddRange([Key(0x10), Key(0x0D), Key(0x0D, true), Key(0x10, true)]);
-        }
-        return inputs.ToArray();
-    }
     internal static Input[] UnicodeText(string text)
     {
         // VK_PACKET produces WM_CHAR: Windows multiline controls expect CR for a line break.

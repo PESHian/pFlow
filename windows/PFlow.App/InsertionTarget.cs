@@ -28,7 +28,8 @@ internal sealed class InsertionTarget : IInsertionTarget
     /// 0.1.19 behaviour the owner's PC relies on). A built tree that shows a
     /// non-editable element is a refusal, never typing. What stays unseen
     /// behind a pane that never gives way: a password box takes the words as
-    /// dots, and a page with no box focused gets keystrokes.
+    /// dots, a page with no box focused gets keystrokes, and line breaks go in
+    /// as spaces (Enter could send or submit).
     readonly bool placeholder;
     readonly IntPtr foreground;
     readonly uint processId;
@@ -210,7 +211,7 @@ internal sealed class InsertionTarget : IInsertionTarget
         if (again.readable) { Log("placeholder: field readable at insert time: " + again.Kind); return await again.Deliver(text, clipboardOwner, keepClipboard, cancel, rtf); }
         if (!again.placeholder) { Log("placeholder: tree built, nothing editable at insert time: " + again.Refusal); return SavedToHistory; }
         Log("placeholder pane at insert time: " + Refusal + "; typed without a check");
-        return await TypeUnchecked(text, clipboardOwner, keepClipboard, cancel);
+        return await TypeUnchecked(text, clipboardOwner, keepClipboard, cancel, rtf);
     }
     /// The same app, window and focused Chromium control as when the take began; the field itself cannot be read.
     void ValidateHost()
@@ -221,24 +222,33 @@ internal sealed class InsertionTarget : IInsertionTarget
     }
     /// Keystrokes into the field pFlow cannot read back: Chromium's pane,
     /// knocked and captured again, still hid the field under the caret. The
-    /// words go in the way a person's typing would; a line break is Shift+Enter,
-    /// a new line in every box and never the Enter that sends a chat message.
-    /// The clipboard is not used, so a busy page can never paste something
-    /// else late. The result is not checked, and the status says so.
-    async Task<string> TypeUnchecked(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel)
+    /// words go in the way a person's typing would, on one line: a box pFlow
+    /// cannot see may be a chat box that sends on Enter or a form box that
+    /// submits on Enter or Shift+Enter, so line breaks become spaces here. The
+    /// clipboard is not used, so a busy page can never paste something else
+    /// late. The result is not checked, and the status says so; History keeps
+    /// the text with its line breaks.
+    async Task<string> TypeUnchecked(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf)
     {
         ValidateHost(); cancel.ThrowIfCancellationRequested();
         if (new[] { 0x10, 0x11, 0x12, 0x5B, 0x5C }.Any(x => Native.GetAsyncKeyState(x) < 0)) throw new InvalidOperationException("Release the shortcut keys first. Your text is in History.");
-        Log("path=unchecked typing " + InsertionLog.Length(text) + (text.Contains('\n') || text.Contains('\r') ? " with soft line breaks" : ""));
-        Native.Send(Native.TypedText(text));
+        string line = OneLine(text);
+        Log("path=unchecked typing " + InsertionLog.Length(line) + (line.Length != text.Length ? " line breaks as spaces" : ""));
+        Native.Send(Native.UnicodeText(line));
         await Task.Delay(100);
+        string status = Unchecked;
+        if (rtf != null) status += " Template styles arrived as plain text.";
         if (keepClipboard) {
             // "Copy dictation to clipboard": the words, once, after they went in.
             try { ClipboardLease.KeepCopy(clipboardOwner, text); }
-            catch (Exception error) when (error is InvalidOperationException or OutOfMemoryException) { Log("copy to clipboard failed: " + error.Message); }
+            catch (Exception error) when (error is InvalidOperationException or OutOfMemoryException) { Log("copy to clipboard failed: " + error.Message); status += " It could not be copied to the clipboard."; }
         }
-        return Unchecked;
+        return status;
     }
+    /// The text on one line for a box pFlow cannot see: every run of line
+    /// breaks, with the spaces around it, becomes one space.
+    internal static string OneLine(string text) =>
+        System.Text.RegularExpressions.Regex.Replace(text.Replace("\r\n", "\n").Replace('\r', '\n'), "[ \t]*\n+[ \t]*", " ").Trim();
     async Task<string> Deliver(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf)
     {
         Validate();
