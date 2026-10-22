@@ -32,8 +32,8 @@ class MacReleaseTests(unittest.TestCase):
         self.dist = self.root / 'dist'
         self.calls = []
         self.status = 'Accepted'
-        self.fail = lambda args: False
-        self.details = b'flags=0x10000(runtime)\nTimestamp=Oct 19, 2026\n'
+        self.toolFails = lambda args: False
+        self.details = b'flags=0x10000(runtime)\nTimestamp=Oct 19, 2026\ndesignated => identifier "com.pesh.Yap"\n'
         self.entitlements = {}
         self.gatekeeper = b'assessments enabled\n'
         self.stage = None
@@ -43,7 +43,7 @@ class MacReleaseTests(unittest.TestCase):
 
     def command(self, *values):
         args = tuple(map(str, values)); self.calls.append(args)
-        if self.fail(args):
+        if self.toolFails(args):
             raise RuntimeError('Controlled tool failure')
         if args[:2] == ('security', 'find-identity'):
             return (f'1) {"B"*40} "Developer ID Application: Another Publisher (OTHERTEAM1)"\n'
@@ -121,12 +121,12 @@ class MacReleaseTests(unittest.TestCase):
     def test_failed_trust_step_never_creates_receipt(self):
         for step in [('codesign', '--verify'), ('spctl', '--assess'), ('xcrun', 'stapler', 'validate')]:
             with self.subTest(step=step):
-                self.fail = lambda args: args[:len(step)] == step
+                self.toolFails = lambda args: args[:len(step)] == step
                 with self.assertRaises(RuntimeError): self.package()
                 self.assertFalse(list(self.dist.glob('*.trusted.json')))
 
     def test_dmg_assessment_failure_blocks_distribution(self):
-        self.fail = lambda args: args[0] == 'spctl' and args[-1].endswith('.dmg')
+        self.toolFails = lambda args: args[0] == 'spctl' and args[-1].endswith('.dmg')
         with self.assertRaises(RuntimeError): self.package()
         self.assertFalse(list(self.dist.glob('*.dmg')))
 
@@ -162,6 +162,22 @@ class MacReleaseTests(unittest.TestCase):
         executable.unlink(); executable.symlink_to(self.app / 'Contents/Helpers/whisper-cli')
         with self.assertRaises(ValueError): self.package(testing=True)
         self.assertFalse(any(a[0] == 'lipo' for a in self.calls))
+        self.assertFalse(list(self.dist.glob('*.dmg')))
+
+    def test_testing_app_is_signed_with_the_stable_requirement(self):
+        self.package(testing=True)
+        signing = [a for a in self.calls if a[:3] == ('codesign', '--force', '--sign')]
+        self.assertEqual(len(signing), 1)
+        self.assertEqual(signing[0][3], '-', 'ad-hoc, never an identity')
+        self.assertIn('--requirements', signing[0])
+        self.assertIn('=designated => identifier "com.pesh.Yap"', signing[0])
+        self.assertTrue(signing[0][-1].endswith('pFlow by Pesh.app'))
+        self.assertIn(('codesign', '--verify', '-R=identifier "com.pesh.Yap"', signing[0][-1]), self.calls)
+        self.assertFalse(any('--options' in a or '--timestamp' in a for a in self.calls))
+
+    def test_testing_refuses_an_app_whose_requirement_is_still_its_cdhash(self):
+        self.details = b'designated => cdhash H"feeda4387f57f9190a157e7ba001bd12ac7bc9bd"\n'
+        with self.assertRaises(ValueError): self.package(testing=True)
         self.assertFalse(list(self.dist.glob('*.dmg')))
 
     def test_testing_removes_stale_receipt_and_never_notarizes(self):

@@ -22,24 +22,24 @@ struct OnboardingView: View {
                     title: "Microphone",
                     detail: "To hear you.",
                     granted: app.permissions.microphone == .granted,
-                    action: { Task { await app.permissions.requestMicrophone() } }
+                    action: { Task { await app.permissions.grantMicrophone() } }
                 )
                 PermissionStep(
                     icon: "waveform",
                     title: "Speech Recognition",
                     detail: "To transcribe on-device.",
                     granted: app.permissions.speech == .granted,
-                    action: { Task { await app.permissions.requestSpeech() } }
+                    action: { Task { await app.permissions.grantSpeech() } }
                 )
                 PermissionStep(
                     icon: "accessibility",
                     title: "Accessibility",
                     detail: "To paste into other apps.",
                     granted: app.permissions.accessibility,
-                    action: { app.permissions.grantAccessibility() }
+                    action: { Task { await app.permissions.grantAccessibility() } }
                 )
-                if !app.permissions.accessibility && app.permissions.accessibilityPrompted {
-                    Text("Turn on pFlow in the list that opened. If nothing opened, press Grant again to open System Settings.")
+                if let hint = app.permissions.accessibilityHint {
+                    Text(hint)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -54,16 +54,6 @@ struct OnboardingView: View {
             }
 
             Spacer(minLength: 0)
-
-            if !app.permissions.accessibility {
-                Button("Already switched on? Reset and re-grant") {
-                    app.permissions.resetAccessibilityGrant()
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-            }
 
             Button(app.permissions.allGranted ? "Continue to Settings" : "Continue") {
                 NSApp.keyWindow?.close()

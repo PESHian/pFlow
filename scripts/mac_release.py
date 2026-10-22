@@ -13,6 +13,11 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 DEVELOPER_ID = ('anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists '
                 'and certificate leaf[field.1.2.840.113635.100.6.1.13] exists')
+# An ad-hoc signature's designated requirement is its cdhash, so macOS privacy
+# rows (Accessibility, Microphone, ...) granted to one test build did not hold
+# for the next. Test builds carry this one requirement instead, so a grant
+# follows the app from build to build. Trusted releases use their certificate.
+TESTING_REQUIREMENT = 'designated => identifier "com.pesh.Yap"'
 MACHO = {bytes.fromhex(x) for x in ('feedface', 'cefaedfe', 'feedfacf', 'cffaedfe', 'cafebabe', 'bebafeca', 'cafebabf', 'bfbafeca')}
 
 
@@ -49,6 +54,17 @@ def preflight(env):
     notary = ['--keychain-profile', profile] + (['--keychain', keychain] if keychain else [])
     run('xcrun', 'notarytool', 'history', *notary, '--output-format', 'json')
     return team, identity, keychain, notary
+
+
+def sign_for_testing(app):
+    run('codesign', '--force', '--sign', '-', '--preserve-metadata=entitlements',
+        '--requirements', '=' + TESTING_REQUIREMENT, app)
+    run('codesign', '--verify', '--deep', '--strict', app)
+    run('codesign', '--verify', '-R=' + TESTING_REQUIREMENT.split('=> ', 1)[1], app)
+    result = subprocess.run(['codesign', '--display', '-r-', str(app)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    lines = (result.stderr or b'').decode(errors='replace').splitlines()
+    if result.returncode or TESTING_REQUIREMENT not in lines:
+        raise ValueError('Testing app does not carry the stable designated requirement')
 
 
 def code_paths(app):
@@ -169,7 +185,7 @@ def package(app, dist, *, testing=False, env=None):
             staple(final_app)
             run('spctl', '--assess', '--type', 'execute', final_app)
         else:
-            run('codesign', '--verify', '--deep', '--strict', final_app)
+            sign_for_testing(final_app)
         shutil.copyfile(ROOT / 'LICENSE', stage / 'LICENSE.txt')
         (stage / 'Applications').symlink_to('/Applications')
         dmg = work / name

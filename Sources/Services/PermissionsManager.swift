@@ -17,34 +17,18 @@ final class PermissionsManager {
     var accessibility: Bool = false
     var automation: Status = .notDetermined
     var requiresSpeechRecognition = true
-    /// Apple's Accessibility prompt shows once per app record, so a later
-    /// press goes straight to System Settings instead of doing nothing.
-    var accessibilityPrompted: Bool {
-        defaults.string(forKey: Self.promptedKey) == Self.promptedValue
-    }
-
-    static let promptedKey = "pflow.accessibilityPrompted"
-    private static var promptedValue: String {
-        Bundle.main.bundlePath + "@" + (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0")
-    }
-    private let defaults: UserDefaults
+    /// What the last Accessibility Grant press did, for the hint under the step.
+    var accessibilityGrant: AccessibilityGrantOutcome?
     private var pollTimer: Timer?
 
-    init(defaults: UserDefaults = .standard) {
-        self.defaults = defaults
-    }
+    init() {}
 
-    /// What one press of Grant does. Exactly one path per press: Apple's own
-    /// prompt (which names the app and offers Open System Settings) or the
-    /// System Settings pane, never both at once.
+    /// What one press of Grant does for Microphone, Speech Recognition and
+    /// Automation: Apple's own prompt while undecided, the System Settings
+    /// pane once refused, nothing once granted. Never both at once.
     enum GrantPath: Equatable { case prompt, openSettings, nothing }
 
-    static func accessibilityPath(granted: Bool, promptedBefore: Bool) -> GrantPath {
-        if granted { return .nothing }
-        return promptedBefore ? .openSettings : .prompt
-    }
-
-    static func automationPath(_ status: Status) -> GrantPath {
+    static func grantPath(for status: Status) -> GrantPath {
         switch status {
         case .granted: return .nothing
         case .notDetermined: return .prompt
@@ -52,30 +36,88 @@ final class PermissionsManager {
         }
     }
 
+    /// The steps one Accessibility Grant press can take, injectable so the
+    /// rule is tested without touching this Mac's privacy settings.
+    struct AccessibilityGrantSteps {
+        var isTrusted: () -> Bool
+        /// Clears pFlow's own Accessibility row. A row from an earlier build
+        /// shows as ticked in System Settings while this build is not trusted,
+        /// and while any row exists Apple's prompt will not show again.
+        var resetOwnRow: () -> Void
+        var prompt: () -> Void
+        var promptIsShowing: () -> Bool
+        var openSettings: () -> Void
+        /// One short wait between looks for Apple's prompt (about a quarter second).
+        var wait: () async -> Void
+    }
+
+    enum AccessibilityGrantOutcome: Equatable { case alreadyTrusted, granted, promptShown, settingsOpened }
+
+    /// One press, one visible result: clear the stale row, ask for Apple's
+    /// prompt, and if no prompt is on screen within about a second, open the
+    /// Accessibility list with pFlow already in it.
+    static func grantAccessibility(_ steps: AccessibilityGrantSteps) async -> AccessibilityGrantOutcome {
+        if steps.isTrusted() { return .alreadyTrusted }
+        steps.resetOwnRow()
+        steps.prompt()
+        for _ in 0..<4 {
+            if steps.isTrusted() { return .granted }
+            if steps.promptIsShowing() { return .promptShown }
+            await steps.wait()
+        }
+        if steps.isTrusted() { return .granted }
+        if steps.promptIsShowing() { return .promptShown }
+        steps.openSettings()
+        return .settingsOpened
+    }
+
     /// One Grant press for Accessibility. The grant itself is noticed by
     /// `startObserving`, so the window updates without a relaunch.
-    func grantAccessibility(prompt: (() -> Void)? = nil, open: (() -> Void)? = nil) {
-        switch Self.accessibilityPath(granted: accessibility, promptedBefore: accessibilityPrompted) {
-        case .prompt:
-            defaults.set(Self.promptedValue, forKey: Self.promptedKey)
-            (prompt ?? requestAccessibility)()
-        case .openSettings:
-            (open ?? openAccessibilitySettings)()
-        case .nothing:
-            break
+    func grantAccessibility(steps: AccessibilityGrantSteps? = nil) async {
+        accessibilityGrant = await Self.grantAccessibility(steps ?? liveAccessibilitySteps)
+        refresh()
+    }
+
+    /// The one line under the Accessibility step after a press, or nil.
+    var accessibilityHint: String? {
+        guard !accessibility else { return nil }
+        switch accessibilityGrant {
+        case .promptShown: return "Choose Open System Settings in Apple's message, then turn on pFlow."
+        case .settingsOpened: return "Turn on pFlow in the list that opened."
+        case .alreadyTrusted, .granted, nil: return nil
         }
+    }
+
+    private var liveAccessibilitySteps: AccessibilityGrantSteps {
+        AccessibilityGrantSteps(
+            isTrusted: { AXIsProcessTrusted() },
+            resetOwnRow: { Self.resetOwnAccessibilityRow() },
+            prompt: { Self.promptForAccessibility() },
+            promptIsShowing: { Self.systemPermissionPromptIsShowing() },
+            openSettings: { Self.openPrivacyPane(.accessibility) },
+            wait: { try? await Task.sleep(nanoseconds: 250_000_000) }
+        )
+    }
+
+    func grantMicrophone(prompt: (() async -> Void)? = nil, open: (() -> Void)? = nil) async {
+        await grant(microphone, prompt: prompt ?? requestMicrophone, open: open ?? { Self.openPrivacyPane(.microphone) })
+    }
+
+    func grantSpeech(prompt: (() async -> Void)? = nil, open: (() -> Void)? = nil) async {
+        await grant(speech, prompt: prompt ?? requestSpeech, open: open ?? { Self.openPrivacyPane(.speechRecognition) })
     }
 
     /// One Grant press for Automation: the prompt while undecided, the pane
     /// once it was denied.
     func grantAutomation(prompt: (() async -> Void)? = nil, open: (() -> Void)? = nil) async {
-        switch Self.automationPath(automation) {
-        case .prompt:
-            if let prompt { await prompt() } else { await requestAutomation() }
-        case .openSettings:
-            (open ?? openAutomationSettings)()
-        case .nothing:
-            break
+        await grant(automation, prompt: prompt ?? requestAutomation, open: open ?? openAutomationSettings)
+    }
+
+    private func grant(_ status: Status, prompt: () async -> Void, open: () -> Void) async {
+        switch Self.grantPath(for: status) {
+        case .prompt: await prompt()
+        case .openSettings: open()
+        case .nothing: break
         }
     }
 
@@ -125,9 +167,7 @@ final class PermissionsManager {
     }
 
     func openAutomationSettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
-            NSWorkspace.shared.open(url)
-        }
+        Self.openPrivacyPane(.automation)
     }
 
     private nonisolated static func automationStatus(prompt: Bool) -> Status {
@@ -200,27 +240,6 @@ final class PermissionsManager {
         setPolling(interval: accessibility ? 5.0 : 1.0)
     }
 
-    /// Ad-hoc signed builds have no stable designated requirement, so every
-    /// rebuild looks like a different app to TCC. The tell-tale symptom is the
-    /// checkbox appearing checked in System Settings while `AXIsProcessTrusted()`
-    /// still returns false. Clearing the stale record lets the user re-grant.
-    func resetAccessibilityGrant() {
-        guard let bundleID = Bundle.main.bundleIdentifier else { return }
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
-        task.arguments = ["reset", "Accessibility", bundleID]
-        do {
-            try task.run()
-            task.waitUntilExit()
-        } catch {
-            NSLog("pFlow: tccutil reset failed: \(error.localizedDescription)")
-        }
-        refresh()
-        // The record is gone, so Apple's prompt can show again: one path.
-        defaults.removeObject(forKey: Self.promptedKey)
-        grantAccessibility()
-    }
-
     func requestMicrophone() async {
         _ = await AVCaptureDevice.requestAccess(for: .audio)
         refresh()
@@ -233,15 +252,63 @@ final class PermissionsManager {
         refresh()
     }
 
-    func requestAccessibility() {
-        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
-        refresh()
+    /// macOS privacy rows are keyed by the app's signature. Test builds now
+    /// carry one stable requirement (scripts/mac_release.py), but a row made
+    /// by an older build stays ticked in System Settings while this build is
+    /// not trusted. `tccutil` clears only pFlow's own row and needs no admin.
+    private static func resetOwnAccessibilityRow() {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return }
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        task.arguments = ["reset", "Accessibility", bundleID]
+        do {
+            try task.run()
+            task.waitUntilExit()
+            if task.terminationStatus != 0 {
+                NSLog("pFlow: tccutil reset exited \(task.terminationStatus)")
+            }
+        } catch {
+            NSLog("pFlow: tccutil reset failed: \(error.localizedDescription)")
+        }
     }
 
-    func openAccessibilitySettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-            NSWorkspace.shared.open(url)
+    private static func promptForAccessibility() {
+        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
+    }
+
+    /// Apple's permission prompt is a window of one of these system agents.
+    private static let promptOwners: Set<String> = ["UserNotificationCenter", "SecurityAgent", "CoreServicesUIAgent"]
+
+    static func systemPermissionPromptIsShowing() -> Bool {
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        return windows.contains { window in
+            guard let owner = window[kCGWindowOwnerName as String] as? String, promptOwners.contains(owner),
+                  let bounds = window[kCGWindowBounds as String] as? [String: CGFloat] else { return false }
+            return (bounds["Height"] ?? 0) > 60 && (bounds["Width"] ?? 0) > 60
+        }
+    }
+
+    enum PrivacyPane: String {
+        case accessibility = "Privacy_Accessibility"
+        case microphone = "Privacy_Microphone"
+        case speechRecognition = "Privacy_SpeechRecognition"
+        case automation = "Privacy_Automation"
+    }
+
+    /// Opens one Privacy & Security list. The newer and the older address
+    /// are both tried, and System Settings itself is the last resort, so a
+    /// press always shows something.
+    static func openPrivacyPane(_ pane: PrivacyPane) {
+        let addresses = [
+            "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?\(pane.rawValue)",
+            "x-apple.systempreferences:com.apple.preference.security?\(pane.rawValue)",
+        ]
+        for address in addresses {
+            if let url = URL(string: address), NSWorkspace.shared.open(url) { return }
+        }
+        if let settings = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.systempreferences") {
+            NSWorkspace.shared.openApplication(at: settings, configuration: NSWorkspace.OpenConfiguration())
         }
     }
 
