@@ -37,6 +37,12 @@ final class RecordingCoordinator {
     private var take: String?
     // "Type in the current app" is typing into the destination this take.
     private var typingLive = false
+    // Type mode asked the app (Electron, Chromium) for its Accessibility tree
+    // and looks for the field again until it is there or time runs out.
+    private var awaitingTyping = false
+    private var typingRetryTask: Task<Void, Never>?
+    private let typingRetryEvery: Duration
+    private let typingRetryDeadline: TimeInterval
 
     private var startedAt: TimeInterval?
     private var recordingDevice: String?
@@ -77,13 +83,18 @@ final class RecordingCoordinator {
             case .typing:
                 typingLive = true
                 liveNote = "Typing in \(applicationName ?? "this app")"
+            case .waiting:
+                // The capsule shows meanwhile: the words are expected in the app.
+                awaitingTyping = true
+                liveNote = "Typing in \(applicationName ?? "this app")"
+                retryTyping(take: take)
             case .preview(let stop):
                 liveNote = stop.previewNote
             }
         }
         pauseCapture(false)
         sounds.playStart()
-        hud.show(device: recordingDevice, livePreview: takeLiveTextMode.showsCard(typingLive: typingLive))
+        hud.show(device: recordingDevice, livePreview: takeLiveTextMode.showsCard(typingLive: typingLive || awaitingTyping))
         hud.setPhase(.listening)
         if let liveNote { hud.setLiveNote(liveNote) }
         startTask = Task { [weak self] in
@@ -92,6 +103,7 @@ final class RecordingCoordinator {
             catch {
                 NSLog("pFlow: failed to start recording: \(error)")
                 self.transcript.cancel()
+                self.stopAwaitingTyping()
                 self.leaveLiveTyping()
                 _ = try? await self.session.stop()
                 self.hud.setPhase(.failed)
@@ -134,6 +146,43 @@ final class RecordingCoordinator {
         hud.setLivePreview(takeLiveTextMode.showsCard(typingLive: false))
         hud.setPartial(transcript.text)
         hud.setLiveNote(note)
+    }
+
+    /// Looks for the field again, every `typingRetryEvery`, until the app has
+    /// built its tree, something rules typing out, or `typingRetryDeadline`
+    /// passes; then typing starts, or the card shows why not.
+    private func retryTyping(take: String) {
+        let deadline = clock() + typingRetryDeadline
+        typingRetryTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: self?.typingRetryEvery ?? .milliseconds(100))
+                guard let self, !Task.isCancelled, self.awaitingTyping, self.state == .recording, self.take == take else { return }
+                switch self.injector.retryLive(session: take) {
+                case .waiting where self.clock() < deadline:
+                    continue
+                case .waiting:
+                    self.awaitingTyping = false
+                    self.showCard(note: LiveInlineOwnership.Stop.unsupported.previewNote)
+                case .preview(let stop):
+                    self.awaitingTyping = false
+                    self.showCard(note: stop.previewNote)
+                case .typing:
+                    self.awaitingTyping = false
+                    self.typingLive = true
+                    // Words heard while waiting go in now, not with the next update.
+                    if let stop = self.injector.reconcileLive(session: take, transcript: self.transcript.text) {
+                        self.showCard(note: stop.stoppedNote)
+                    }
+                }
+                return
+            }
+        }
+    }
+
+    private func stopAwaitingTyping() {
+        typingRetryTask?.cancel()
+        typingRetryTask = nil
+        awaitingTyping = false
     }
 
     /// Takes provisional typed words back out when the take ends with no text.
@@ -182,6 +231,8 @@ final class RecordingCoordinator {
         availableTemplates: @escaping () -> [DictationTemplate] = { [] },
         selectTemplate: @escaping (DictationTemplate) -> Void = { _ in },
         liveTextMode: @escaping () -> LiveTextMode = { .off },
+        typingRetryEvery: Duration = .milliseconds(100),
+        typingRetryDeadline: TimeInterval = 2,
         clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     ) {
         self.session = session
@@ -200,6 +251,8 @@ final class RecordingCoordinator {
         self.deviceName = deviceName
         self.clock = clock
         self.liveTextMode = liveTextMode
+        self.typingRetryEvery = typingRetryEvery
+        self.typingRetryDeadline = typingRetryDeadline
 
         session.onLevel = { [weak self] level in self?.hud.setLevel(level) }
         session.onTranscript = { [weak self] update in self?.receive(update) }
@@ -214,6 +267,7 @@ final class RecordingCoordinator {
     func cancel() async {
         guard state == .recording else { return }
         disarmCancel()
+        stopAwaitingTyping()
         transcript.cancel()
         state = .transcribing
         sounds.playStop()
@@ -270,6 +324,7 @@ final class RecordingCoordinator {
     private func stopRecording() async {
         let duration = startedAt.map { max(0, clock() - $0) }
         disarmCancel()
+        stopAwaitingTyping()
         state = .transcribing
         sounds.playStop()
         hud.setPhase(.transcribing)

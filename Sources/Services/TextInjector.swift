@@ -29,6 +29,9 @@ protocol TextInjecting {
     // before any pFlow UI. The final-only `deliver` above is unchanged and is
     // what Off and Preview use.
     func beginLive(session: String) -> LiveInlineStart
+    /// After `beginLive` returned `.waiting`: the same check over the field
+    /// the app reports now. `.waiting` again while there is still nothing.
+    func retryLive(session: String) -> LiveInlineStart
     /// Returns the reason when live typing stops with this update.
     func reconcileLive(session: String, transcript: String) -> LiveInlineOwnership.Stop?
     /// pFlow's words may be in the destination for this take.
@@ -41,6 +44,7 @@ extension TextInjecting {
     func deliver(_ text: String, formatted: NSAttributedString?) async -> InjectionOutcome { await deliver(text) }
     var targetIsSecure: Bool { false }
     func beginLive(session: String) -> LiveInlineStart { .preview(.unsupported) }
+    func retryLive(session: String) -> LiveInlineStart { .preview(.unsupported) }
     func reconcileLive(session: String, transcript: String) -> LiveInlineOwnership.Stop? { nil }
     func typedLive(session: String) -> Bool { false }
     func finalizeLive(session: String, text: String) -> LiveInlineFinal { .notTyped }
@@ -112,15 +116,38 @@ final class TextInjector: TextInjecting {
     func captureTarget() {
         guard !delivering else { return }
         targetApp = NSWorkspace.shared.frontmostApplication
+        captureField()
+    }
+
+    /// The focused field of the captured app and what it holds, so a paste
+    /// later can tell whether anything changed.
+    private func captureField() {
         targetField = targetApp.flatMap(focusedField)
         originalValue = targetField.flatMap { attribute($0, kAXValueAttribute) as? String }
         originalSelection = targetField.flatMap(selection)
         targetIsSecure = targetField.map { attribute($0, kAXSubroleAttribute) as? String == kAXSecureTextFieldSubrole } ?? false
     }
 
-    func beginLive(session: String) -> LiveInlineStart {
+    private func beginLiveOverCapturedField(session: String) -> LiveInlineStart {
         guard !delivering, let targetApp, let targetField else { return live.begin(id: session, field: nil) }
         return beginLive(session: session, field: AXLiveTextField(pid: targetApp.processIdentifier, element: targetField))
+    }
+
+    func beginLive(session: String) -> LiveInlineStart {
+        let start = beginLiveOverCapturedField(session: session)
+        // An Electron or Chromium app has no text field for Accessibility
+        // until asked. Once asked, the coordinator looks again shortly.
+        guard start == .preview(.unsupported), !delivering, let targetApp, WebAppAccessibility.enable(targetApp) else { return start }
+        return .waiting
+    }
+
+    func retryLive(session: String) -> LiveInlineStart {
+        guard let targetApp, targetApp.isActive else { return .preview(.app) }
+        // The field the app reports now replaces the one captured before it
+        // built its tree, for live typing and for the normal paste alike.
+        captureField()
+        let start = beginLiveOverCapturedField(session: session)
+        return start == .preview(.unsupported) ? .waiting : start
     }
 
     /// The same live typing over a given field; tests pass one they own.

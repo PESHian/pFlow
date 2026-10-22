@@ -22,9 +22,10 @@ enum LiveTextMode: String, CaseIterable, Identifiable {
     var showsPreview: Bool { self != .off }
 
     /// Whether the take shows the text card or the small waveform capsule.
-    /// Type mode shows the capsule while pFlow is typing in the app: the words
-    /// are already on screen there. The card appears only when typing could
-    /// not start or has stopped, with its note. The one rule for both looks.
+    /// Type mode shows the capsule while pFlow is typing in the app, or is
+    /// about to once the app has built its Accessibility tree: the words are
+    /// on screen there. The card appears only when typing could not start or
+    /// has stopped, with its note. The one rule for both looks.
     func showsCard(typingLive: Bool) -> Bool {
         switch self {
         case .off: return false

@@ -223,8 +223,16 @@ private final class Runner {
         let injector = TextInjector()
         injector.captureTarget()
         let session = UUID().uuidString
-        let started = injector.beginLive(session: session)
+        var started = injector.beginLive(session: session)
+        // As the coordinator does: an Electron or Chromium app was asked for its tree.
+        var retries = 0
+        while started == .waiting, retries < 30 {
+            await pause(0.1)
+            started = injector.retryLive(session: session)
+            retries += 1
+        }
         record["begin"] = "\(started)"
+        if retries > 0 { record["beginRetries"] = retries }
         var stops: [String] = []
         var snapshots: [String] = []
         var afterInterruption: String?
@@ -432,10 +440,17 @@ private final class Runner {
         _ = await activate(app)
         await pause(2)
         result["windowReady"] = ready
+        result["focusedRoleBeforeAsk"] = focused(pid).flatMap { string($0, kAXRoleAttribute) } ?? "none"
+        // What TextInjector.beginLive does for this app, done here first so the
+        // harness can read the fictional text the scenario starts from.
+        result["treeAsked"] = WebAppAccessibility.enable(app)
+        let askedAt = Date()
+        let readable = await waitFor(5) { focused(pid).flatMap { value($0) } != nil }
+        result["treeReadyMs"] = readable ? Int(Date().timeIntervalSince(askedAt) * 1000) : -1
         let focus = focused(pid)
         result["focusedRole"] = focus.flatMap { string($0, kAXRoleAttribute) } ?? "none"
-        result["focusedValueReadable"] = focus.flatMap { value($0) } != nil
-        if ready, let focus, value(focus) != nil {
+        result["focusedValueReadable"] = readable
+        if ready, readable, let focus {
             // Same production path; whatever pFlow decides here is the result.
             let field = Field(app: app, element: focus, windowTitle: file.lastPathComponent)
             result["scenarios"] = [await scenario("revisions-final", field, initial: value(focus) ?? "",
@@ -445,7 +460,16 @@ private final class Runner {
         } else if ready {
             let injector = TextInjector()
             injector.captureTarget()
-            result["begin"] = "\(injector.beginLive(session: UUID().uuidString))"
+            let session = UUID().uuidString
+            var started = injector.beginLive(session: session)
+            var retries = 0
+            while started == .waiting, retries < 30 {
+                await pause(0.1)
+                started = injector.retryLive(session: session)
+                retries += 1
+            }
+            result["begin"] = "\(started)"
+            result["beginRetries"] = retries
         }
         app.terminate()
         let quit = await waitFor(8, { app.isTerminated })

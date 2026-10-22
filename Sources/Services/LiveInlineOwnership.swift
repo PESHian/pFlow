@@ -202,6 +202,13 @@ struct LiveInlineOwnership {
         return .none
     }
 
+    /// Whether the field shows the pending write exactly, so there is nothing
+    /// left to wait for before it is confirmed.
+    func applied(_ state: LiveFieldState) -> Bool {
+        guard let pending else { return true }
+        return settled(pending, state)
+    }
+
     /// Whether the field still holds exactly what it held before any pending
     /// write: nothing of pFlow's beyond what was confirmed is in it.
     func unchanged(_ state: LiveFieldState) -> Bool {

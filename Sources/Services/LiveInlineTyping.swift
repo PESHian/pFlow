@@ -18,6 +18,9 @@ protocol LiveTextField: AnyObject {
 /// How a take's live typing turned out.
 enum LiveInlineStart: Equatable {
     case typing
+    /// The app was just asked to build its Accessibility tree (Electron,
+    /// Chromium); `retryLive` finds the field once it is there.
+    case waiting
     case preview(LiveInlineOwnership.Stop)
 }
 
@@ -56,6 +59,9 @@ final class LiveInlineSession {
     }
 
     static let settleWait: UInt32 = 50_000
+    /// Re-reads after an accepted write, `settleWait` apart (0.4 s in all),
+    /// before a write the field still does not show counts as uncertain.
+    static let applyReads = 8
 
     static func begin(id: String, field: LiveTextField,
                       settle: @escaping () -> Void = { usleep(settleWait) }) -> Result<LiveInlineSession, LiveInlineOwnership.Stop> {
@@ -96,7 +102,17 @@ final class LiveInlineSession {
         case .write(let write):
             var accepted = field.replace(write.range, with: write.text)
             if accepted, let select = write.select { accepted = field.select(select) }
-            if case .stopped(let stop) = ownership.confirm(accepted: accepted, observed: field.state()) { return stop }
+            var state = field.state()
+            // Chromium and Electron apply an accepted write a moment later:
+            // read again, a few short waits at most, until the field shows it.
+            // Native fields show it on the first read and never wait.
+            var reads = 0
+            while accepted, reads < Self.applyReads, !ownership.applied(state) {
+                settle()
+                state = field.state()
+                reads += 1
+            }
+            if case .stopped(let stop) = ownership.confirm(accepted: accepted, observed: state) { return stop }
             return nil
         }
     }

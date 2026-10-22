@@ -106,6 +106,13 @@ final class LiveFakeInjector: TextInjecting {
     var field: SimulatedTextField?
     var delivered: [String] = []
     var liveCalls = 0
+    /// Models an Electron or Chromium app: `beginLive` finds nothing to type
+    /// into and asks for the tree; `retryLive` finds the field after this
+    /// many calls (nil: the field is there from the start).
+    var fieldReadyAfterRetries: Int?
+    /// What `retryLive` finds instead of the field, once it looks.
+    var retryStop: LiveInlineOwnership.Stop?
+    private(set) var retries = 0
     private var live: LiveInlineSlot = { var slot = LiveInlineSlot(); slot.settle = {}; return slot }()
 
     init(field: SimulatedTextField?) { self.field = field }
@@ -115,7 +122,16 @@ final class LiveFakeInjector: TextInjecting {
         delivered.append(text)
         return .pasted
     }
-    func beginLive(session: String) -> LiveInlineStart { live.begin(id: session, field: field) }
+    func beginLive(session: String) -> LiveInlineStart {
+        if fieldReadyAfterRetries != nil { return .waiting }
+        return live.begin(id: session, field: field)
+    }
+    func retryLive(session: String) -> LiveInlineStart {
+        retries += 1
+        guard let after = fieldReadyAfterRetries, retries >= after else { return .waiting }
+        if let retryStop { return .preview(retryStop) }
+        return live.begin(id: session, field: field)
+    }
     func reconcileLive(session: String, transcript: String) -> LiveInlineOwnership.Stop? {
         liveCalls += 1
         return live.reconcile(session: session, transcript: transcript)
@@ -233,14 +249,98 @@ struct LiveInlineTests {
     private func typingCoordinator(_ field: SimulatedTextField?, session: FakeSession? = nil,
                                    history: FakeHistory? = nil, hud: FakeHUD? = nil,
                                    formatter: TemplateFormatting? = nil,
-                                   templates: [DictationTemplate] = []) -> (RecordingCoordinator, LiveFakeInjector) {
+                                   templates: [DictationTemplate] = [],
+                                   retryDeadline: TimeInterval = 1) -> (RecordingCoordinator, LiveFakeInjector) {
         let injector = LiveFakeInjector(field: field)
         let coordinator = RecordingCoordinator(
             session: session ?? FakeSession(), injector: injector, history: history ?? FakeHistory(),
             hud: hud ?? FakeHUD(), sounds: FakeSounds(),
             cleaner: FakeCleaner(), cleanupEnabled: { false }, vocabulary: { [] }, deviceName: { nil },
-            formatter: formatter, availableTemplates: { templates }, liveTextMode: { .typeInApp })
+            formatter: formatter, availableTemplates: { templates }, liveTextMode: { .typeInApp },
+            typingRetryEvery: .milliseconds(5), typingRetryDeadline: retryDeadline)
         return (coordinator, injector)
+    }
+
+    // MARK: Electron and Chromium apps: the field arrives after the ask
+
+    @Test func typesIntoAWebAppOnceItsAccessibilityTreeIsThere() async {
+        let field = SimulatedTextField("Note: ")
+        let session = FakeSession()
+        let hud = FakeHUD()
+        session.textToReturn = "the lighthouse keeper waved"
+        let (coordinator, injector) = typingCoordinator(field, session: session, hud: hud)
+        injector.fieldReadyAfterRetries = 2
+        coordinator.begin()
+        await Task.yield()
+        #expect(hud.previews == [false], "the capsule shows while the app builds its tree")
+        #expect(hud.notes.last == "Typing in TextEdit")
+        session.emit("the light")
+        #expect(field.replaced.isEmpty, "nothing is typed before the field is there")
+        try? await Task.sleep(for: .milliseconds(80))
+        #expect(injector.retries == 2)
+        session.emit("the lighthouse")
+        session.emit("the lighthouse keeper")
+        #expect(field.value == "Note: the lighthouse")
+        await coordinator.finish()
+        #expect(field.value == "Note: the lighthouse keeper waved")
+        #expect(injector.delivered.isEmpty)
+        #expect(hud.cards.isEmpty, "the card never showed")
+    }
+
+    @Test func showsTheCardWhenAWebAppNeverOffersAField() async {
+        let field = SimulatedTextField("Note: ")
+        let session = FakeSession()
+        let hud = FakeHUD()
+        session.textToReturn = "the lighthouse keeper waved"
+        let (coordinator, injector) = typingCoordinator(field, session: session, hud: hud, retryDeadline: 0.05)
+        injector.fieldReadyAfterRetries = 1_000
+        coordinator.begin()
+        await Task.yield()
+        #expect(hud.previews == [false])
+        try? await Task.sleep(for: .milliseconds(150))
+        #expect(hud.cards.last == true, "time ran out, so the card shows")
+        #expect(hud.notes.last == "Can't type in this app")
+        let retries = injector.retries
+        #expect(retries >= 1)
+        session.emit("the light")
+        #expect(field.replaced.isEmpty)
+        await coordinator.finish()
+        #expect(injector.delivered == ["the lighthouse keeper waved"], "the finished text goes in the normal way")
+        #expect(injector.retries == retries, "no more looking once the card shows")
+    }
+
+    @Test func stopsLookingForTheFieldWhenTheTakeEnds() async {
+        let field = SimulatedTextField("Note: ")
+        let session = FakeSession()
+        session.textToReturn = "the lighthouse keeper waved"
+        let (coordinator, injector) = typingCoordinator(field, session: session, retryDeadline: 10)
+        injector.fieldReadyAfterRetries = 1_000
+        coordinator.begin()
+        await Task.yield()
+        await coordinator.finish()
+        #expect(injector.delivered == ["the lighthouse keeper waved"])
+        let retries = injector.retries
+        try? await Task.sleep(for: .milliseconds(40))
+        #expect(injector.retries == retries, "the take ended, so no more looking")
+        #expect(field.replaced.isEmpty)
+    }
+
+    @Test func aPasswordFieldFoundAfterTheAskShowsTheCard() async {
+        let field = SimulatedTextField("Note: ")
+        let session = FakeSession()
+        let hud = FakeHUD()
+        session.textToReturn = "the lighthouse keeper waved"
+        let (coordinator, injector) = typingCoordinator(field, session: session, hud: hud)
+        injector.fieldReadyAfterRetries = 1
+        injector.retryStop = .secure
+        coordinator.begin()
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(40))
+        #expect(hud.cards.last == true)
+        #expect(hud.notes.last == "Secure input is on")
+        await coordinator.finish()
+        #expect(field.replaced.isEmpty)
+        #expect(injector.delivered == ["the lighthouse keeper waved"])
     }
 
     @Test func typesSettledWordsThenReplacesThemWithTheFinishedTextOnce() async {
@@ -348,9 +448,30 @@ struct LiveInlineTests {
     /// A write the app accepted but shows only later is judged by its
     /// read-back at once: typing stops, and because the call succeeded the
     /// finished text is never pasted on top; it stays on the card with Copy.
-    @Test func aWriteAcceptedButShownLaterStopsTypingWithoutPastingOnTop() async {
+    @Test func aWriteShownAFewReadsLaterKeepsTyping() async {
         let field = SimulatedTextField("Note: ")
-        field.appliesAfterReads = 2
+        field.appliesAfterReads = 3
+        let session = FakeSession()
+        let hud = FakeHUD()
+        session.textToReturn = "the lighthouse keeper waved"
+        let (coordinator, injector) = typingCoordinator(field, session: session, hud: hud)
+        coordinator.begin()
+        await Task.yield()
+        session.emit("the light")
+        session.emit("the lighthouse")
+        #expect(field.value == "Note: the")
+        session.emit("the lighthouse keeper")
+        #expect(field.value == "Note: the lighthouse")
+        #expect(hud.cards.isEmpty, "typing went on")
+        await coordinator.finish()
+        #expect(field.value == "Note: the lighthouse keeper waved")
+        #expect(injector.delivered.isEmpty)
+        #expect(hud.offers.isEmpty)
+    }
+
+    @Test func aWriteShownTooLateStopsTypingWithoutPastingOnTop() async {
+        let field = SimulatedTextField("Note: ")
+        field.appliesAfterReads = LiveInlineSession.applyReads + 2
         let session = FakeSession()
         let hud = FakeHUD()
         session.textToReturn = "the lighthouse keeper waved"
