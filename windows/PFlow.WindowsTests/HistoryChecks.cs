@@ -19,7 +19,7 @@ internal static partial class Program
         Check("friendly time: yesterday", HistoryRow.When(now.AddDays(-1), now) == "Yesterday " + now.AddDays(-1).ToLocalTime().ToString("t"));
         Check("friendly time: a short date this year or with the year", HistoryRow.When(new DateTimeOffset(now.Year, 3, 4, 9, 12, 0, now.Offset), new DateTimeOffset(now.Year, 10, 22, 16, 6, 0, now.Offset)).StartsWith("Mar 4 ")
             && HistoryRow.When(new DateTimeOffset(now.Year - 1, 3, 4, 9, 12, 0, now.Offset), now).StartsWith("Mar 4, " + (now.Year - 1)));
-        Check("first words cut at a word with an ellipsis", HistoryRow.Words("Once upon a time in a land far, far away where the birds would fly, there was this brown little fox that used to love to eat food.") == "Once upon a time in a land far, far away where the birds would fly, there…"
+        Check("first words cut at a word with an ellipsis", HistoryRow.Words("Once upon a time in a land far, far away where the birds would fly, there was this brown little fox that used to love to eat food.") == "Once upon a time in a land far, far away where the birds would fly,…"
             && HistoryRow.Words("Short  take\nwith breaks.") == "Short take with breaks.");
         Check("status words", HistoryRow.Status("Inserted") == "Inserted" && HistoryRow.Status(InsertionTarget.PlainOnly) == "Inserted" && HistoryRow.Status(InsertionTarget.Unchecked + " Line breaks arrived as spaces.") == "Check the field"
             && HistoryRow.Status(InsertionTarget.Unconfirmed) == "Check the field" && HistoryRow.Status(InsertionTarget.Unreachable) == "Kept" && HistoryRow.Status(InsertionTarget.SavedToHistory) == "Kept" && HistoryRow.Status(InsertionTarget.NothingLanded) == "Kept");
