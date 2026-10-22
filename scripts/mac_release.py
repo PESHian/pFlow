@@ -62,8 +62,9 @@ def sign_for_testing(app):
     run('codesign', '--verify', '--deep', '--strict', app)
     run('codesign', '--verify', '-R=' + TESTING_REQUIREMENT.split('=> ', 1)[1], app)
     result = subprocess.run(['codesign', '--display', '-r-', str(app)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    # codesign prints a bundle's requirements as "# designated => ..." comment lines.
-    lines = [line.lstrip('# ').strip() for line in (result.stderr or b'').decode(errors='replace').splitlines()]
+    # The requirement text goes to stdout ("-r-"); -d prints a bundle's as "# designated => ..." lines.
+    output = (result.stdout or b'') + b'\n' + (result.stderr or b'')
+    lines = [line.lstrip('# ').strip() for line in output.decode(errors='replace').splitlines()]
     if result.returncode or TESTING_REQUIREMENT not in lines:
         raise ValueError('Testing app does not carry the stable designated requirement')
 

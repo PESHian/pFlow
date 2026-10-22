@@ -33,13 +33,15 @@ class MacReleaseTests(unittest.TestCase):
         self.calls = []
         self.status = 'Accepted'
         self.toolFails = lambda args: False
-        self.details = b'flags=0x10000(runtime)\nTimestamp=Oct 19, 2026\n# designated => identifier "com.pesh.Yap"\n'
+        self.details = b'flags=0x10000(runtime)\nTimestamp=Oct 19, 2026\n'
+        self.requirement = b'designated => identifier "com.pesh.Yap"\n'
         self.entitlements = {}
         self.gatekeeper = b'assessments enabled\n'
         self.stage = None
         self.addCleanup(patch.stopall)
         patch.object(release, 'run', side_effect=self.command).start()
-        patch.object(release.subprocess, 'run', side_effect=lambda *a, **kw: SimpleNamespace(returncode=0, stderr=self.details)).start()
+        patch.object(release.subprocess, 'run', side_effect=lambda *a, **kw: SimpleNamespace(
+            returncode=0, stdout=self.requirement if '-r-' in a[0] else b'', stderr=self.details)).start()
 
     def command(self, *values):
         args = tuple(map(str, values)); self.calls.append(args)
@@ -176,7 +178,7 @@ class MacReleaseTests(unittest.TestCase):
         self.assertFalse(any('--options' in a or '--timestamp' in a for a in self.calls))
 
     def test_testing_refuses_an_app_whose_requirement_is_still_its_cdhash(self):
-        self.details = b'# designated => cdhash H"feeda4387f57f9190a157e7ba001bd12ac7bc9bd"\n'
+        self.requirement = b'designated => cdhash H"feeda4387f57f9190a157e7ba001bd12ac7bc9bd"\n'
         with self.assertRaises(ValueError): self.package(testing=True)
         self.assertFalse(list(self.dist.glob('*.dmg')))
 
