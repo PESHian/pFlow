@@ -34,7 +34,7 @@ public static class LiveTextModes
     public static bool ShowsCard(string? value, bool typingLive) => false;
 
     public static string Note(string? value) => Resolve(value) switch {
-        TypeInApp => "Types your words into the app as you talk, a little behind, and puts in the finished text when you stop. If you move the cursor, type, or switch apps, typing stops and the finished text is saved in History. Apps that don't allow this, such as web browsers, show the preview instead. Template styles such as bold arrive as plain text. Words show about a second behind, and the finished text can differ a little from the preview.",
+        TypeInApp => "Types your words into the app as you talk, a little behind, and puts in the finished text when you stop. If you move the cursor, type, or switch apps, typing stops and the finished text is saved in History. If the words cannot go in, a card with Copy shows them when you stop. Template styles such as bold arrive as plain text.",
         _ => "Words appear in your app after you stop talking."
     };
 }

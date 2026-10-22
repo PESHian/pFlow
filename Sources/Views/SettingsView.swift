@@ -457,10 +457,10 @@ struct LiveTextPicker: View {
         case .off:
             return "Words appear in your app after you stop talking."
         case .typeInApp:
-            note = "Types your words into the app as you talk, a little behind, and puts in the finished text when you stop. If you move the cursor, type, or switch apps, typing stops and the finished text is saved in History. Apps that don't allow this show the preview instead. Template styles such as bold arrive as plain text."
+            note = "Types your words into the app as you talk, a little behind, and puts in the finished text when you stop. If you move the cursor, type, or switch apps, typing stops and the finished text is saved in History. If the words cannot go in, a card with Copy shows them when you stop. Template styles such as bold arrive as plain text."
         }
         if engine == .whisper {
-            note += " With Whisper, words show about a second behind, and the finished text can differ a little from the preview."
+            note += " With Whisper, words show about a second behind, and the finished text can differ a little from the words typed as you talk."
         }
         return note
     }

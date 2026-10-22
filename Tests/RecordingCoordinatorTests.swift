@@ -356,6 +356,7 @@ struct RecordingCoordinatorTests {
         #expect(history.saved == ["hello world"])
         #expect(coordinator.lastOutcome == .savedToHistory)
         #expect(hud.phases.last == .savedToHistory)
+        #expect(hud.offers == ["hello world"] && hud.livePreview, "the words that did not go in are offered with Copy")
         #expect(!hud.phases.contains(.copied))
         #expect(coordinator.state == .idle)
     }

@@ -436,8 +436,12 @@ final class RecordingCoordinator {
             case .unconfirmed:
                 hud.hide(after: 0)
             case .savedToHistory:
+                // The words did not go in: the card keeps them with Copy, so
+                // the person never has to dig them out of History.
+                hud.setLivePreview(true)
+                hud.setPartial(text)
                 hud.setPhase(.savedToHistory)
-                hud.hide(after: 3)
+                hud.offerCopy(text)
             case .leftOnClipboard, .blockedBySecureInput:
                 hud.setPhase(.copied)
                 hud.hide(after: 3)

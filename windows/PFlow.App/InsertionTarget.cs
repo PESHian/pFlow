@@ -261,7 +261,7 @@ internal sealed class InsertionTarget : IInsertionTarget
             Log("path=value field " + InsertionLog.Length(before) + " -> expected " + InsertionLog.Length(expected));
             bool applied = ApplyPlainValue(element, (ValuePattern)value, expected, start + text.Length, ValidateFocus);
             Log(applied ? "confirmed" : "not confirmed: field reads " + InsertionLog.Length(Read()));
-            return applied ? "Inserted" : Unconfirmed;
+            return applied ? "Inserted" : Unmatched(Read());
         }
         // Typed keystrokes turn a line break into Enter, which sends the message in chat apps and
         // web forms: only Win32 controls, or text without a line break, are typed. The rest is pasted.
@@ -336,6 +336,11 @@ internal sealed class InsertionTarget : IInsertionTarget
         return placed;
     }
     public const string Unconfirmed = "Insertion could not be confirmed; check the field before copying from History.";
+    /// The write went out and the field still reads exactly as before: nothing landed, so the take is not quiet.
+    public const string NothingLanded = "The app did not take the text. Your words are in History.";
+    /// A failed check means one of two things: the field changed in a way pFlow could not match
+    /// (the words are most likely there, late or restyled) or it did not change at all.
+    string Unmatched(string read) => TextProcessing.SameText(read, before) ? NothingLanded : Unconfirmed;
     /// One rule: keystrokes are safe for a Win32 control, or for text with no line break anywhere else.
     internal static bool TypingSafe(bool win32, string text) => win32 || (!text.Contains('\n') && !text.Contains('\r'));
     string Read() => ReadText(element);
@@ -353,7 +358,7 @@ internal sealed class InsertionTarget : IInsertionTarget
             if (Observed(read, expected) is { } how) { Log("confirmed (" + how + ") after " + clock.ElapsedMilliseconds + " ms"); return "Inserted"; }
         }
         Log("not confirmed after " + clock.ElapsedMilliseconds + " ms: field reads " + InsertionLog.Length(read) + ", expected " + InsertionLog.Length(expected));
-        return Unconfirmed;
+        return Unmatched(read);
     }
     async Task<string> TypeUnicode(string text, string expected, CancellationToken cancel)
     {
