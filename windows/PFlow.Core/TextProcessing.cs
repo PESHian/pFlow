@@ -47,11 +47,14 @@ public static class TextProcessing
         return string.Concat(parts);
     }
     // Whisper text output wraps recognition segments; these are soft boundaries, not paragraphs.
+    // Each segment's text starts with a space, so the join collapses runs of spaces to one
+    // ("this  brown" was two segments); paragraph breaks and list lines stay as they are.
     public static string JoinRecognitionLines(string text)
     {
         text = text.Replace("\r\n", "\n");
         if (Regex.IsMatch(text, @"(?m)^[ \t]*(?:[-*•]|\d+[.)]|#{1,6}|```)[ \t]+")) return text;
-        return Regex.Replace(text, @"(?<!\n)\n(?!\n)", " ");
+        text = Regex.Replace(text, @"(?<!\n)\n(?!\n)", " ");
+        return Regex.Replace(Regex.Replace(text, @"[ \t]+", " "), @"[ \t]*\n[ \t]*", "\n");
     }
     // Conservative port of DictationParagraphs: change whitespace only, between complete sentences.
     public static string Paragraphs(string text)

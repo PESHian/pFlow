@@ -24,6 +24,8 @@ private let longTakeModel = ProcessInfo.processInfo.environment["PFLOW_WHISPER_M
     @Test func segmentLinesBecomeOneParagraph() {
         let output = "The ferry left at dawn.\nGulls followed it out.\n\n  The harbor went quiet.  \n"
         #expect(WhisperTranscriber.finishedText(output) == "The ferry left at dawn. Gulls followed it out. The harbor went quiet.")
+        // whisper-cli writes each segment with a leading space; the join must not keep it ("this  brown").
+        #expect(WhisperTranscriber.finishedText(" there was this\n brown little fox\n and he stunk\n like all sin.\n") == "there was this brown little fox and he stunk like all sin.")
         #expect(WhisperTranscriber.finishedText("Only one line.\n") == "Only one line.")
         #expect(WhisperTranscriber.finishedText("\n \n") == "")
     }

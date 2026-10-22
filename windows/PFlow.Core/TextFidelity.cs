@@ -4,26 +4,46 @@ namespace PFlow.Core;
 
 public static class TextFidelity
 {
-    static string[] Tokens(string text, string pattern) => Regex.Matches(text, pattern, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Select(m => m.Value.ToLowerInvariant()).ToArray();
     public static bool RequiresExactCleanup(string text) => Regex.IsMatch(text, @"[^\p{L}\p{M}\s.,]");
+    /// Sentence punctuation an edit may add, move or drop. Any other symbol (quotes, signs,
+    /// operators, currency, emoji) binds meaning to its neighbours and must stay where it was.
+    const string SentencePunctuation = ".,;:!?";
+    /// The words and the guarded symbols of a text, in order: a word is letters, digits and
+    /// apostrophes; a sentence mark is guarded when it sits inside or in front of a number
+    /// ("14:30", "1,000", "3.5", ".5"), where it is part of the value, not of the sentence.
+    static string[] Atoms(string value)
+    {
+        var fillers = new HashSet<string>(["uh", "um", "uhm", "umm", "hmm", "uhhh"]);
+        var atoms = new List<string>(); var word = new System.Text.StringBuilder();
+        void EndWord() { if (word.Length > 0) { string w = word.ToString().ToLowerInvariant(); if (!fillers.Contains(w)) atoms.Add(w); word.Clear(); } }
+        for (int i = 0; i < value.Length; i++) {
+            char c = value[i] == '’' ? '\'' : value[i];
+            if (char.IsLetterOrDigit(c) || c == '\'' || char.GetUnicodeCategory(c) is System.Globalization.UnicodeCategory.NonSpacingMark or System.Globalization.UnicodeCategory.SpacingCombiningMark) { word.Append(c); continue; }
+            EndWord();
+            if (char.IsWhiteSpace(c)) continue;
+            bool nextDigit = i + 1 < value.Length && char.IsDigit(value[i + 1]), previousDigit = i > 0 && char.IsDigit(value[i - 1]);
+            bool previousBlank = i == 0 || char.IsWhiteSpace(value[i - 1]);
+            if (SentencePunctuation.Contains(c) && !(nextDigit && (previousDigit || previousBlank))) continue;
+            atoms.Add(c.ToString());
+        }
+        EndWord(); return atoms.ToArray();
+    }
     public static bool CleanupIsFaithful(string source, string result)
     {
         if (string.IsNullOrWhiteSpace(result)) return false;
-        // Keep risky blocks exactly: punctuation can bind a value or quote to a particular word.
-        if (RequiresExactCleanup(source) || RequiresExactCleanup(result)) return string.Equals(source, result, StringComparison.Ordinal);
-        var fillers = new HashSet<string>(["uh", "um", "uhm", "umm", "hmm", "uhhh"]);
         var protectedWords = new HashSet<string>(["no", "not", "never", "cannot", "without", "can't", "won't", "don't", "didn't", "wasn't", "isn't"]);
-        string[] Words(string value) => Tokens(value.Replace('’', '\''), @"[\p{L}\p{M}\p{N}']+").Where(x => !fillers.Contains(x)).ToArray();
-        var original = Words(source); var edited = Words(result);
-        // Only punctuation/case, fillers and removal of adjacent repeats are allowed.
-        // Each run stays in order and cannot gain words or lose a negation.
+        var original = Atoms(source); var edited = Atoms(result);
+        // Only punctuation/case, fillers and removal of adjacent repeated words are allowed.
+        // Each run stays in order and cannot gain words or lose a negation; a number or a
+        // guarded symbol is never collapsed ("five five" may be 55).
         int a = 0, b = 0;
         while (a < original.Length && b < edited.Length) {
             if (original[a] != edited[b]) return false;
             string word = original[a]; int sourceRun = 0, editedRun = 0;
             while (a < original.Length && original[a] == word) { a++; sourceRun++; }
             while (b < edited.Length && edited[b] == word) { b++; editedRun++; }
-            if (editedRun > sourceRun || (protectedWords.Contains(word) && editedRun != sourceRun)) return false;
+            bool exact = protectedWords.Contains(word) || word.Any(char.IsDigit) || !char.IsLetter(word[0]);
+            if (editedRun > sourceRun || (exact && editedRun != sourceRun)) return false;
         }
         if (a != original.Length || b != edited.Length) return false;
         if (Regex.Matches(source, @"\n\s*\n").Count > 0 && Regex.Matches(result, @"\n\s*\n").Count != Regex.Matches(source, @"\n\s*\n").Count) return false;

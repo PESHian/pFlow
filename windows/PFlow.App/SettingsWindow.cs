@@ -65,7 +65,8 @@ internal sealed partial class SettingsWindow : Window
         return null;
     }
     internal static ScrollViewer Scroll(UIElement content) => Pannable(new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = content });
-    internal void OpenHistoryPage() => ShowPage("View history", History, true);
+    /// History is built fresh each time it opens, so it always shows the latest takes.
+    internal void OpenHistoryPage() => ShowPage("View history", History, false);
     void ShowHome() { cancelKeySelection?.Invoke(); page.Content = home; }
     void ShowPage(string title, Func<UIElement> create, bool cache)
     {
@@ -119,7 +120,7 @@ internal sealed partial class SettingsWindow : Window
         StackPanel p;
         Navigate(root, "Templates", "Choose a report format or use plain dictation.", Templates);
         Navigate(root, "Usage statistics", "Daily words, speaking pace, and activity by app.", Statistics, false);
-        Navigate(root, "View history", "Browse and copy past transcripts.", History);
+        Navigate(root, "View history", "Browse and copy past transcripts.", History, cache: false);
         Navigate(root, "Dictionary", "Teach pFlow names and words it often gets wrong.", Dictionary);
         p = Section(root, "Shortcut"); p.Children.Add(Text("Activation key"));
         var activation = new ComboBox { ItemsSource = KeyLabels.Options(store.Preferences.ActivationKey), DisplayMemberPath = "Name", SelectedValuePath = "Id", SelectedValue = store.Preferences.ActivationKey, Margin = new Thickness(0, 0, 0, 8) };
@@ -208,7 +209,7 @@ internal sealed partial class SettingsWindow : Window
         if (LocalTextModel.IsSupported) {
         Check(p, "Use the local text model for reports and optional AI cleanup", store.Preferences.UseLocalAI, x => store.Preferences.UseLocalAI = x);
         Check(p, "AI cleanup (slower, English)", store.Preferences.UseAICleanup, x => store.Preferences.UseAICleanup = x);
-        p.Children.Add(Text("English cleanup removes filler words immediately. Other languages keep their recognized words. AI cleanup is optional, English only, and can take up to eight seconds. Blocks with numbers, quotes, contractions, or symbols keep their original words. Reports use your sentences."));
+        p.Children.Add(Text("English cleanup removes filler words immediately. Other languages keep their recognized words. AI cleanup is optional and English only: the local text model adds sentences, commas and capitals and keeps every word and number as spoken; it can take about as long as the recording. When it cannot finish, your words are kept as recognized and the processing line below says so. Reports use your sentences."));
         p.Children.Add(Text(textModel.FilesPresent ? "Local text model installed. Processing stays on this PC." : "Local AI is unavailable until its model is installed. Plain dictation still works."));
         p.Children.Add(Button("Download or repair text model (2.5 GB)", DownloadTextModel));
         } else p.Children.Add(Text(LocalTextModel.UnsupportedReason));
@@ -292,12 +293,39 @@ internal sealed partial class SettingsWindow : Window
     }
     UIElement History()
     {
-        var p = Panel(); var list = Pannable(new ListBox { Height = 180, DisplayMemberPath = "CreatedAt", ItemsSource = store.History.ToList() }); p.Children.Add(list);
-        var text = Pannable(new TextBox { AcceptsReturn = true, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, Height = 230, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }); p.Children.Add(text);
-        var result = Text(""); p.Children.Add(result);
-        list.SelectionChanged += (_, _) => { if (list.SelectedItem is Transcript t) { text.Text = t.Text; result.Text = t.InsertionStatus; } };
-        p.Children.Add(Button("Copy selected dictation", () => { if (list.SelectedItem is Transcript t) Clipboard.SetText(t.Text); }));
-        p.Children.Add(Button("Delete selected dictation", () => { if (list.SelectedItem is Transcript t) { store.Delete(t.Id); list.ItemsSource = store.History.ToList(); text.Clear(); } }));
-        p.Children.Add(Button("Refresh History", () => list.ItemsSource = store.History.ToList())); return p;
+        var list = Pannable(new ListBox { MinHeight = 120, Margin = new Thickness(0, 0, 0, 12) }); System.Windows.Automation.AutomationProperties.SetName(list, "Past dictations");
+        var empty = Text("No dictations yet. Your takes appear here."); empty.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); empty.Margin = new Thickness(10, 8, 10, 8); empty.VerticalAlignment = VerticalAlignment.Top;
+        var text = Pannable(new TextBox { AcceptsReturn = true, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MinHeight = 120, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }); System.Windows.Automation.AutomationProperties.SetName(text, "Dictation text");
+        var result = Text(""); result.FontSize = 12; result.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); result.Margin = new Thickness(0, 8, 0, 8);
+        var copy = Button("Copy", () => { if (list.SelectedItem is ListBoxItem { Tag: Transcript t }) Clipboard.SetText(t.Text); }); copy.Margin = new Thickness(0, 0, 10, 0); copy.IsEnabled = false;
+        var delete = Button("Delete", () => { }); delete.Margin = new Thickness(0); delete.IsEnabled = false;
+        void Refresh() {
+            list.Items.Clear();
+            foreach (var t in store.History) {
+                var row = new StackPanel();
+                var when = Text(HistoryRow.When(t.CreatedAt, DateTimeOffset.Now) + "  ·  " + HistoryRow.Status(t.InsertionStatus)); when.FontSize = 12; when.Margin = new Thickness(0, 0, 0, 2); when.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); row.Children.Add(when);
+                var words = Text(HistoryRow.Words(t.Text)); words.TextWrapping = TextWrapping.NoWrap; words.TextTrimming = TextTrimming.CharacterEllipsis; words.Margin = new Thickness(0); row.Children.Add(words);
+                var item = new ListBoxItem { Content = row, Tag = t }; System.Windows.Automation.AutomationProperties.SetName(item, when.Text + " — " + words.Text); list.Items.Add(item);
+            }
+            empty.Visibility = list.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            text.Clear(); result.Text = ""; copy.IsEnabled = delete.IsEnabled = false;
+        }
+        list.SelectionChanged += (_, _) => {
+            if (list.SelectedItem is ListBoxItem { Tag: Transcript t }) { text.Text = t.Text; result.Text = t.InsertionStatus; copy.IsEnabled = delete.IsEnabled = true; }
+        };
+        delete.Click += (_, _) => { if (list.SelectedItem is ListBoxItem { Tag: Transcript t }) { store.Delete(t.Id); Refresh(); } };
+        Refresh();
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal }; buttons.Children.Add(copy); buttons.Children.Add(delete);
+        // The list and the text share the window's height; the page scrolls only below MinHeight.
+        var grid = new Grid();
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(2, GridUnitType.Star) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3, GridUnitType.Star) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        var top = new Grid(); top.Children.Add(list); top.Children.Add(empty);
+        Grid.SetRow(top, 0); Grid.SetRow(text, 1); Grid.SetRow(result, 2); Grid.SetRow(buttons, 3);
+        grid.Children.Add(top); grid.Children.Add(text); grid.Children.Add(result); grid.Children.Add(buttons);
+        var frame = new Border { Child = grid, Padding = new Thickness(20), MinHeight = 440 };
+        frame.SetBinding(FrameworkElement.HeightProperty, new System.Windows.Data.Binding("ViewportHeight") { RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.FindAncestor, typeof(ScrollViewer), 1) });
+        return frame;
     }
 }

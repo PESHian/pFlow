@@ -119,6 +119,12 @@ void CapsuleSpacingChecks()
     Check("recognition pause segments have separators", TextProcessing.JoinRecognitionLines("First.\nSecond.\r\nThird.") == "First. Second. Third.");
     Check("recognition blank paragraphs preserved", TextProcessing.JoinRecognitionLines("First.\n\nNext.") == "First.\n\nNext.");
     Check("recognition lists preserved", TextProcessing.JoinRecognitionLines("1. First.\n2. Next.") == "1. First.\n2. Next.");
+    // Whisper segment lines start with a space; the owner saw "this  brown" and "sea  of pee" at every join.
+    Check("segment joins never double a space", TextProcessing.JoinRecognitionLines("there was this\n brown little fox\n and he stunk\n like all sin.") == "there was this brown little fox and he stunk like all sin.");
+    Check("segment joins keep paragraph breaks and collapse tabs", TextProcessing.JoinRecognitionLines("First part. \n\n Second\tpart.\n continues.") == "First part.\n\nSecond part. continues.");
+    var merger = new WhisperLiveMerger();
+    merger.Apply(new WhisperWindow(0, 3000, [new WhisperWindowSegment(0, 1500, " there was this", 0), new WhisperWindowSegment(1500, 3000, " brown little fox", 0)]));
+    Check("live words join segments with one space", merger.Text == "there was this brown little fox");
     string sentence = "Morgan checked the blue bicycle near the front gate and recorded every visible detail in the fictional exercise. ";
     string account = string.Concat(Enumerable.Repeat(sentence, 4)) + "Regarding the witness, Alex described the silver lock and did not guess who left it there. " + string.Concat(Enumerable.Repeat(sentence, 4));
     string grouped = TextProcessing.Paragraphs(account);
@@ -238,7 +244,20 @@ Check("cleanup rejects moved quotation", !TextFidelity.CleanupIsFaithful("Morgan
 Check("cleanup rejects introduced operator", !TextFidelity.CleanupIsFaithful("Morgan saw Alex.", "Morgan < saw Alex."));
 Check("cleanup rejects introduced quotes", !TextFidelity.CleanupIsFaithful("Morgan saw Alex.", "Morgan saw \"Alex\"."));
 Check("cleanup keeps risky blocks exactly", TextFidelity.CleanupIsFaithful("At - 12, Morgan said \"five\" 🙂.", "At - 12, Morgan said \"five\" 🙂."));
-Check("cleanup intentionally rejects numeric stammer repair", !TextFidelity.CleanupIsFaithful("The server server stopped at 14:30.", "The server stopped at 14:30."));
+Check("cleanup permits stammer repair beside an intact time", TextFidelity.CleanupIsFaithful("The server server stopped at 14:30.", "The server stopped at 14:30."));
+Check("cleanup never collapses a repeated number", !TextFidelity.CleanupIsFaithful("Room five five, by the stairs 5 5.", "Room five five, by the stairs 5."));
+// The model now sees takes with numbers, contractions and symbols; punctuation and case may change, nothing else.
+Check("cleanup accepts punctuation and case around numbers", TextFidelity.CleanupIsFaithful("so next year in 4040 bc jimmy dean was born in a sea of pee", "So next year in 4040 BC, Jimmy Dean was born in a sea of pee."));
+Check("cleanup accepts a comma in far far away with a contraction", TextFidelity.CleanupIsFaithful("far far away we didn't stop at 4:30", "Far, far away, we didn't stop at 4:30."));
+Check("cleanup accepts a period after a number at the end", TextFidelity.CleanupIsFaithful("the total was 40 then we left", "The total was 40. Then we left."));
+Check("cleanup rejects a changed number beside punctuation", !TextFidelity.CleanupIsFaithful("call me at 4:30 tomorrow", "Call me at 4:31 tomorrow."));
+Check("cleanup rejects a lost apostrophe", !TextFidelity.CleanupIsFaithful("we didn't go", "We did not go."));
+Check("cleanup rejects a dropped currency sign", !TextFidelity.CleanupIsFaithful("it cost $40 at the store", "It cost 40 at the store."));
+Check("cleanup rejects a thousands separator turned into words", !TextFidelity.CleanupIsFaithful("about 1,000 people came", "About 1 000 people came."));
+Check("cleanup keeps a decimal inside a number", TextFidelity.CleanupIsFaithful("dose was 3.5 mg then rest", "Dose was 3.5 mg. Then rest."));
+Check("cleanup rejects a dropped percent", !TextFidelity.CleanupIsFaithful("maybe 40% done", "Maybe 40 done."));
+Check("cleanup accepts filler removal with symbols present", TextFidelity.CleanupIsFaithful("um the price is $5 uh each", "The price is $5 each."));
+Check("cleanup accepts a question mark", TextFidelity.CleanupIsFaithful("are you coming at 5", "Are you coming at 5?"));
 Check("cleanup rejects sign loss", !TextFidelity.CleanupIsFaithful("Temperature was -12 degrees.", "Temperature was 12 degrees."));
 Check("cleanup rejects positive sign loss", !TextFidelity.CleanupIsFaithful("The balance was +12.", "The balance was 12."));
 Check("cleanup rejects changed decimal", !TextFidelity.CleanupIsFaithful("Dose was .5 liters.", "Dose was 5 liters."));

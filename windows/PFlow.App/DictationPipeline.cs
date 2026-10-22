@@ -12,12 +12,16 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         var clock = Stopwatch.StartNew();
         try { return await action(); } finally { Timing?.Invoke(name, clock.Elapsed.TotalMilliseconds); }
     }
-    internal TimeSpan CleanupBudget { get; init; } = TimeSpan.FromSeconds(8);
+    /// A fixed wait for AI cleanup (the live checks); otherwise BudgetFor the take's words.
+    internal TimeSpan? CleanupBudget { get; init; }
+    /// How long AI cleanup may take: the 4B model needs about 0.1 s a word on the ARM64 test VM
+    /// (75 words in 8-10 s), so the wait grows with the take, between 8 s and a minute.
+    internal static TimeSpan BudgetFor(int words) => TimeSpan.FromSeconds(Math.Clamp(6 + 0.3 * words, 8, 60));
     internal const string CopyFailed = "Inserted, but it could not be copied to the clipboard. Copy it from History.";
     /// `Prompt` carries the words for pFlow's "couldn't type this" card, with the
     /// reason line, whenever the words did not go into the app (one rule: InsertionPrompt.Offer).
     internal readonly record struct Result(string Status, string? Notice, (string Text, string Reason)? Prompt = null);
-    internal readonly record struct Prepared(string Text, string? Rtf, int SpokenWords, bool ReportUnavailable, bool CleanupIncomplete, bool CleanupTimedOut);
+    internal readonly record struct Prepared(string Text, string? Rtf, int SpokenWords, bool ReportUnavailable, bool CleanupIncomplete, bool CleanupTimedOut, string? CleanupIssue = null);
     internal async Task<Prepared> Prepare(string audio, double seconds, string folder, Action<Phase, string?> state, CancellationToken cancel)
     {
         state(Phase.Processing, "Transcribing");
@@ -43,13 +47,18 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         if (spoken != null && !string.IsNullOrWhiteSpace(spoken.Text)) text = spoken.Text;
         if (preferences.Cleanup) text = TextProcessing.RemoveFillers(text, preferences.DictionaryTerms, preferences.Language);
         bool aiCleanup = localReady && preferences.Cleanup && preferences.UseAICleanup && TextProcessing.SupportsEnglishCleanup(preferences.Language);
+        string? cleanupIssue = null;
         if (aiCleanup) {
             state(Phase.Processing, "Cleaning up");
             using var cleanup = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-            cleanup.CancelAfter(CleanupBudget);
-            try { text = await Measure("cleanupMs", () => textModel.Cleanup(text, folder, cleanup.Token)); }
-            catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { cleanupSkipped = true; }
+            cleanup.CancelAfter(CleanupBudget ?? BudgetFor(TextProcessing.WordCount(text)));
+            var outcome = CleanupOutcome.TimedOut;
+            try { text = await Measure("cleanupMs", () => textModel.Cleanup(text, folder, cleanup.Token)); outcome = textModel.LastOutcome; cleanupIssue = textModel.LastIssue; }
+            catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { cleanupSkipped = true; cleanupIssue = LocalTextModel.TimedOutIssue; }
+            Timing?.Invoke("cleanupOutcome", (double)outcome);
         }
+        // AI cleanup is on but its model is not installed: the processing line says so.
+        else if (preferences.Cleanup && preferences.UseAICleanup && !localReady) Timing?.Invoke("cleanupOutcome", (double)CleanupOutcome.NotRun);
         if (preferences.Paragraphs) text = TextProcessing.Paragraphs(text);
         var template = spoken?.Template ?? preferences.Templates.FirstOrDefault(x => x.Id == preferences.ActiveTemplateId);
         bool unavailable = template?.NeedsAI == true;
@@ -66,7 +75,7 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         else if (template != null && !template.NeedsAI) { var formatted = RichText.Render(text, template); text = formatted.Text; rtf = formatted.Rtf; }
         cancel.ThrowIfCancellationRequested();
         return new Prepared(text, rtf, TextProcessing.WordCount(raw), unavailable,
-            aiCleanup && (cleanupSkipped || textModel.LastIssue != null), cleanupSkipped);
+            aiCleanup && (cleanupSkipped || cleanupIssue != null), cleanupSkipped, aiCleanup ? cleanupIssue : null);
     }
     internal async Task<Result> Run(string audio, double seconds, IInsertionTarget originalTarget, string folder,
         IntPtr owner, Action<Phase, string?> state, CancellationToken cancel, string? liveWords = null, LiveTyping? typing = null)
@@ -125,7 +134,7 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         state(inserted ? Phase.Inserted : kept || unconfirmed || result is InsertionTarget.SavedToHistory or InsertionTarget.Unreachable ? Phase.Saved : Phase.Failed, result);
         // Anything short of a done take is said every time; words that never went in are shown in the card to copy.
         string? notice = !inserted ? unconfirmed ? null : result : unavailable ? "Dictation inserted. AI report formatting did not finish; your words were kept."
-            : prepared.CleanupIncomplete ? "Dictation inserted. Cleanup did not finish; your original words were kept." : null;
+            : prepared.CleanupIncomplete ? "Dictation inserted. " + (prepared.CleanupIssue ?? LocalTextModel.TimedOutIssue) : null;
         return new Result(result, notice, unconfirmed ? null : InsertionPrompt.Offer(text, result, kept));
     }
 }

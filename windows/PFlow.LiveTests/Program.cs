@@ -35,7 +35,7 @@ internal static partial class Program
     static bool compactFixOnly;
     static bool waveformsOnly, waveCaptureOnly, payloadOnly, payloadSpacingOnly;
     static bool speechOnly, warmLatencyOnly, extendedLatencyOnly, insertionLatencyOnly, workerSafetyOnly, templateCatalogOnly;
-    static bool optionalAIOnly, statisticsOnly, finalPriorityOnly, touchScrollOnly, touchCapsuleOnly, chromiumOnly, chromiumColdOnly;
+    static bool cleanupModelOnly, optionalAIOnly, statisticsOnly, finalPriorityOnly, touchScrollOnly, touchCapsuleOnly, chromiumOnly, chromiumColdOnly;
     static void Check(string name, bool condition) { if (!condition) throw new Exception("FAIL: " + name); Console.WriteLine("PASS: " + name); passed++; }
     static string Normalize(string text) => text.Replace("\r\n", "\n").Replace('\r', '\n');
     [STAThread] static int Main(string[] args)
@@ -62,7 +62,7 @@ internal static partial class Program
         compactOnly = args.Contains("--compact-only");
         compactFixOnly = args.Contains("--compact-fix-only");
         waveCaptureOnly = args.Contains("--wave-capture-only"); waveformsOnly = args.Contains("--waveforms-only") || waveCaptureOnly; payloadSpacingOnly = args.Contains("--payload-spacing-only"); payloadOnly = args.Contains("--payload-only") || payloadSpacingOnly;
-        optionalAIOnly = args.Contains("--optional-ai-only");
+        optionalAIOnly = args.Contains("--optional-ai-only"); cleanupModelOnly = args.Contains("--cleanup-model");
         finalPriorityOnly = args.Contains("--final-priority"); touchScrollOnly = args.Contains("--touch-scroll"); touchCapsuleOnly = args.Contains("--touch-capsule"); chromiumOnly = args.Contains("--chromium-fields"); chromiumColdOnly = args.Contains("--chromium-cold");
         SpeedArguments(args);
         liveTextOnly = args.Contains("--live-text-only"); liveFocusOnly = args.Contains("--live-focus-only"); inlineOnly = args.Contains("--inline-only"); inlineElevatedOnly = args.Contains("--inline-elevated");
@@ -175,6 +175,7 @@ internal static partial class Program
         if (insertionLatencyOnly) { await Processing(); return; }
         if (warmLatencyOnly) { await WarmLatency(); return; }
         if (speechOnly) { await SpeechLatency(); return; }
+        if (cleanupModelOnly) { await CleanupModel(); return; }
         if (waveformsOnly) { await WaveformFrames(); return; }
         if (payloadSpacingOnly) { SpacingProviderChecks(); return; }
         if (payloadOnly) { PayloadSpacing(); return; }

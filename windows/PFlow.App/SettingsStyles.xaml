@@ -128,7 +128,11 @@
     <Setter Property="Foreground" Value="{DynamicResource PeshText}"/><Setter Property="Background" Value="{DynamicResource PeshInput}"/><Setter Property="BorderBrush" Value="{DynamicResource PeshBorder}"/><Setter Property="BorderThickness" Value="1"/><Setter Property="Padding" Value="6"/>
   </Style>
   <Style TargetType="ListBoxItem">
-    <Setter Property="Foreground" Value="{DynamicResource PeshText}"/><Setter Property="Padding" Value="10,8"/>
-    <Style.Triggers><Trigger Property="IsSelected" Value="True"><Setter Property="Background" Value="{DynamicResource PeshSelection}"/><Setter Property="Foreground" Value="{DynamicResource PeshText}"/></Trigger></Style.Triggers>
+    <Setter Property="Foreground" Value="{DynamicResource PeshText}"/><Setter Property="Background" Value="Transparent"/><Setter Property="Padding" Value="10,8"/>
+    <Setter Property="HorizontalContentAlignment" Value="Stretch"/><Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ListBoxItem">
+      <Border x:Name="shell" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" CornerRadius="8"><ContentPresenter/></Border>
+      <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="shell" Property="Background" Value="{DynamicResource PeshHover}"/></Trigger><Trigger Property="IsSelected" Value="True"><Setter TargetName="shell" Property="Background" Value="{DynamicResource PeshSelection}"/></Trigger></ControlTemplate.Triggers>
+    </ControlTemplate></Setter.Value></Setter>
   </Style>
 </ResourceDictionary>
