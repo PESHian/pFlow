@@ -39,6 +39,9 @@ protocol HUDControlling: AnyObject {
     func setLivePreview(_ on: Bool)
     func hide(after seconds: Double)
     func setActions(onConfirm: @escaping () -> Void, onCancel: @escaping () -> Void)
+    /// Keeps the card up with the finished words and a Copy button, because
+    /// pFlow could not put them in. Nothing touches the clipboard until Copy.
+    func offerCopy(_ text: String)
 }
 
 extension HUDControlling {

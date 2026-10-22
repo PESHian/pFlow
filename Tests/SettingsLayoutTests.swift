@@ -46,7 +46,7 @@ struct SettingsLayoutTests {
         )
     }
 
-    private struct Fit { let width: CGFloat; let clipped: Bool; let detail: String }
+    private struct Fit { let width: CGFloat; let contentHeight: CGFloat; let clipped: Bool; let detail: String }
 
     /// Hosts `content` the way the main window does (hosting controller in a
     /// window of this content width) and reports whether any scroll view or
@@ -67,6 +67,7 @@ struct SettingsLayoutTests {
         view.layoutSubtreeIfNeeded()
         func all(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + all($0) } }
         let scrolls = all(view).compactMap { $0 as? NSScrollView }
+        #expect(!scrolls.isEmpty, "the page must be in a scroll view for this check to mean anything")
         var detail: [String] = []
         var clipped = false
         for scroll in scrolls {
@@ -90,6 +91,7 @@ struct SettingsLayoutTests {
             try rep.representation(using: .png, properties: [:])?.write(to: url)
         }
         return Fit(width: scrolls.map { view.convert($0.bounds, from: $0).width }.max() ?? view.frame.width,
+                   contentHeight: scrolls.first?.documentView?.frame.height ?? 0,
                    clipped: clipped, detail: detail.joined(separator: "; "))
     }
 
@@ -145,6 +147,38 @@ struct SettingsLayoutTests {
                         #expect(!fit.clipped, "\(page) at \(Int(width)) \(look) \(size): \(fit.detail)")
                     }
                 }
+            }
+        }
+    }
+
+    /// The largest text size really draws larger text, so the fit checks
+    /// above exercise it: the same section is taller at the largest size.
+    @Test func largestTextSizeDrawsLargerText() throws {
+        #expect(Theme.textScale(.accessibility5) >= 2)
+        let normal = try fit(ScrollView { SettingsContent(model: Self.fixture()) }, width: Self.widths[0], look: .aqua, text: .large)
+        let largest = try fit(ScrollView { SettingsContent(model: Self.fixture()) }, width: Self.widths[0], look: .aqua, text: .accessibility5)
+        #expect(largest.contentHeight > normal.contentHeight * 1.3, "normal \(normal.contentHeight), largest \(largest.contentHeight)")
+    }
+
+    /// pFlow's windows never hide the menu bar: no presentation option is
+    /// ever set anywhere in the app, and the settings window cannot enter
+    /// full screen. (A full-screen app behind pFlow hides its own menu bar.)
+    @Test func settingsWindowNeverHidesTheMenuBar() throws {
+        let options = NSApp.presentationOptions
+        let window = WindowManager.makeWindow(title: "Fictional", size: MainWindowView.defaultSize,
+                                              minSize: MainWindowView.minimumSize, resizable: true) { Text("Fictional") }
+        defer { window.contentView = nil }
+        #expect(NSApp.presentationOptions == options)
+        #expect(window.collectionBehavior.contains(.fullScreenNone))
+        #expect(!window.collectionBehavior.contains(.fullScreenPrimary))
+        #expect(!window.styleMask.contains(.fullScreen))
+        let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .deletingLastPathComponent().appending(path: "Sources")
+        let files = try #require(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
+        for case let file as URL in files where file.pathExtension == "swift" {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for word in ["presentationOptions", "autoHideMenuBar", "toggleFullScreen", "hideMenuBar"] {
+                #expect(!text.contains(word), "\(file.lastPathComponent) must not touch the menu bar (\(word))")
             }
         }
     }

@@ -118,6 +118,7 @@ private final class TimedHUD: HUDControlling {
     func setLiveNote(_ note: String?) {}
     func hide(after seconds: Double) {}
     func setActions(onConfirm: @escaping () -> Void, onCancel: @escaping () -> Void) {}
+    func offerCopy(_ text: String) {}
 }
 
 @MainActor

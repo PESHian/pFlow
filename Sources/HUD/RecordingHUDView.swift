@@ -69,7 +69,7 @@ struct RecordingHUDView: View {
                     .font(.system(size: 11, weight: .medium))
                     .help(title)
             } else if model.phase == .typingStopped {
-                Label("Saved in History", systemImage: "clock.arrow.circlepath")
+                Label("Finished text not put in", systemImage: "exclamationmark.circle")
                     .font(.system(size: 11, weight: .medium))
                     .help(title)
             } else if model.phase == .typedTextLeft {
@@ -108,7 +108,7 @@ struct RecordingHUDView: View {
         case .liveTextKeptTyped:
             return "Speech recognition stopped early. The words already typed stay in your app, and the words so far are saved in History."
         case .passwordField: return "Dictation is off in password fields."
-        case .typingStopped: return "Typing stopped, so the finished text is saved in History. Check the words already typed."
+        case .typingStopped: return "Typing stopped, so the finished text was not put in. Copy it here; it is also in History."
         case .typedTextLeft: return "Cancelled. The app changed, so words pFlow already typed are still there."
         }
     }
@@ -147,6 +147,11 @@ private struct LivePreviewCard<Status: View>: View {
             transcript
                 .padding(.horizontal, Theme.s4)
                 .padding(.bottom, Theme.s3)
+            if model.copyOffer != nil {
+                copyRow
+                    .padding(.horizontal, Theme.s4)
+                    .padding(.bottom, Theme.s3)
+            }
         }
         .frame(width: model.previewMaxWidth)
         .contentShape(Rectangle())
@@ -190,6 +195,26 @@ private struct LivePreviewCard<Status: View>: View {
         }
     }
 
+    /// The finished words pFlow could not put in: Copy writes them to the
+    /// clipboard once, on press; close dismisses the card. The panel never
+    /// takes focus, so the app the person was in keeps it.
+    private var copyRow: some View {
+        HStack(spacing: Theme.s2) {
+            Text(title)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: Theme.s2)
+            Button(model.copied ? "Copied" : "Copy") { model.onCopy?() }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.accent)
+                .controlSize(.regular)
+                .accessibilityLabel(model.copied ? "Copied" : "Copy the finished text")
+            HUDButton(systemName: "xmark", tint: .secondary) { model.onClose?() }
+                .accessibilityLabel("Close")
+        }
+    }
+
     private var caption: String {
         if model.phase == .confirmCancel { return title }
         return model.liveNote ?? "Listening"
@@ -212,6 +237,7 @@ private struct LivePreviewCard<Status: View>: View {
             .overlay(alignment: .bottomLeading) {
                 Text(model.partial.isEmpty ? placeholder : model.partial)
                     .font(textFont)
+                    .textSelection(.enabled)
                     .foregroundStyle(model.partial.isEmpty ? .secondary : .primary)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)

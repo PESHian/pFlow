@@ -51,9 +51,51 @@ struct SectionLabel: View {
     init(_ text: String) { self.text = text }
     var body: some View {
         Text(text.uppercased())
-            .font(.system(size: 10, weight: .medium, design: .monospaced))
+            .peshText(10, .medium, design: .monospaced)
             .tracking(2)
             .foregroundStyle(.tertiary)
+    }
+}
+
+extension Theme {
+    /// How much larger the person asked text to be (System Settings >
+    /// Accessibility > Display > Text size, per app). The page's point sizes
+    /// are multiplied by this, so every row must still fit at the largest.
+    static func textScale(_ size: DynamicTypeSize) -> CGFloat {
+        switch size {
+        case .xSmall: 0.85
+        case .small: 0.9
+        case .medium: 0.95
+        case .large: 1
+        case .xLarge: 1.1
+        case .xxLarge: 1.2
+        case .xxxLarge: 1.3
+        case .accessibility1: 1.45
+        case .accessibility2: 1.6
+        case .accessibility3: 1.8
+        case .accessibility4: 2
+        case .accessibility5: 2.2
+        @unknown default: 1
+        }
+    }
+}
+
+/// A point size that follows the person's text size setting.
+private struct ScaledText: ViewModifier {
+    let size: CGFloat
+    let weight: Font.Weight
+    let design: Font.Design
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    func body(content: Content) -> some View {
+        content.font(.system(size: size * Theme.textScale(typeSize), weight: weight, design: design))
+    }
+}
+
+extension View {
+    /// Text at `size` points at the normal text size, larger when the person asked for larger text.
+    func peshText(_ size: CGFloat, _ weight: Font.Weight = .regular, design: Font.Design = .default) -> some View {
+        modifier(ScaledText(size: size, weight: weight, design: design))
     }
 }
 
@@ -68,7 +110,7 @@ struct ChoiceTile: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 11, weight: .medium))
+                .peshText(11, .medium)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(10)
@@ -86,7 +128,7 @@ struct ChoiceTile: View {
 struct PrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .semibold))
+            .peshText(13, .semibold)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 9)
             .foregroundStyle(Color(nsColor: .windowBackgroundColor))
@@ -100,7 +142,7 @@ struct PrimaryButtonStyle: ButtonStyle {
 struct GhostButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 13, weight: .medium))
+            .peshText(13, .medium)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 9)
             .foregroundStyle(.primary)

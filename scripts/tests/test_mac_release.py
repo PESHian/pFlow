@@ -34,14 +34,12 @@ class MacReleaseTests(unittest.TestCase):
         self.status = 'Accepted'
         self.toolFails = lambda args: False
         self.details = b'flags=0x10000(runtime)\nTimestamp=Oct 19, 2026\n'
-        self.requirement = b'designated => identifier "com.pesh.Yap"\n'
         self.entitlements = {}
         self.gatekeeper = b'assessments enabled\n'
         self.stage = None
         self.addCleanup(patch.stopall)
         patch.object(release, 'run', side_effect=self.command).start()
-        patch.object(release.subprocess, 'run', side_effect=lambda *a, **kw: SimpleNamespace(
-            returncode=0, stdout=self.requirement if '-r-' in a[0] else b'', stderr=self.details)).start()
+        patch.object(release.subprocess, 'run', side_effect=lambda *a, **kw: SimpleNamespace(returncode=0, stderr=self.details)).start()
 
     def command(self, *values):
         args = tuple(map(str, values)); self.calls.append(args)
@@ -166,21 +164,44 @@ class MacReleaseTests(unittest.TestCase):
         self.assertFalse(any(a[0] == 'lipo' for a in self.calls))
         self.assertFalse(list(self.dist.glob('*.dmg')))
 
-    def test_testing_app_is_signed_with_the_stable_requirement(self):
-        self.package(testing=True)
-        signing = [a for a in self.calls if a[:3] == ('codesign', '--force', '--sign')]
-        self.assertEqual(len(signing), 1)
-        self.assertEqual(signing[0][3], '-', 'ad-hoc, never an identity')
-        self.assertIn('--requirements', signing[0])
-        self.assertIn('=designated => identifier "com.pesh.Yap"', signing[0])
-        self.assertTrue(signing[0][-1].endswith('pFlow by Pesh.app'))
-        self.assertIn(('codesign', '--verify', '-R=identifier "com.pesh.Yap"', signing[0][-1]), self.calls)
-        self.assertFalse(any('--options' in a or '--timestamp' in a for a in self.calls))
+    def requirements_set_by(self, calls):
+        found = []
+        for args in calls:
+            if args[0] != 'codesign': continue
+            for index, arg in enumerate(args):
+                if arg in ('--requirements', '-r') and index + 1 < len(args):
+                    found.append(args[index + 1])
+                elif arg.startswith('--requirements=') or arg.startswith('-r='):
+                    found.append(arg.split('=', 1)[1])
+        return found
 
-    def test_testing_refuses_an_app_whose_requirement_is_still_its_cdhash(self):
-        self.requirement = b'designated => cdhash H"feeda4387f57f9190a157e7ba001bd12ac7bc9bd"\n'
-        with self.assertRaises(ValueError): self.package(testing=True)
-        self.assertFalse(list(self.dist.glob('*.dmg')))
+    def test_no_build_path_signs_with_a_requirement_lacking_a_certificate_anchor(self):
+        # A designated requirement without an anchor (for example identifier-only) would
+        # let any local app signed with the same identifier inherit pFlow's privacy grants.
+        self.package(testing=True)
+        testing = list(self.calls); self.calls.clear()
+        self.package()
+        for name, calls in (('testing', testing), ('production', self.calls)):
+            with self.subTest(path=name):
+                signing = [a for a in calls if a[0] == 'codesign' and '--sign' in a]
+                self.assertEqual(len(signing), 0 if name == 'testing' else len(signing) or 1, 'testing keeps the build signature as is')
+                if name == 'production': self.assertGreaterEqual(len(signing), 3)
+                for requirement in self.requirements_set_by(calls):
+                    self.assertIn('anchor', requirement, f'{name}: {requirement}')
+                self.assertTrue(any(a[:4] == ('codesign', '--verify', '--deep', '--strict') for a in calls))
+
+    def test_no_build_file_writes_a_designated_requirement_without_an_anchor(self):
+        root = SCRIPTS.parent
+        files = [*root.glob('scripts/*.py'), *root.glob('scripts/*.sh'), *root.glob('*.sh'), root / 'project.yml',
+                 *root.glob('.github/workflows/*.yml')]
+        scanned = []
+        for path in files:
+            if not path.is_file(): continue
+            scanned.append(path.name)
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                if 'designated =>' in line or 'OTHER_CODE_SIGN_FLAGS' in line or '--requirements' in line:
+                    self.assertIn('anchor', line, f'{path.relative_to(root)}:{number}: {line.strip()}')
+        self.assertIn('mac_release.py', scanned); self.assertIn('project.yml', scanned)
 
     def test_testing_removes_stale_receipt_and_never_notarizes(self):
         self.dist.mkdir()

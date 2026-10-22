@@ -14,6 +14,21 @@ final class HUDController: HUDControlling {
         model.onCancel = onCancel
     }
 
+    func offerCopy(_ text: String) {
+        hideTask?.cancel()
+        model.partial = text
+        model.copyOffer = text
+        model.copied = false
+        model.onCopy = { [weak self] in
+            guard let self, let words = model.copyOffer else { return }
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(words, forType: .string)
+            model.copied = true
+        }
+        model.onClose = { [weak self] in self?.hide(after: 0) }
+    }
+
     // Built ahead of time: creating it on first use rendered an unlaid-out window for a frame — a flicker before "Listening" appeared.
     func prepare() {
         guard panel == nil else { return }
@@ -30,6 +45,8 @@ final class HUDController: HUDControlling {
         model.device = device
         model.partial = ""
         model.liveNote = nil
+        model.copyOffer = nil
+        model.copied = false
         model.livePreview = livePreview
         model.colorScheme = AppearanceSettings.shared.mode.colorScheme
         model.level = 0
@@ -103,6 +120,8 @@ final class HUDController: HUDControlling {
     private func close() {
         panel?.orderOut(nil)
         model.partial = ""
+        model.copyOffer = nil
+        model.copied = false
         model.liveNote = nil
     }
 

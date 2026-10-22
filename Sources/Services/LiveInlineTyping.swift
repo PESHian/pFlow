@@ -70,7 +70,9 @@ final class LiveInlineSession {
     }
 
     func finalize(_ text: String) -> LiveInlineFinal {
-        if ownership.stopped != nil, !ownership.touched { return .notTyped }
+        // Nothing of pFlow's is in the field, so the finished text goes in
+        // exactly as in Preview mode, whatever stopped the typing.
+        if !ownership.touched { return .notTyped }
         if let stop = perform(ownership.finalize(text: text, observed: field.state())) { return .kept(stop) }
         return .applied
     }

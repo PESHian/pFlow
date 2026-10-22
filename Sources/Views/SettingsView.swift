@@ -146,7 +146,7 @@ struct SettingsContent: View {
             SectionLabel("Shortcut")
             Card(padding: Theme.s3) {
                 Text("Hold Right Command to dictate. Release to insert. Double-tap for continuous recording; tap again to finish.")
-                    .font(.system(size: 13))
+                    .peshText(13)
             }
         }
     }
@@ -166,9 +166,9 @@ struct SettingsContent: View {
             Card(padding: Theme.s2) {
                 HStack(spacing: Theme.s3) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Dictation language").font(.system(size: 13, weight: .medium))
+                        Text("Dictation language").peshText(13, .medium)
                         Text("Dictate in a language other than your system's.")
-                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                            .peshText(12).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: Theme.s3)
                     Picker("", selection: model.language) {
@@ -254,12 +254,12 @@ struct SettingsContent: View {
                     }
                     .disabled(!model.idle)
                     Text("On this Mac is the default. Apple Private Cloud Compute sends transcripts, template instructions, and dictionary terms to Apple. Audio stays on this Mac. Cloud processing needs internet access and has Apple usage limits.")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .peshText(12).foregroundStyle(.secondary)
                     if let reason = model.cloudUnavailableReason {
                         Text(reason + (model.intelligenceMode.wrappedValue == .privateCloud ? " Using on-device processing instead." : ""))
-                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                            .peshText(12).foregroundStyle(.secondary)
                         Link("Apple cloud access requirements", destination: URL(string: "https://developer.apple.com/private-cloud-compute/")!)
-                            .font(.system(size: 12))
+                            .peshText(12)
                     }
                 }.padding(Theme.s3)
             }
@@ -276,26 +276,26 @@ struct SettingsContent: View {
                     }
                     .disabled(!model.idle)
                     Text("Both run on this Mac. Apple Intelligence handles cleanup with either engine.")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .peshText(12).foregroundStyle(.secondary)
                     if model.engine.wrappedValue == .whisper {
                         switch model.whisper {
                         case .ready:
                             Label("Whisper is ready · works offline", systemImage: "checkmark.circle")
-                                .font(.system(size: 12)).foregroundStyle(.secondary)
+                                .peshText(12).foregroundStyle(.secondary)
                         case .downloading:
                             HStack {
                                 ProgressView().controlSize(.small)
-                                Text("Downloading and checking the model…").font(.system(size: 12))
+                                Text("Downloading and checking the model…").peshText(12)
                                 Spacer()
                                 Button("Cancel", action: model.cancelWhisperDownload)
                             }
                         case .missing:
                             Text("Whisper Small supports multiple languages. Download it once (488 MB); recordings stay on this Mac.")
-                                .font(.system(size: 12)).foregroundStyle(.secondary)
+                                .peshText(12).foregroundStyle(.secondary)
                             Button("Download Whisper model", action: model.downloadWhisper)
                         }
                         if let message = model.whisperError {
-                            Text(message).font(.system(size: 12)).foregroundStyle(.red)
+                            Text(message).peshText(12).foregroundStyle(.red)
                         }
                     }
                 }
@@ -312,9 +312,9 @@ struct SettingsContent: View {
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(model.inputName ?? "Default microphone")
-                            .font(.system(size: 13, weight: .medium))
+                            .peshText(13, .medium)
                         Text("pFlow uses your system default input automatically.")
-                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                            .peshText(12).foregroundStyle(.secondary)
                     }
                     Spacer()
                 }
@@ -329,17 +329,17 @@ struct SettingsContent: View {
         Button(action: model.reviewPermissions) {
             HStack(spacing: Theme.s3) {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 15))
+                    .peshText(15)
                     .foregroundStyle(Self.warning)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Some permissions are missing")
-                        .font(.system(size: 13, weight: .medium))
+                        .peshText(13, .medium)
                     Text("pFlow needs them to hear you and paste into other apps. Review permissions.")
-                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                        .peshText(12).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
+                    .peshText(11, .semibold)
                     .foregroundStyle(.tertiary)
             }
             .padding(Theme.s4)
@@ -359,10 +359,10 @@ struct SettingsContent: View {
     private var aboutSection: some View {
         HStack {
             Text("pFlow · by Pesh")
-                .font(.system(size: 11)).foregroundStyle(.tertiary)
+                .peshText(11).foregroundStyle(.tertiary)
             Spacer()
             Text("MIT licensed")
-                .font(.system(size: 11)).foregroundStyle(.tertiary)
+                .peshText(11).foregroundStyle(.tertiary)
         }
     }
 }
@@ -379,16 +379,16 @@ struct SettingsLinkRow: View {
         Button(action: action) {
             HStack(spacing: Theme.s3) {
                 Image(systemName: icon)
-                    .font(.system(size: 15))
+                    .peshText(15)
                     .foregroundStyle(Theme.gradient)
-                    .frame(width: 22)
+                    .frame(minWidth: 22)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.system(size: 13, weight: .medium))
-                    Text(subtitle).font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text(title).peshText(13, .medium)
+                    Text(subtitle).peshText(12).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
+                    .peshText(11, .semibold)
                     .foregroundStyle(.tertiary)
             }
             .padding(Theme.s4)
@@ -414,8 +414,8 @@ struct SettingsToggleRow: View {
     var body: some View {
         HStack(alignment: .center, spacing: Theme.s3) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 13, weight: .medium))
-                Text(subtitle).font(.system(size: 12)).foregroundStyle(.secondary)
+                Text(title).peshText(13, .medium)
+                Text(subtitle).peshText(12).foregroundStyle(.secondary)
             }
             Spacer(minLength: Theme.s3)
             Toggle(title, isOn: $isOn)
@@ -434,18 +434,19 @@ struct SettingsToggleRow: View {
 struct LiveTextPicker: View {
     @Binding var mode: LiveTextMode
     let engine: TranscriptionEngine
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.s3) {
-            HStack(spacing: 10) {
+            // Wraps to more rows when the text size makes three tiles too wide.
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 110 * Theme.textScale(typeSize)), spacing: 10)], spacing: 10) {
                 ForEach(LiveTextMode.allCases) { choice in
                     ChoiceTile(title: choice.title, selected: mode == choice) { mode = choice }
                         .accessibilityLabel("Live text: \(choice.title)")
                 }
             }
-            .fixedSize(horizontal: false, vertical: true)
             Text(note)
-                .font(.system(size: 12)).foregroundStyle(.secondary)
+                .peshText(12).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }

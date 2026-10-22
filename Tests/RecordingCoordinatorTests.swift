@@ -91,6 +91,7 @@ final class FakeHUD: HUDControlling {
     var cards: [Bool] = []
     var hidden = 0
     var hideDelays: [Double] = []
+    var offers: [String] = []
     var onConfirm: (() -> Void)?
     var onCancel: (() -> Void)?
 
@@ -105,6 +106,7 @@ final class FakeHUD: HUDControlling {
         self.onConfirm = onConfirm
         self.onCancel = onCancel
     }
+    func offerCopy(_ text: String) { offers.append(text) }
 }
 
 final class FakeSounds: SoundPlaying {

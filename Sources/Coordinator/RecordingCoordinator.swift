@@ -365,8 +365,10 @@ final class RecordingCoordinator {
                          applicationBundleID: applicationBundleID)
 
             if typingStopped {
+                // Words pFlow typed stay; the finished text could not go in
+                // safely. The card keeps it with Copy until closed or the next take.
                 hud.setPhase(.typingStopped)
-                hud.hide(after: 4)
+                hud.offerCopy(text)
                 state = .idle
                 return
             }

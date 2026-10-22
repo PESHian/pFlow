@@ -49,6 +49,9 @@ final class WindowManager {
         // The hosting view does not stop the window shrinking under its
         // content, so the window's own minimum carries the content's minimum.
         window.contentMinSize = minSize ?? (resizable ? .zero : size)
+        // A settings window has no full-screen mode: entering it would hide
+        // the menu bar and stretch the page across the screen.
+        window.collectionBehavior = [.fullScreenNone]
         window.isReleasedWhenClosed = false
         window.titlebarAppearsTransparent = true
         window.center()

@@ -105,6 +105,7 @@ private final class TimedHUD: HUDControlling {
     }
     func hide(after seconds: Double) { real.hide(after: seconds) }
     func setActions(onConfirm: @escaping () -> Void, onCancel: @escaping () -> Void) {}
+    func offerCopy(_ text: String) {}
 }
 
 @MainActor

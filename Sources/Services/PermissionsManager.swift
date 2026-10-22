@@ -44,8 +44,10 @@ final class PermissionsManager {
         /// shows as ticked in System Settings while this build is not trusted,
         /// and while any row exists Apple's prompt will not show again.
         var resetOwnRow: () -> Void
+        /// Starts watching for Apple's prompt; the closure it returns answers
+        /// whether a prompt window has appeared since the watch began.
+        var watchForPrompt: () -> () -> Bool
         var prompt: () -> Void
-        var promptIsShowing: () -> Bool
         var openSettings: () -> Void
         /// One short wait between looks for Apple's prompt (about a quarter second).
         var wait: () async -> Void
@@ -54,26 +56,33 @@ final class PermissionsManager {
     enum AccessibilityGrantOutcome: Equatable { case alreadyTrusted, granted, promptShown, settingsOpened }
 
     /// One press, one visible result: clear the stale row, ask for Apple's
-    /// prompt, and if no prompt is on screen within about a second, open the
-    /// Accessibility list with pFlow already in it.
+    /// prompt, and only if no prompt appeared within about a second open the
+    /// Accessibility list with pFlow already in it. Never both.
     static func grantAccessibility(_ steps: AccessibilityGrantSteps) async -> AccessibilityGrantOutcome {
         if steps.isTrusted() { return .alreadyTrusted }
         steps.resetOwnRow()
+        let promptAppeared = steps.watchForPrompt()
         steps.prompt()
         for _ in 0..<4 {
             if steps.isTrusted() { return .granted }
-            if steps.promptIsShowing() { return .promptShown }
+            if promptAppeared() { return .promptShown }
             await steps.wait()
         }
         if steps.isTrusted() { return .granted }
-        if steps.promptIsShowing() { return .promptShown }
+        if promptAppeared() { return .promptShown }
         steps.openSettings()
         return .settingsOpened
     }
 
-    /// One Grant press for Accessibility. The grant itself is noticed by
-    /// `startObserving`, so the window updates without a relaunch.
+    private var accessibilityGrantInFlight = false
+
+    /// One Grant press for Accessibility. A second press while one is still
+    /// running does nothing. The grant itself is noticed by `startObserving`,
+    /// so the window updates without a relaunch.
     func grantAccessibility(steps: AccessibilityGrantSteps? = nil) async {
+        guard !accessibilityGrantInFlight else { return }
+        accessibilityGrantInFlight = true
+        defer { accessibilityGrantInFlight = false }
         accessibilityGrant = await Self.grantAccessibility(steps ?? liveAccessibilitySteps)
         refresh()
     }
@@ -92,8 +101,8 @@ final class PermissionsManager {
         AccessibilityGrantSteps(
             isTrusted: { AXIsProcessTrusted() },
             resetOwnRow: { Self.resetOwnAccessibilityRow() },
+            watchForPrompt: { Self.watchForAccessibilityPrompt() },
             prompt: { Self.promptForAccessibility() },
-            promptIsShowing: { Self.systemPermissionPromptIsShowing() },
             openSettings: { Self.openPrivacyPane(.accessibility) },
             wait: { try? await Task.sleep(nanoseconds: 250_000_000) }
         )
@@ -277,15 +286,28 @@ final class PermissionsManager {
         _ = AXIsProcessTrustedWithOptions([key: true] as CFDictionary)
     }
 
-    /// Apple's permission prompt is a window of one of these system agents.
-    private static let promptOwners: Set<String> = ["UserNotificationCenter", "SecurityAgent", "CoreServicesUIAgent"]
+    /// Apple's Accessibility prompt is drawn by the system helper
+    /// universalAccessAuthWarn (seen on macOS 27 with a throwaway bundle).
+    private static let promptOwner = "universalAccessAuthWarn"
 
-    static func systemPermissionPromptIsShowing() -> Bool {
+    private static func promptWindows() -> [(number: Int, name: String)] {
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-        return windows.contains { window in
-            guard let owner = window[kCGWindowOwnerName as String] as? String, promptOwners.contains(owner),
-                  let bounds = window[kCGWindowBounds as String] as? [String: CGFloat] else { return false }
-            return (bounds["Height"] ?? 0) > 60 && (bounds["Width"] ?? 0) > 60
+        return windows.compactMap { window in
+            guard window[kCGWindowOwnerName as String] as? String == promptOwner,
+                  let number = window[kCGWindowNumber as String] as? Int else { return nil }
+            return (number, window[kCGWindowName as String] as? String ?? "")
+        }
+    }
+
+    /// Only a prompt window that appeared after our request counts, and if
+    /// its title can be read it must name pFlow; a dialog that was already on
+    /// screen, or another app's, is not ours.
+    static func watchForAccessibilityPrompt() -> () -> Bool {
+        let before = Set(promptWindows().map(\.number))
+        return {
+            promptWindows().contains { window in
+                !before.contains(window.number) && (window.name.isEmpty || window.name.localizedCaseInsensitiveContains("pFlow"))
+            }
         }
     }
 

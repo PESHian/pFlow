@@ -25,4 +25,10 @@ final class HUDModel {
 
     var onConfirm: (() -> Void)?
     var onCancel: (() -> Void)?
+    /// Finished words pFlow could not put in: shown with a Copy button until
+    /// closed or the next take. The clipboard is written only when Copy is pressed.
+    var copyOffer: String?
+    var copied = false
+    var onCopy: (() -> Void)?
+    var onClose: (() -> Void)?
 }

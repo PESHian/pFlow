@@ -11,14 +11,19 @@ struct PermissionGrantTests {
         var resets = 0, prompts = 0, opens = 0, waits = 0
         var trusted: [Bool] = []
         var showing: [Bool] = []
+        var watches = 0, promptsAtWatch = -1
+        var suspend: (() async -> Void)?
         func steps(trusted: Bool) -> PermissionsManager.AccessibilityGrantSteps {
             .init(
                 isTrusted: { [self] in self.trusted.isEmpty ? trusted : self.trusted.removeFirst() },
                 resetOwnRow: { [self] in resets += 1 },
+                watchForPrompt: { [self] in
+                    watches += 1; promptsAtWatch = prompts
+                    return { [self] in showing.isEmpty ? false : showing.removeFirst() }
+                },
                 prompt: { [self] in prompts += 1 },
-                promptIsShowing: { [self] in showing.isEmpty ? false : showing.removeFirst() },
                 openSettings: { [self] in opens += 1 },
-                wait: { [self] in waits += 1 }
+                wait: { [self] in waits += 1; await suspend?() }
             )
         }
     }
@@ -37,6 +42,7 @@ struct PermissionGrantTests {
         #expect(outcome == .promptShown)
         #expect((log.resets, log.prompts, log.opens) == (1, 1, 0), "the row is cleared before the prompt, and the pane is not opened on top of it")
         #expect(log.waits == 1)
+        #expect(log.watches == 1 && log.promptsAtWatch == 0, "the watch starts before the prompt, so only a window that appears after it counts")
     }
 
     @Test func noPromptWithinASecondOpensTheAccessibilityList() async {
@@ -53,6 +59,25 @@ struct PermissionGrantTests {
         let outcome = await PermissionsManager.grantAccessibility(log.steps(trusted: false))
         #expect(outcome == .granted)
         #expect((log.resets, log.prompts, log.opens) == (1, 1, 0))
+    }
+
+    @Test func aSecondPressWhileOneIsRunningDoesNothing() async {
+        let permissions = PermissionsManager()
+        permissions.accessibility = false
+        let log = Log()
+        let gate = AsyncStream<Void>.makeStream()
+        var iterator = gate.stream.makeAsyncIterator()
+        // Only the first press blocks on the gate; a second press that got
+        // through would run to its end (and fail the counts below).
+        var blocked = false
+        log.suspend = { if !blocked { blocked = true; _ = await iterator.next() } }
+        async let first: Void = permissions.grantAccessibility(steps: log.steps(trusted: false))
+        await Task.yield()
+        await permissions.grantAccessibility(steps: log.steps(trusted: false))
+        #expect((log.resets, log.prompts) == (1, 1), "the second press must not reset and prompt again")
+        gate.continuation.finish()
+        await first
+        #expect((log.resets, log.prompts, log.opens) == (1, 1, 1))
     }
 
     @Test func hintUnderTheStepMatchesWhatThePressDid() async {

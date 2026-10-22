@@ -90,6 +90,7 @@ private final class TimedWhisperHUD: HUDControlling {
     func setLiveNote(_ note: String?) { notes.append(note); real.setLiveNote(note) }
     func hide(after seconds: Double) { real.hide(after: seconds) }
     func setActions(onConfirm: @escaping () -> Void, onCancel: @escaping () -> Void) {}
+    func offerCopy(_ text: String) {}
 }
 
 private func cpuSeconds(_ who: Int32) -> Double {

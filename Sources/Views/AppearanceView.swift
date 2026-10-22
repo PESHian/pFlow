@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AppearanceView: View {
     @Bindable private var appearance = AppearanceSettings.shared
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.s3) {
@@ -9,18 +10,19 @@ struct AppearanceView: View {
             Card {
                 VStack(alignment: .leading, spacing: Theme.s4) {
                     HStack {
-                        Text("Appearance").font(.system(size: 13, weight: .medium))
+                        Text("Appearance").peshText(13, .medium)
                         Spacer()
                         Picker("Appearance", selection: $appearance.mode) {
                             ForEach(AppearanceMode.allCases) { mode in Text(mode.title).tag(mode) }
                         }.labelsHidden().pickerStyle(.segmented).frame(width: 205)
                     }
-                    HStack(spacing: 10) {
+                    // Wraps to a second row when the text size makes four tiles too wide.
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 84 * Theme.textScale(typeSize)), spacing: 10)], spacing: 10) {
                         ForEach(ColorTheme.allCases) { theme in
                             Button { appearance.theme = theme } label: {
                                 VStack(spacing: 7) {
                                     Capsule().fill(palette(for: theme).gradient).frame(height: 7)
-                                    Text(theme.title).font(.system(size: 11, weight: .medium))
+                                    Text(theme.title).peshText(11, .medium)
                                 }
                                 .padding(10)
                                 .frame(maxWidth: .infinity)
@@ -42,17 +44,17 @@ struct AppearanceView: View {
                             ColorPicker("Wave blend", selection: Binding(
                                 get: { appearance.customSecondary.color },
                                 set: { appearance.customSecondary = ThemeColor(color: $0) }), supportsOpacity: false)
-                        }.font(.system(size: 12))
+                        }.peshText(12)
                     }
                     Text("Colors follow you from the app to the recording waveform.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Text("Waveform").font(.system(size: 13, weight: .medium))
+                    Text("Waveform").peshText(13, .medium)
                     HStack(spacing: 10) {
                         ForEach(WaveformStyle.allCases) { style in
                             Button { appearance.waveformStyle = style } label: {
                                 VStack(spacing: 9) {
                                     RecordingWaveform(levels: Self.previewLevels, style: style)
-                                    Text(style.title).font(.system(size: 11, weight: .medium))
+                                    Text(style.title).peshText(11, .medium)
                                 }
                                 .padding(12)
                                 .frame(maxWidth: .infinity)

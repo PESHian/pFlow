@@ -189,11 +189,21 @@ struct LiveInlineOwnership {
     mutating func confirm(accepted: Bool, observed state: LiveFieldState) -> Step {
         guard let pending else { return .none }
         self.pending = nil
-        touched = true
         let expected = before + pending.owned + after
         guard accepted, state.trusted, state.app == app, state.element == LiveFieldState.target, !state.secure,
               let value = state.value, value.utf16.elementsEqual(expected.utf16),
-              state.selection == pending.caret else { return stop(.uncertain) }
+              state.selection == pending.caret else {
+            // A field that still holds exactly what it held before this write
+            // (an app that refuses or ignores Accessibility writes) has none of
+            // pFlow's text in it, so the take has typed nothing and the
+            // finished text can still go in the normal way.
+            let untouched = before + owned + after
+            if !(state.app == app && state.element == LiveFieldState.target && state.value?.utf16.elementsEqual(untouched.utf16) == true) {
+                touched = true
+            }
+            return stop(.uncertain)
+        }
+        touched = true
         owned = pending.owned
         typedWords = pending.words
         caret = pending.caret

@@ -52,12 +52,12 @@ struct PeshHeader: View {
             HStack(spacing: 12) {
                 PeshMark(size: 62)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("pFlow").font(.system(size: 32, weight: .bold, design: .rounded)).tracking(-1)
-                    Text("BY PESH").font(.system(size: 10, weight: .medium, design: .monospaced))
+                    Text("pFlow").peshText(32, .bold, design: .rounded).tracking(-1)
+                    Text("BY PESH").peshText(10, .medium, design: .monospaced)
                         .tracking(3).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Image(systemName: "waveform").font(.system(size: 24, weight: .light)).foregroundStyle(Theme.gradient)
+                Image(systemName: "waveform").peshText(24, .light).foregroundStyle(Theme.gradient)
             }
             Capsule().fill(Theme.gradient).frame(height: 2)
         }

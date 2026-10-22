@@ -279,6 +279,51 @@ struct LiveInlineTests {
         #expect(injector.delivered.isEmpty)
         #expect(history.saved == ["thanks for the map and the compass"])
         #expect(hud.phases.last == .typingStopped)
+        #expect(hud.offers == ["thanks for the map and the compass"], "the card keeps the finished text with Copy")
+        #expect(hud.hideDelays.last != 4, "the card stays until closed or the next take")
+    }
+
+    /// An app that refuses Accessibility writes, or takes them without showing
+    /// them (Chromium and Electron apps build their tree lazily): typing stops
+    /// with nothing of pFlow's in the field, so the finished text must go in
+    /// the normal way, exactly as in Preview mode, not History only.
+    @Test func typingThatNeverLandedStillInsertsTheFinishedTextNormally() async {
+        for accepted in [false, true] {
+            let field = SimulatedTextField("Chat: ")
+            field.onReplace = { _, _, _ in accepted }   // the field never changes
+            let session = FakeSession()
+            let history = FakeHistory()
+            let hud = FakeHUD()
+            session.textToReturn = "meet at the lighthouse at noon"
+            let (coordinator, injector) = typingCoordinator(field, session: session, history: history, hud: hud)
+            coordinator.begin()
+            await Task.yield()
+            #expect(hud.notes.last == "Typing in TextEdit")
+            session.emit("meet at")
+            session.emit("meet at the lighthouse")
+            #expect(field.value == "Chat: ", "the app took nothing")
+            #expect(field.replaced.count == 1)
+            #expect(hud.cards.first == true, "typing stopped, so the card shows the words")
+            await coordinator.finish()
+            #expect(injector.delivered == ["meet at the lighthouse at noon"], "accepted=\(accepted): the final goes in like Preview mode")
+            #expect(history.saved == ["meet at the lighthouse at noon"])
+            #expect(hud.phases.last != .typingStopped, "accepted=\(accepted)")
+            #expect(field.replaced.count == 1, "no second write into a field that ignores writes")
+        }
+    }
+
+    @Test func typingRefusedAtStartInsertsTheFinishedTextNormally() async {
+        let field = SimulatedTextField("Chat: ")
+        field.writable = false
+        let session = FakeSession()
+        session.textToReturn = "meet at noon"
+        let (coordinator, injector) = typingCoordinator(field, session: session)
+        coordinator.begin()
+        await Task.yield()
+        session.emit("meet at")
+        await coordinator.finish()
+        #expect(injector.delivered == ["meet at noon"])
+        #expect(field.replaced.isEmpty)
     }
 
     @Test func recognitionFailingAfterTypedWordsSaysTheyStayInTheApp() async {
