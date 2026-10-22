@@ -91,6 +91,11 @@ struct LiveTextTests {
         // card appears only when typing could not start or has stopped.
         #expect(LiveTextMode.allCases.map { $0.showsCard(typingLive: true) } == [false, false])
         #expect(LiveTextMode.allCases.map { $0.showsCard(typingLive: false) } == [false, true])
+        let defaults = UserDefaults(suiteName: "pflow-live-text-retired-preview-" + UUID().uuidString)!
+        defaults.set("preview", forKey: LiveTextMode.defaultsKey)
+        #expect(LiveTextMode.saved(in: defaults) == .typeInApp, "the retired Preview choice loads as Type")
+        defaults.set("sideways", forKey: LiveTextMode.defaultsKey)
+        #expect(LiveTextMode.saved(in: defaults) == .off)
     }
 
     // MARK: Coordinator

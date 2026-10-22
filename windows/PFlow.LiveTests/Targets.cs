@@ -210,7 +210,7 @@ internal static partial class Program
                 }
                 result = await target.Insert(text, owner.Handle, false, CancellationToken.None);
                 outcome = result == "Inserted" ? "delivered" : result is InsertionTarget.Unreachable or InsertionTarget.SavedToHistory ? "card"
-                    : result == InsertionTarget.Unchecked ? "unchecked" : "other";
+                    : result.StartsWith(InsertionTarget.Unchecked, StringComparison.Ordinal) ? "unchecked" : "other";
             } catch (InvalidOperationException error) { result = error.Message; outcome = "refused"; }
             await Task.Delay(800);
             string title = Title();

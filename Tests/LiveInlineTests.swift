@@ -760,22 +760,24 @@ struct LiveInlineTests {
         #expect(injector.delivered.isEmpty)
     }
 
-    @Test func previewModeNeverAsksForLiveTyping() async {
+    @Test func offNeverAsksForLiveTyping() async {
         let field = SimulatedTextField("")
         let injector = LiveFakeInjector(field: field)
         let session = FakeSession()
-        session.textToReturn = "plain preview"
+        let hud = FakeHUD()
+        session.textToReturn = "plain words"
         let coordinator = RecordingCoordinator(
-            session: session, injector: injector, history: FakeHistory(), hud: FakeHUD(), sounds: FakeSounds(),
+            session: session, injector: injector, history: FakeHistory(), hud: hud, sounds: FakeSounds(),
             cleaner: FakeCleaner(), cleanupEnabled: { false }, vocabulary: { [] }, deviceName: { nil },
-            liveTextMode: { .typeInApp })
+            liveTextMode: { .off })
         coordinator.begin()
         await Task.yield()
         session.emit("plain")
-        session.emit("plain preview")
+        session.emit("plain words")
         await coordinator.finish()
         #expect(field.replaced.isEmpty)
         #expect(injector.liveCalls == 0)
-        #expect(injector.delivered == ["plain preview"])
+        #expect(injector.delivered == ["plain words"])
+        #expect(hud.previews == [false] && hud.cards.isEmpty, "Off shows the capsule only")
     }
 }
