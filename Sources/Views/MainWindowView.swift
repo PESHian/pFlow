@@ -9,6 +9,11 @@ enum MainPage: Equatable {
 }
 
 struct MainWindowView: View {
+    /// The window opens at this size and cannot shrink below `minimumSize`.
+    /// Every page must fit the minimum width; `SettingsLayoutTests` checks it.
+    static let defaultSize = NSSize(width: 460, height: 740)
+    static let minimumSize = NSSize(width: 460, height: 520)
+
     @Environment(AppState.self) private var app
 
     var body: some View {
@@ -33,7 +38,8 @@ struct MainWindowView: View {
                 TemplatesView(onBack: { app.mainPage = .settings })
             }
         }
-        .frame(minWidth: 460, maxWidth: .infinity, minHeight: 520, maxHeight: .infinity)
+        .frame(minWidth: Self.minimumSize.width, maxWidth: .infinity,
+               minHeight: Self.minimumSize.height, maxHeight: .infinity)
     }
 }
 

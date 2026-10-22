@@ -286,7 +286,7 @@ final class AppState {
         mainPage = page
         WindowManager.shared.show(
             id: "main", title: "pFlow · by Pesh",
-            size: NSSize(width: 460, height: 740)
+            size: MainWindowView.defaultSize, minSize: MainWindowView.minimumSize
         ) {
             MainWindowView()
                 .environment(self)

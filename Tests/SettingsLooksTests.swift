@@ -54,43 +54,51 @@ struct SettingsLooksTests {
         }
     }
 
+    /// All three choices are drawn side by side, no menu to open: selecting
+    /// each one in turn changes pixels in its own third of the control, and
+    /// the control fits the Settings column.
     @Test func liveTextShowsAllThreeChoicesWithoutOpeningAMenu() throws {
-        let view = NSHostingView(rootView: LiveTextPicker(mode: .constant(.preview), engine: .apple).frame(width: 420))
-        view.frame = NSRect(origin: .zero, size: view.fittingSize)
-        view.layoutSubtreeIfNeeded()
+        let width = MainWindowView.minimumSize.width - 2 * Theme.s5 - 2 * Theme.s4
         func controls(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + controls($0) } }
-        let all = controls(view)
-        let segmented = all.compactMap { $0 as? NSSegmentedControl }
-        #expect(segmented.count == 1, "views: \(all.map { String(describing: type(of: $0)) })")
-        #expect(all.filter { $0 is NSPopUpButton }.isEmpty, "Live text must not hide its choices in a menu")
-        let control = try #require(segmented.first)
-        #expect((0..<control.segmentCount).map { control.label(forSegment: $0) } == LiveTextMode.allCases.map(\.title))
-        #expect(control.selectedSegment == LiveTextMode.allCases.firstIndex(of: .preview))
+        var reps: [NSBitmapImageRep] = []
+        for mode in LiveTextMode.allCases {
+            let picker = LiveTextPicker(mode: .constant(mode), engine: .apple)
+            let view = NSHostingView(rootView: picker.frame(width: width))
+            view.frame = NSRect(origin: .zero, size: view.fittingSize)
+            view.layoutSubtreeIfNeeded()
+            #expect(controls(view).filter { $0 is NSPopUpButton }.isEmpty, "Live text must not hide its choices in a menu")
+            #expect(view.fittingSize.width <= width, "Live text control is \(view.fittingSize.width) wide in a \(width) column")
+            reps.append(try render(picker, width: width, look: .aqua))
+        }
+        let columns = reps[0].pixelsWide / 3
+        for (index, mode) in LiveTextMode.allCases.enumerated() {
+            let other = reps[(index + 1) % reps.count]
+            var changed = 0
+            for y in 0..<min(reps[index].pixelsHigh, other.pixelsHigh) {
+                for x in (index * columns)..<((index + 1) * columns) where reps[index].colorAt(x: x, y: y) != other.colorAt(x: x, y: y) {
+                    changed += 1
+                }
+            }
+            #expect(changed > 50, "\(mode.rawValue): selecting it should change its own third of the control, \(changed) pixels changed")
+        }
     }
 
-    /// Settings needs the whole app to draw, so this reads the source: the Live
-    /// text control is built in one place, under its own heading, right after
-    /// Shortcut, and nowhere else.
+    /// The Live text control is built in one place, under its own heading,
+    /// right after Shortcut, and nowhere else.
     @Test func settingsHasLiveTextExactlyOnce() throws {
         let sources = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().appending(path: "Sources")
         var uses: [String] = []
-        var headings = 0
         let files = try #require(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
         for case let file as URL in files where file.pathExtension == "swift" {
             let text = try String(contentsOf: file, encoding: .utf8)
             uses += Array(repeating: file.lastPathComponent, count: text.components(separatedBy: "LiveTextPicker(").count - 1)
-            headings += text.components(separatedBy: "SectionLabel(\"Live text\")").count - 1
         }
         #expect(uses == ["SettingsView.swift"])
-        #expect(headings == 1)
-        let settings = try String(contentsOf: sources.appending(path: "Views/SettingsView.swift"), encoding: .utf8)
-        let body = try #require(settings.range(of: "shortcutSection\n                liveTextSection\n"))
-        #expect(!body.isEmpty)
-        let section = try #require(settings.range(of: "private var liveTextSection"))
-        let picker = try #require(settings.range(of: "LiveTextPicker("))
-        let next = try #require(settings.range(of: "private var", range: section.upperBound..<settings.endIndex))
-        #expect(picker.lowerBound > section.lowerBound && picker.lowerBound < next.lowerBound)
+        let names = SettingsContent(model: SettingsLayoutTests.fixture()).sections.map(\.name)
+        #expect(names.filter { $0 == "Live text" }.count == 1)
+        let shortcut = try #require(names.firstIndex(of: "Shortcut"))
+        #expect(names.firstIndex(of: "Live text") == shortcut + 1)
     }
 
     @Test(.enabled(if: shots != nil)) func renderSettingsLooks() throws {
