@@ -30,9 +30,16 @@ public static class InsertionPrompt
         ("Click in the app where the words should go", "The cursor was in pFlow's own window. Click where the words should go, then dictate."),
     ];
 
-    /// True when a take's outcome needs the card: anything that did not put
-    /// the words in. "Inserted…" outcomes never do, nor words typed live and kept.
-    public static bool Needed(string status, bool typedLive) => !typedLive && !status.StartsWith("Inserted", StringComparison.Ordinal);
+    /// Outcomes where the words were sent into the app: inserted and checked,
+    /// typed without a check, or pasted but not confirmed. The words are most
+    /// likely there, so a card offering them again would have the person put
+    /// them in twice.
+    static readonly string[] WentIn = ["Inserted", "Typed into the app", "Insertion could not be confirmed"];
+
+    /// True when a take's outcome needs the card: nothing was sent into the
+    /// app. Never for words that went in, checked or not, nor for words typed live and kept.
+    public static bool Needed(string status, bool typedLive) =>
+        !typedLive && !WentIn.Any(x => status.StartsWith(x, StringComparison.Ordinal));
 
     /// The card's words and reason for an outcome, or null when no card is due. The
     /// one place that decides; every path that ends a take goes through it.

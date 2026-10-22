@@ -22,15 +22,18 @@ internal sealed class InsertionTarget : IInsertionTarget
     /// A Chromium host (Chrome, Edge, Electron apps) builds its accessibility
     /// tree only when asked; until then the focus is its placeholder pane, which
     /// says nothing about the field under the caret. Such a take is knocked for
-    /// the tree and captured again a moment later; if the pane is all there is,
-    /// nothing is typed: the finished text is shown in pFlow's card to copy, and
-    /// is in History. The clipboard is never touched for it.
+    /// the tree and captured again during the take and once more at insert
+    /// time. If the pane is all there is even then, the words go in the way a
+    /// person's typing would, without a check, and the status says so (the
+    /// 0.1.19 behaviour the owner's PC relies on). A built tree that shows a
+    /// non-editable element is a refusal, never typing.
     readonly bool placeholder;
     readonly IntPtr foreground;
     readonly uint processId;
     FieldState State => new(foreground.ToInt64(), processId, string.Join(".", runtimeId), before, start, length);
     public const string SavedToHistory = "Saved to History. Open History to copy your dictation.";
     public const string Unreachable = "Couldn't reach that box. Your words are in History.";
+    public const string Unchecked = "Typed into the app; it did not let pFlow check the result. Look at the field before copying from History.";
     /// Chromium's top-level window class (Chrome, Edge, Electron) and its legacy content window.
     static readonly string[] ChromiumHosts = ["Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND"];
     public const string PlainOnly = "Inserted as plain text; bold headings could not be applied safely.";
@@ -184,10 +187,67 @@ internal sealed class InsertionTarget : IInsertionTarget
     public async Task<string> Insert(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf = null)
     {
         cancel.ThrowIfCancellationRequested();
-        if (placeholder) { Log("placeholder pane at insert time: " + Refusal + "; nothing typed, words offered in the card"); return Unreachable; }
-        if (!readable) { Log("saved to History: " + Refusal); return SavedToHistory; }
-        try { return await Deliver(text, clipboardOwner, keepClipboard, cancel, rtf); }
-        catch (Exception error) when (error is not OperationCanceledException) { Log("refused: " + error.Message); throw; }
+        try {
+            if (placeholder) return await InsertBehindPlaceholder(text, clipboardOwner, keepClipboard, cancel, rtf);
+            if (!readable) { Log("saved to History: " + Refusal); return SavedToHistory; }
+            return await Deliver(text, clipboardOwner, keepClipboard, cancel, rtf);
+        } catch (Exception error) when (error is not OperationCanceledException) { Log("refused: " + error.Message); throw; }
+    }
+    /// The tree had the whole take to arrive: one more capture, right now. A
+    /// readable field takes the checked path; a built tree with nothing
+    /// editable under the caret is a refusal; the pane itself is typed into.
+    async Task<string> InsertBehindPlaceholder(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf)
+    {
+        var again = Capture();
+        if (!SameWindow(again)) throw new InvalidOperationException("Focus changed. Your text is in History.");
+        if (again.readable) { Log("placeholder: field readable at insert time: " + again.Kind); return await again.Deliver(text, clipboardOwner, keepClipboard, cancel, rtf); }
+        if (!again.placeholder) { Log("placeholder: tree built, nothing editable at insert time: " + again.Refusal); return SavedToHistory; }
+        Log("placeholder pane at insert time: " + Refusal + "; typed without a check");
+        return await TypeUnchecked(text, clipboardOwner, keepClipboard, cancel, rtf);
+    }
+    /// The same app, window and focused Chromium control as when the take began; the field itself cannot be read.
+    void ValidateHost()
+    {
+        if (Native.GetForegroundWindow() != foreground) throw new InvalidOperationException("Focus changed. Your text is in History.");
+        Native.GetWindowThreadProcessId(foreground, out var current);
+        if (current != processId || !ChromiumHosts.Contains(LiveTextField.ClassName(LiveTextField.FocusedControl(foreground)))) throw new InvalidOperationException("Focus changed. Your text is in History.");
+    }
+    /// Keystrokes into the field pFlow cannot read back, or one paste when the
+    /// clipboard copy is wanted or the text has a line break: typed, Enter
+    /// would send the message in a chat app. The result is not checked.
+    async Task<string> TypeUnchecked(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf)
+    {
+        ValidateHost(); cancel.ThrowIfCancellationRequested();
+        if (new[] { 0x10, 0x11, 0x12, 0x5B, 0x5C }.Any(x => Native.GetAsyncKeyState(x) < 0)) throw new InvalidOperationException("Release the shortcut keys first. Your text is in History.");
+        if (!keepClipboard && rtf == null && TypingSafe(false, text)) {
+            Log("path=unchecked typing " + InsertionLog.Length(text));
+            Native.Send(Native.UnicodeText(text));
+            await Task.Delay(100);
+            return Unchecked;
+        }
+        Log("path=unchecked paste keep=" + keepClipboard + " " + InsertionLog.Length(text));
+        ClipboardLease lease;
+        try { lease = new ClipboardLease(clipboardOwner, !keepClipboard); }
+        catch (InvalidOperationException error) {
+            // The clipboard holds something pFlow cannot put back, and Enter must not be typed: nothing goes in.
+            Log("clipboard not saved (" + error.Message + "); nothing pasted");
+            throw new InvalidOperationException("The clipboard could not be saved, so nothing was pasted. Your text is in History.");
+        }
+        using var clipboardLifetime = lease;
+        try {
+            lease.Put(text, rtf); ValidateHost(); cancel.ThrowIfCancellationRequested();
+            lease.DispatchPaste();
+            // The app reads the clipboard as it handles the paste; it gets a moment before anything is put back.
+            await Task.Delay(400);
+        } finally {
+            if (keepClipboard) lease.Keep();
+            else {
+                bool restored = lease.Restore();
+                for (int i = 0; !restored && i < 10; i++) { await Task.Delay(50); restored = lease.Restore(); }
+                if (!restored) throw new InvalidOperationException("Clipboard restore was blocked. Keep pFlow open and check your clipboard.");
+            }
+        }
+        return Unchecked;
     }
     async Task<string> Deliver(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf)
     {

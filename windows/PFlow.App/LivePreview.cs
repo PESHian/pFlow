@@ -8,8 +8,9 @@ namespace PFlow.Windows;
 /// The words heard so far, in a calm floating card near the recording control
 /// while a take with Live text runs. Same shape as the Mac card: a header with
 /// the Pesh mark, a recording dot and a short caption; a hairline; then the
-/// transcript filling a fixed box of whole lines from the bottom, its top line
-/// fading out. The box never changes size while the
+/// transcript filling a fixed box of whole lines from the bottom. Older lines
+/// leave at the top, whole: no line is ever shown part way or faded, which
+/// read as cut off on the owner's PC. The box never changes size while the
 /// words grow. The recording control under the card already shows the
 /// waveform, so the card carries none.
 /// It never takes focus or the text cursor: shown without activation, refuses
@@ -63,10 +64,8 @@ internal sealed class LivePreview : Window
         words = new TextBlock { TextWrapping = TextWrapping.Wrap, VerticalAlignment = VerticalAlignment.Bottom, LineStackingStrategy = LineStackingStrategy.BlockLineHeight };
         words.SetResourceReference(TextBlock.ForegroundProperty, "PeshText");
         // A box of whole lines (every line is exactly LineHeight tall), so its top falls between
-        // two lines and no glyph is cut; the top line fades out.
-        lines = new Grid { ClipToBounds = true };
-        lines.OpacityMask = new LinearGradientBrush(new GradientStopCollection {
-            new(Colors.Transparent, 0), new(Colors.Black, 1 / BoxLines) }, new Point(0, 0), new Point(0, 1));
+        // two lines and no glyph is cut.
+        lines = new Grid { ClipToBounds = true, UseLayoutRounding = true };
         lines.Children.Add(words);
 
         var stack = new StackPanel(); stack.Children.Add(header); stack.Children.Add(rule); stack.Children.Add(lines);

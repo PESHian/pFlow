@@ -30,9 +30,12 @@ internal static class InstalledChecks
         Check("the install folder, a build folder and a plain Downloads copy are not packages", !InstalledCopies.RunsFromPackage(current) && !InstalledCopies.RunsFromPackage(@"C:\Fixture\src\windows\dist\win-x64\pFlow.exe") && !InstalledCopies.RunsFromPackage(@"C:\Fixture\Downloads\pFlow.exe"));
         Check("the tray menu has Settings and no start item", TrayMenu.Items.Contains(TrayMenu.Settings) && TrayMenu.Items.Contains(TrayMenu.Quit)
             && !TrayMenu.Items.Any(x => x.StartsWith("Start", StringComparison.OrdinalIgnoreCase) || x.Contains("Open pFlow")));
-        Check("the couldn't-type card is needed for every outcome that did not put the words in, never for an inserted take or words typed live",
+        Check("the couldn't-type card is needed only when nothing was sent into the app: never for an inserted take, words typed or pasted without a check, or words typed live",
             InsertionPrompt.Needed("Saved to History. Open History to copy your dictation.", false) && InsertionPrompt.Needed("Focus changed. Your text is in History.", false)
-            && InsertionPrompt.Needed("Dictation is off in password fields.", false) && InsertionPrompt.Needed("Insertion could not be confirmed; check the field before copying from History.", false)
+            && InsertionPrompt.Needed("Dictation is off in password fields.", false) && InsertionPrompt.Needed("Couldn't reach that box. Your words are in History.", false)
+            && InsertionPrompt.Needed("Click in the app where the words should go, then dictate. The cursor was in pFlow's own window.", false)
+            && !InsertionPrompt.Needed("Insertion could not be confirmed; check the field before copying from History.", false)
+            && !InsertionPrompt.Needed("Typed into the app; it did not let pFlow check the result. Look at the field before copying from History.", false)
             && !InsertionPrompt.Needed("Inserted", false) && !InsertionPrompt.Needed("Inserted as plain text; bold headings could not be applied safely.", false)
             && !InsertionPrompt.Needed("Inserted, but it could not be copied to the clipboard. Copy it from History.", false) && !InsertionPrompt.Needed("Kept as typed", true));
         Check("the card's reason line says each known outcome in plain words, no 'focus' or 'insertion' jargon",

@@ -155,8 +155,9 @@ internal static partial class Program
     /// capture, as on the owner's PC. Three pages: a Gmail-style body the page focuses
     /// itself (two-line text, so a non-Win32 target must paste, never type Enter), a
     /// password box, and a body left to Chromium's placeholder pane. Each outcome is
-    /// honest: delivered and confirmed, or the words offered in pFlow's card (the
-    /// clipboard untouched), or refused. Nothing is ever typed into a password box or a pane.
+    /// honest: delivered and confirmed; refused; the words offered in pFlow's card (the
+    /// clipboard untouched) when the built tree shows nothing editable; or typed without
+    /// a check when the pane never gives way. Nothing is ever typed into a password box.
     static async Task ChromiumCold()
     {
         var log = new List<string>(); InsertionLog.Written += line => log.Add(line);
@@ -195,12 +196,12 @@ internal static partial class Program
             await Task.Delay(700);
             string Title() { var t = new System.Text.StringBuilder(512); GetWindowText(window, t, t.Capacity); return t.ToString(); }
             Console.WriteLine($"COLD {variant}: foreground is Edge={Native.GetForegroundWindow() == window}; title before=[{Title()}]");
-            // The app's take start: capture; a placeholder pane is knocked and captured again at 300 and 700 ms (Program.CaptureAgainSoon).
+            // The app's take start: capture; a placeholder pane is knocked and captured again during the take (Program.CaptureAgainSoon).
             string outcome; string result; uint clipboardBefore = Native.GetClipboardSequenceNumber();
             try {
                 var target = InsertionTarget.Capture();
                 Console.WriteLine($"COLD {variant}: capture CanInsert={target.CanInsert} placeholder={target.Placeholder} field={target.Kind} refusal={target.Refusal}");
-                foreach (int wait in new[] { 300, 700 }) {
+                foreach (int wait in new[] { 300, 700, 1500, 3000 }) {
                     if (!target.Placeholder) break;
                     await Task.Delay(wait);
                     var again = InsertionTarget.Capture();
@@ -208,19 +209,24 @@ internal static partial class Program
                     if (target.SameWindow(again) && again.CanInsert && !again.Placeholder) { target = again; break; }
                 }
                 result = await target.Insert(text, owner.Handle, false, CancellationToken.None);
-                outcome = result == "Inserted" ? "delivered" : result == InsertionTarget.Unreachable ? "card" : "other";
+                outcome = result == "Inserted" ? "delivered" : result is InsertionTarget.Unreachable or InsertionTarget.SavedToHistory ? "card"
+                    : result == InsertionTarget.Unchecked ? "unchecked" : "other";
             } catch (InvalidOperationException error) { result = error.Message; outcome = "refused"; }
             await Task.Delay(800);
             string title = Title();
             Console.WriteLine($"COLD OUTCOME {variant}: {outcome} result=[{result}] title now=[{title}]");
-            Check(variant + ": the outcome is delivered, card or refused; never typing without a check", outcome != "other");
+            Check(variant + ": the outcome is delivered, card, refused or typed without a check; never anything else", outcome != "other");
             Check(variant + ": never a bare 'Inserted' without the words on the page", result != "Inserted" || title.Contains("Second fictional line") || (variant != "body" && title.Contains(text)));
-            if (variant == "password") Check("password: nothing was typed into the password box", title.Contains("len:0") && result != "Inserted");
-            if (variant == "placeholder" && outcome == "card") Check("placeholder: the pane got no keystrokes", !title.Contains("Fictional pane words"));
+            if (variant == "password") Check("password: nothing was typed into the password box", title.Contains("len:0") && result != "Inserted" && result != InsertionTarget.Unchecked);
+            if (variant == "body") Check("body: a focused field is delivered and checked, never typed blind", outcome == "delivered");
             if (outcome == "delivered" && variant == "body") Check("body: two lines went in by paste, never typed Enter", log.Any(l => l.Contains("path=clipboard")) && !log.Any(l => l.Contains("path=type")));
             if (outcome == "card") {
                 Check(variant + ": the card outcome leaves the clipboard alone", Native.GetClipboardSequenceNumber() == clipboardBefore);
-                Check(variant + ": the log names the reason", log.Any(l => l.Contains("placeholder pane at insert time")));
+                Check(variant + ": the log names the reason", log.Any(l => l.Contains("nothing editable at insert time") || l.Contains("saved to History")));
+            }
+            if (outcome == "unchecked") {
+                Check(variant + ": typing without a check is logged as such and the clipboard is left alone", log.Any(l => l.Contains("path=unchecked typing")) && Native.GetClipboardSequenceNumber() == clipboardBefore);
+                Check(variant + ": the words never leave the page", !title.Contains("Second fictional line"));
             }
             log.Clear();
         } finally {

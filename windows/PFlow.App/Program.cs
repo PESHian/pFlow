@@ -253,13 +253,13 @@ internal sealed partial class Program : Application
         }
     }
     /// Chromium answered the take's first capture with its placeholder pane and was
-    /// knocked for its tree. A moment later, still at the start of the take and still
-    /// in the same window, the field may be readable: then it is this take's target
-    /// and the finished text goes in the normal checked way. Otherwise the pane stays
-    /// and the text is offered on the clipboard at the end. Never a different window.
+    /// knocked for its tree. A moment later, during the take and still in the same
+    /// window, the field may be readable: then it is this take's target and the
+    /// finished text goes in the normal checked way. Otherwise the pane stays and the
+    /// insert looks once more, then types without a check. Never a different window.
     async Task CaptureAgainSoon(long owner)
     {
-        foreach (int wait in new[] { 300, 700 }) {
+        foreach (int wait in new[] { 300, 700, 1500, 3000 }) {
             await Task.Delay(wait);
             if (sessionId != owner || recorder == null || target is not { Placeholder: true } first) return;
             InsertionTarget again;
