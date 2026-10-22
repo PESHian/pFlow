@@ -105,7 +105,7 @@ struct LiveInlineOwnership {
     private(set) var owned: String
     private(set) var caret: NSRange
     private(set) var stopped: Stop?
-    /// A write was attempted, so the destination may hold pFlow's text.
+    /// A write call succeeded this take, so the destination may hold pFlow's text.
     private(set) var touched = false
     private var typedWords = ""
     private var previous: String?
@@ -189,25 +189,27 @@ struct LiveInlineOwnership {
     mutating func confirm(accepted: Bool, observed state: LiveFieldState) -> Step {
         guard let pending else { return .none }
         self.pending = nil
-        let expected = before + pending.owned + after
-        guard accepted, state.trusted, state.app == app, state.element == LiveFieldState.target, !state.secure,
-              let value = state.value, value.utf16.elementsEqual(expected.utf16),
-              state.selection == pending.caret else {
-            // A field that still holds exactly what it held before this write
-            // (an app that refuses or ignores Accessibility writes) has none of
-            // pFlow's text in it, so the take has typed nothing and the
-            // finished text can still go in the normal way.
-            let untouched = before + owned + after
-            if !(state.app == app && state.element == LiveFieldState.target && state.value?.utf16.elementsEqual(untouched.utf16) == true) {
-                touched = true
-            }
-            return stop(.uncertain)
-        }
-        touched = true
+        // A write call that succeeded may have put pFlow's text in, whatever
+        // the field reads back (Chromium and Electron apply it later), so the
+        // take counts as typed. Only a write the app refused leaves nothing.
+        if accepted { touched = true }
+        guard accepted, settled(pending, state) else { return stop(.uncertain) }
         owned = pending.owned
         typedWords = pending.words
         caret = pending.caret
         return .none
+    }
+
+    /// Whether the field shows exactly the result of the pending write.
+    func settled(_ state: LiveFieldState) -> Bool {
+        guard let pending else { return true }
+        return settled(pending, state)
+    }
+
+    private func settled(_ pending: (owned: String, words: String, caret: NSRange), _ state: LiveFieldState) -> Bool {
+        let expected = before + pending.owned + after
+        return state.trusted && state.app == app && state.element == LiveFieldState.target && !state.secure
+            && state.value?.utf16.elementsEqual(expected.utf16) == true && state.selection == pending.caret
     }
 
     private mutating func stop(_ reason: Stop) -> Step {

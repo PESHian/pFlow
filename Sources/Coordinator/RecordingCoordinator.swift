@@ -367,6 +367,10 @@ final class RecordingCoordinator {
             if typingStopped {
                 // Words pFlow typed stay; the finished text could not go in
                 // safely. The card keeps it with Copy until closed or the next take.
+                // Always the card (the capsule has no words and no Copy), and
+                // the card has its own close; the next take replaces it.
+                hud.setLivePreview(true)
+                hud.setPartial(text)
                 hud.setPhase(.typingStopped)
                 hud.offerCopy(text)
                 state = .idle

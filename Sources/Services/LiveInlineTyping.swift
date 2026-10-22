@@ -90,10 +90,24 @@ final class LiveInlineSession {
         case .write(let write):
             var accepted = field.replace(write.range, with: write.text)
             if accepted, let select = write.select { accepted = field.select(select) }
-            if case .stopped(let stop) = ownership.confirm(accepted: accepted, observed: field.state()) { return stop }
+            var observed = field.state()
+            // Some apps apply a successful write a little later (Chromium,
+            // Electron): give the field up to about 300 ms to show it before
+            // judging the write by what it reads back.
+            var reads = 0
+            while accepted, !ownership.settled(observed), reads < Self.settleReads {
+                Self.settle()
+                observed = field.state()
+                reads += 1
+            }
+            if case .stopped(let stop) = ownership.confirm(accepted: accepted, observed: observed) { return stop }
             return nil
         }
     }
+
+    static let settleReads = 6
+    /// One short wait between re-reads of the field; tests replace it.
+    nonisolated(unsafe) static var settle: () -> Void = { usleep(50_000) }
 }
 
 /// The captured field in another app, through Accessibility.

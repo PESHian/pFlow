@@ -55,6 +55,10 @@ final class SimulatedTextField: LiveTextField {
     var replaced: [(NSRange, String)] = []
     /// Return false to fail the write call; may change `current` to model an app that did something else.
     var onReplace: ((SimulatedTextField, NSRange, String) -> Bool)?
+    /// Models Chromium and Electron: the write call succeeds but the field
+    /// shows the new text only after this many more reads (nil: at once).
+    var appliesAfterReads: Int?
+    private var pendingApply: (LiveFieldState, Int)?
 
     init(_ value: String, selection: NSRange? = nil) {
         current = LiveFieldState(app: 1, element: LiveFieldState.target, secure: false, trusted: true, value: value,
@@ -64,13 +68,21 @@ final class SimulatedTextField: LiveTextField {
     var value: String { current.value ?? "" }
 
     private(set) var reads = 0
-    func state() -> LiveFieldState { reads += 1; return current }
+    func state() -> LiveFieldState {
+        reads += 1
+        if let (applied, after) = pendingApply {
+            if after <= 1 { current = applied; pendingApply = nil } else { pendingApply = (applied, after - 1) }
+        }
+        return current
+    }
     func canWriteRanges() -> Bool { writable }
     func replace(_ range: NSRange, with text: String) -> Bool {
         replaced.append((range, text))
         if let onReplace { return onReplace(self, range, text) }
-        current.value = (value as NSString).replacingCharacters(in: range, with: text)
-        current.selection = NSRange(location: range.location + (text as NSString).length, length: 0)
+        var applied = current
+        applied.value = (value as NSString).replacingCharacters(in: range, with: text)
+        applied.selection = NSRange(location: range.location + (text as NSString).length, length: 0)
+        if let appliesAfterReads, appliesAfterReads > 0 { pendingApply = (applied, appliesAfterReads) } else { current = applied }
         return true
     }
     func select(_ range: NSRange) -> Bool { current.selection = range; return true }
@@ -287,29 +299,95 @@ struct LiveInlineTests {
     /// them (Chromium and Electron apps build their tree lazily): typing stops
     /// with nothing of pFlow's in the field, so the finished text must go in
     /// the normal way, exactly as in Preview mode, not History only.
-    @Test func typingThatNeverLandedStillInsertsTheFinishedTextNormally() async {
-        for accepted in [false, true] {
-            let field = SimulatedTextField("Chat: ")
-            field.onReplace = { _, _, _ in accepted }   // the field never changes
-            let session = FakeSession()
-            let history = FakeHistory()
-            let hud = FakeHUD()
-            session.textToReturn = "meet at the lighthouse at noon"
-            let (coordinator, injector) = typingCoordinator(field, session: session, history: history, hud: hud)
-            coordinator.begin()
-            await Task.yield()
-            #expect(hud.notes.last == "Typing in TextEdit")
-            session.emit("meet at")
-            session.emit("meet at the lighthouse")
-            #expect(field.value == "Chat: ", "the app took nothing")
-            #expect(field.replaced.count == 1)
-            #expect(hud.cards.first == true, "typing stopped, so the card shows the words")
-            await coordinator.finish()
-            #expect(injector.delivered == ["meet at the lighthouse at noon"], "accepted=\(accepted): the final goes in like Preview mode")
-            #expect(history.saved == ["meet at the lighthouse at noon"])
-            #expect(hud.phases.last != .typingStopped, "accepted=\(accepted)")
-            #expect(field.replaced.count == 1, "no second write into a field that ignores writes")
-        }
+    /// An app that refuses every write call (returns an error, field
+    /// unchanged) typed nothing, so the finished text goes in the normal way,
+    /// exactly as in Preview mode, not History only.
+    @Test func writesTheAppRefusedMeanNothingWasTypedSoTheFinishedTextIsInsertedNormally() async {
+        let field = SimulatedTextField("Chat: ")
+        field.onReplace = { _, _, _ in false }
+        let session = FakeSession()
+        let history = FakeHistory()
+        let hud = FakeHUD()
+        session.textToReturn = "meet at the lighthouse at noon"
+        let (coordinator, injector) = typingCoordinator(field, session: session, history: history, hud: hud)
+        coordinator.begin()
+        await Task.yield()
+        session.emit("meet at")
+        session.emit("meet at the lighthouse")
+        #expect(field.value == "Chat: " && field.replaced.count == 1)
+        #expect(hud.cards.first == true, "typing stopped, so the card shows the words")
+        await coordinator.finish()
+        #expect(injector.delivered == ["meet at the lighthouse at noon"], "the final goes in like Preview mode")
+        #expect(history.saved == ["meet at the lighthouse at noon"])
+        #expect(hud.phases.last != .typingStopped)
+        #expect(field.replaced.count == 1, "no second write into a field that refuses writes")
+    }
+
+    /// A write call that succeeded may have put words in even when the field
+    /// still reads back the old text (Chromium, Electron apply it later): the
+    /// finished text must not be pasted on top. It stays on the card with Copy.
+    @Test func aSuccessfulWriteWithStaleReadBackCountsAsTypedSoNothingIsPastedOnTop() async {
+        let field = SimulatedTextField("Chat: ")
+        field.onReplace = { _, _, _ in true }   // says yes, never shows it
+        let session = FakeSession()
+        let history = FakeHistory()
+        let hud = FakeHUD()
+        session.textToReturn = "meet at the lighthouse at noon"
+        let (coordinator, injector) = typingCoordinator(field, session: session, history: history, hud: hud)
+        coordinator.begin()
+        await Task.yield()
+        session.emit("meet at")
+        session.emit("meet at the lighthouse")
+        #expect(field.replaced.count == 1)
+        #expect(field.reads >= 1 + LiveInlineSession.settleReads, "the field is re-read before the write is judged")
+        await coordinator.finish()
+        #expect(injector.delivered.isEmpty, "never paste on top of words that may be there")
+        #expect(history.saved == ["meet at the lighthouse at noon"])
+        #expect(hud.phases.last == .typingStopped)
+        #expect(hud.offers == ["meet at the lighthouse at noon"] && hud.livePreview, "the card keeps the words with Copy")
+    }
+
+    /// A field that shows the write a moment later keeps typing live.
+    @Test func aWriteThatSettlesAfterAMomentKeepsTyping() async {
+        let field = SimulatedTextField("Note: ")
+        field.appliesAfterReads = 2
+        let session = FakeSession()
+        session.textToReturn = "the lighthouse keeper waved"
+        let (coordinator, injector) = typingCoordinator(field, session: session)
+        coordinator.begin()
+        await Task.yield()
+        session.emit("the light")
+        session.emit("the lighthouse")
+        #expect(field.value == "Note: the")
+        session.emit("the lighthouse keeper")
+        #expect(field.value == "Note: the lighthouse")
+        await coordinator.finish()
+        #expect(field.value == "Note: the lighthouse keeper waved")
+        #expect(injector.delivered.isEmpty)
+    }
+
+    /// Typing worked all take; only the final write fails (the person clicked
+    /// elsewhere during cleanup). The capsule was showing: the words and Copy
+    /// must come up on the card, not a stuck capsule.
+    @Test func aFinalWriteThatFailsAfterLiveTypingShowsTheCardWithCopy() async {
+        let field = SimulatedTextField("Note: ")
+        let session = FakeSession()
+        let history = FakeHistory()
+        let hud = FakeHUD()
+        session.textToReturn = "the lighthouse keeper waved"
+        let (coordinator, injector) = typingCoordinator(field, session: session, history: history, hud: hud)
+        coordinator.begin()
+        await Task.yield()
+        session.emit("the light")
+        session.emit("the lighthouse")
+        #expect(field.value == "Note: the" && hud.livePreview == false, "capsule while typing works")
+        session.onStop = { field.current.selection = NSRange(location: 0, length: 0) }
+        await coordinator.finish()
+        #expect(field.value == "Note: the", "nothing more is written after the caret moved")
+        #expect(injector.delivered.isEmpty)
+        #expect(hud.phases.last == .typingStopped)
+        #expect(hud.livePreview && hud.offers == ["the lighthouse keeper waved"], "the card, with the words and Copy")
+        #expect(hud.partials.last == "the lighthouse keeper waved")
     }
 
     @Test func typingRefusedAtStartInsertsTheFinishedTextNormally() async {

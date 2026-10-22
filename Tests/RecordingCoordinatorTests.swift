@@ -92,15 +92,17 @@ final class FakeHUD: HUDControlling {
     var hidden = 0
     var hideDelays: [Double] = []
     var offers: [String] = []
+    /// What the panel shows now: the card (true) or the capsule (false).
+    var livePreview = false
     var onConfirm: (() -> Void)?
     var onCancel: (() -> Void)?
 
-    func show(device: String?, livePreview: Bool) { shown += 1; previews.append(livePreview) }
+    func show(device: String?, livePreview: Bool) { shown += 1; previews.append(livePreview); self.livePreview = livePreview }
     func setPhase(_ phase: HUDPhase) { phases.append(phase) }
     func setLevel(_ level: Float) {}
     func setPartial(_ text: String) { partials.append(text) }
     func setLiveNote(_ note: String?) { notes.append(note) }
-    func setLivePreview(_ on: Bool) { cards.append(on) }
+    func setLivePreview(_ on: Bool) { cards.append(on); livePreview = on }
     func hide(after seconds: Double) { hidden += 1; hideDelays.append(seconds) }
     func setActions(onConfirm: @escaping () -> Void, onCancel: @escaping () -> Void) {
         self.onConfirm = onConfirm

@@ -55,15 +55,16 @@ final class PermissionsManager {
 
     enum AccessibilityGrantOutcome: Equatable { case alreadyTrusted, granted, promptShown, settingsOpened }
 
-    /// One press, one visible result: clear the stale row, ask for Apple's
-    /// prompt, and only if no prompt appeared within about a second open the
-    /// Accessibility list with pFlow already in it. Never both.
+    /// One press, one action: clear the stale row, ask for Apple's prompt,
+    /// and only if no prompt appeared within about 2.5 s open the
+    /// Accessibility list with pFlow already in it. Once the list is open
+    /// nothing more is opened; a prompt that shows up later is left alone.
     static func grantAccessibility(_ steps: AccessibilityGrantSteps) async -> AccessibilityGrantOutcome {
         if steps.isTrusted() { return .alreadyTrusted }
         steps.resetOwnRow()
         let promptAppeared = steps.watchForPrompt()
         steps.prompt()
-        for _ in 0..<4 {
+        for _ in 0..<promptWaits {
             if steps.isTrusted() { return .granted }
             if promptAppeared() { return .promptShown }
             await steps.wait()
@@ -74,6 +75,8 @@ final class PermissionsManager {
         return .settingsOpened
     }
 
+    /// Quarter-second looks for Apple's prompt before the list is opened instead.
+    static let promptWaits = 10
     private var accessibilityGrantInFlight = false
 
     /// One Grant press for Accessibility. A second press while one is still
@@ -290,25 +293,22 @@ final class PermissionsManager {
     /// universalAccessAuthWarn (seen on macOS 27 with a throwaway bundle).
     private static let promptOwner = "universalAccessAuthWarn"
 
-    private static func promptWindows() -> [(number: Int, name: String)] {
+    private static func promptWindows() -> [(number: Int, owner: String)] {
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         return windows.compactMap { window in
-            guard window[kCGWindowOwnerName as String] as? String == promptOwner,
+            guard let owner = window[kCGWindowOwnerName as String] as? String, owner == promptOwner,
                   let number = window[kCGWindowNumber as String] as? Int else { return nil }
-            return (number, window[kCGWindowName as String] as? String ?? "")
+            return (number, owner)
         }
     }
 
-    /// Only a prompt window that appeared after our request counts, and if
-    /// its title can be read it must name pFlow; a dialog that was already on
-    /// screen, or another app's, is not ours.
+    /// Only a prompt window that appeared after our request counts; a dialog
+    /// that was already on screen is not ours. Window titles are withheld
+    /// without Screen Recording permission, so the window's owner and timing
+    /// are all there is to go on.
     static func watchForAccessibilityPrompt() -> () -> Bool {
         let before = Set(promptWindows().map(\.number))
-        return {
-            promptWindows().contains { window in
-                !before.contains(window.number) && (window.name.isEmpty || window.name.localizedCaseInsensitiveContains("pFlow"))
-            }
-        }
+        return { promptWindows().contains { !before.contains($0.number) } }
     }
 
     enum PrivacyPane: String {

@@ -184,16 +184,17 @@ class MacReleaseTests(unittest.TestCase):
         for name, calls in (('testing', testing), ('production', self.calls)):
             with self.subTest(path=name):
                 signing = [a for a in calls if a[0] == 'codesign' and '--sign' in a]
-                self.assertEqual(len(signing), 0 if name == 'testing' else len(signing) or 1, 'testing keeps the build signature as is')
-                if name == 'production': self.assertGreaterEqual(len(signing), 3)
+                if name == 'testing': self.assertEqual(len(signing), 0, 'testing keeps the build signature as is')
+                else: self.assertGreaterEqual(len(signing), 3)
                 for requirement in self.requirements_set_by(calls):
                     self.assertIn('anchor', requirement, f'{name}: {requirement}')
                 self.assertTrue(any(a[:4] == ('codesign', '--verify', '--deep', '--strict') for a in calls))
 
     def test_no_build_file_writes_a_designated_requirement_without_an_anchor(self):
         root = SCRIPTS.parent
-        files = [*root.glob('scripts/*.py'), *root.glob('scripts/*.sh'), *root.glob('*.sh'), root / 'project.yml',
-                 *root.glob('.github/workflows/*.yml')]
+        files = [*root.glob('scripts/**/*.py'), *root.glob('scripts/**/*.sh'), *root.glob('*.sh'), root / 'project.yml',
+                 *root.glob('**/*.xcconfig'), *root.glob('**/Package.swift'), *root.glob('.github/workflows/*.yml')]
+        files = [f for f in files if not {'windows', 'build', '.build', 'tests'} & set(f.parts)]
         scanned = []
         for path in files:
             if not path.is_file(): continue
