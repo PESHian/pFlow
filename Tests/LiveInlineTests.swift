@@ -287,7 +287,7 @@ struct LiveInlineTests {
         #expect(hud.cards.isEmpty, "the card never showed")
     }
 
-    @Test func showsTheCardWhenAWebAppNeverOffersAField() async {
+    @Test func keepsTheCapsuleWhenAWebAppNeverOffersAField() async {
         let field = SimulatedTextField("Note: ")
         let session = FakeSession()
         let hud = FakeHUD()
@@ -298,7 +298,7 @@ struct LiveInlineTests {
         await Task.yield()
         #expect(hud.previews == [false])
         try? await Task.sleep(for: .milliseconds(150))
-        #expect(hud.cards.last == true, "time ran out, so the card shows")
+        #expect(hud.cards.isEmpty, "time ran out; the capsule stays and the words go in at the end")
         #expect(hud.notes.last == "Can't type in this app")
         let retries = injector.retries
         #expect(retries >= 1)
@@ -336,7 +336,7 @@ struct LiveInlineTests {
         coordinator.begin()
         await Task.yield()
         try? await Task.sleep(for: .milliseconds(40))
-        #expect(hud.cards.last == true)
+        #expect(hud.cards.isEmpty, "no card mid-take")
         #expect(hud.notes.last == "Secure input is on")
         await coordinator.finish()
         #expect(field.replaced.isEmpty)
@@ -598,7 +598,7 @@ struct LiveInlineTests {
         let (coordinator, injector) = typingCoordinator(field, session: session, hud: hud)
         coordinator.begin()
         await Task.yield()
-        #expect(hud.previews == [true])
+        #expect(hud.previews == [false])
         #expect(hud.notes.last == "Can't type in this app")
         session.emit("buy")
         session.emit("buy rope")

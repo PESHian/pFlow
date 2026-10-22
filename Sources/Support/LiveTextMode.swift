@@ -22,16 +22,10 @@ enum LiveTextMode: String, CaseIterable, Identifiable {
     var showsPreview: Bool { self != .off }
 
     /// Whether the take shows the text card or the small waveform capsule.
-    /// Type mode shows the capsule while pFlow is typing in the app, or is
-    /// about to once the app has built its Accessibility tree: the words are
-    /// on screen there. The card appears only when typing could not start or
-    /// has stopped, with its note. The one rule for both looks.
-    func showsCard(typingLive: Bool) -> Bool {
-        switch self {
-        case .off: return false
-        case .typeInApp: return !typingLive
-        }
-    }
+    /// Type in the current app keeps the capsule for the whole take: the words
+    /// belong in the app, not in a pFlow window. Words that could not go in are
+    /// offered in the Copy card after the take. The one rule for both platforms.
+    func showsCard(typingLive: Bool) -> Bool { false }
 
     /// Missing or unknown saved values are Off, so existing installs keep
     /// today's behavior until the person picks something else.

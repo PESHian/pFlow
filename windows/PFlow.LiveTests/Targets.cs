@@ -265,6 +265,12 @@ internal static partial class Program
             Check("an unchecked take with a note (line breaks as spaces, plain styles, copy failed) still ends quietly as inserted; History keeps the note",
                 blindNoted.Prompt == null && blindNoted.Notice == null && blindNoted.Status == noted && uncheckedPhase == Phase.Inserted
                 && store.History.Count(h => h.InsertionStatus == noted) == 1);
+            // A write that went out but read back stale: the words are nearly always in the field, so the take ends quietly.
+            Phase? unconfirmedPhase = null;
+            var late = await pipeline.Deliver(prepared, 1.0, new UncheckedTarget(InsertionTarget.Unconfirmed), IntPtr.Zero, (phase, _) => unconfirmedPhase = phase, CancellationToken.None);
+            Check("an insert that could not be read back ends quietly: no card, no balloon, not claimed inserted, History says to check the field",
+                late.Prompt == null && late.Notice == null && late.Status == InsertionTarget.Unconfirmed && unconfirmedPhase == Phase.Saved
+                && store.History.Count(h => h.InsertionStatus == InsertionTarget.Unconfirmed) == 1);
             // Recognition of the whole take fails (no engine in this folder) after live words: the card is offered only
             // when nothing was typed live; words already typed in the app stay there and get no "couldn't type this".
             var typing = new LiveTyping(_ => (LiveFinal.Applied, null), () => true, () => (LiveCancel.NothingTyped, null));

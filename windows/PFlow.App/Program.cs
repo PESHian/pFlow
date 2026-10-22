@@ -120,14 +120,9 @@ internal sealed partial class Program : Application
         if (typingSession == owner.SessionName && recorder != null && typing.Reconcile(typingSession, transcript.Text) is LiveStop stop)
             ShowCard(LiveInlineText.StoppedNote(stop));
     }
-    /// Typing in the app ended for this take, so the words now need the card.
-    void ShowCard(string note)
-    {
-        preview.SetNote(note);
-        if (card) return;
-        card = true;
-        if (recorder != null) preview.Reveal(capsule.Handle);
-    }
+    /// Typing in the app ended for this take. The note is kept for the take's
+    /// status; the recording control stays, and the finished words go in at the end.
+    void ShowCard(string note) => preview.SetNote(note);
     /// The words typed live for this take, as the pipeline finishes it.
     LiveTyping? TypingFor(string? session) => session == null ? null
         : new LiveTyping(text => typing.Finalize(session, text), () => typing.Typed(session), () => typing.Cancel(session));

@@ -141,10 +141,9 @@ final class RecordingCoordinator {
         }
     }
 
-    /// Typing in the app ended for this take, so the words now need the card.
+    /// Typing in the app ended for this take. The capsule stays; the finished
+    /// words go in at the end, or the Copy card offers them.
     private func showCard(note: String) {
-        hud.setLivePreview(takeLiveTextMode.showsCard(typingLive: false))
-        hud.setPartial(transcript.text)
         hud.setLiveNote(note)
     }
 

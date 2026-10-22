@@ -175,19 +175,19 @@ internal static partial class Program
             var window = new SettingsWindow(store, new Whisper(directory), new LocalTextModel(directory), keyboard, () => { }, () => false) { ShowActivated = false, Width = width };
             try {
                 window.Show(); await Task.Delay(150); window.UpdateLayout();
-                var picker = Descendants<System.Windows.Controls.ComboBox>(window).Single(x => System.Windows.Automation.AutomationProperties.GetName(x) == "Live text");
-                Check("Live text offers the two choices", picker.Items.Cast<object>().Select(x => x.ToString()).SequenceEqual(new[] { "Off", "Type in the current app" }));
+                var tiles = Descendants<System.Windows.Controls.RadioButton>(window).Where(x => x.GroupName == "LiveText").ToList();
+                Check("Live text offers the two choices as visible tiles, no drop-down", tiles.Select(x => (string)x.Tag).SequenceEqual(new[] { LiveTextModes.Off, LiveTextModes.TypeInApp })
+                    && tiles.All(x => x.IsVisible) && !Descendants<System.Windows.Controls.ComboBox>(window).Any(x => System.Windows.Automation.AutomationProperties.GetName(x) == "Live text"));
                 if (theme == "light" && width > 500) {
-                    Check("Live text starts Off", picker.SelectedValue as string == LiveTextModes.Off);
-                    picker.SelectedIndex = 1;
+                    Check("Live text starts Off", tiles.Single(x => x.IsChecked == true).Tag as string == LiveTextModes.Off);
+                    tiles[1].IsChecked = true; await Task.Delay(50); window.UpdateLayout();
                     Check("Type in the current app is saved", new StateStore(directory).Preferences.LiveTextMode == LiveTextModes.TypeInApp);
                     Check("Settings explains typing into the app", Descendants<System.Windows.Controls.TextBlock>(window).Any(x => x.Text.StartsWith("Types your words into the app as you talk")));
                 }
-                Descendants<System.Windows.Controls.TextBlock>(window).First(x => x.Text.EndsWith("can differ a little from the preview.") || x.Text.StartsWith("Words appear in your app")).BringIntoView();
+                Descendants<System.Windows.Controls.TextBlock>(window).First(x => x.Text.StartsWith("Types your words into the app") || x.Text.StartsWith("Words appear in your app")).BringIntoView();
                 await Task.Delay(150); window.UpdateLayout();
-                string Shown(System.Windows.Controls.ComboBox box) => string.Join("|", Descendants<System.Windows.Controls.TextBlock>(box).Select(x => x.Text));
-                if (width > 500) Check($"{theme} Live text box shows its label, not its data", Shown(picker) is "Off" or "Type in the current app");
-                foreach (var box in Descendants<System.Windows.Controls.ComboBox>(window)) Console.WriteLine($"LIVE settings box '{System.Windows.Automation.AutomationProperties.GetName(box)}' shows '{Shown(box)}'");
+                // The tiles keep whole words at the narrow width too: the owner saw a cut-off segmented control on the Mac.
+                Check($"{theme} {width:F0} Live text tiles show their whole labels", tiles.All(x => Descendants<System.Windows.Controls.TextBlock>(x).All(t => t.ActualWidth <= x.ActualWidth)));
                 var content = (FrameworkElement)window.Content;
                 var bitmap = new RenderTargetBitmap((int)Math.Ceiling(content.ActualWidth * 2), (int)Math.Ceiling(content.ActualHeight * 2), 192, 192, System.Windows.Media.PixelFormats.Pbgra32); bitmap.Render(content);
                 var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(bitmap));

@@ -102,9 +102,8 @@ internal static class LiveTextChecks
             File.WriteAllText(settings, File.ReadAllText(settings).Replace("\"liveTextMode\": \"type\"", "\"liveTextMode\": \"sideways\""));
             Check("an unknown saved Live text value loads as Off", new StateStore(directory).Preferences.LiveTextMode == LiveTextModes.Off);
             Check("Type in the current app runs live words; Off and unknown values do not", LiveTextModes.ShowsPreview(LiveTextModes.TypeInApp) && !LiveTextModes.ShowsPreview(LiveTextModes.Off) && !LiveTextModes.ShowsPreview("sideways"));
-            Check("Type in the current app shows only the recording control while typing works", !LiveTextModes.ShowsCard(LiveTextModes.TypeInApp, typingLive: true) && LiveTextModes.ShowsCard(LiveTextModes.TypeInApp, typingLive: false));
-            Check("a retired saved preview behaves as Type; Off and unknown values never show the card", LiveTextModes.ShowsCard("preview", false) && !LiveTextModes.ShowsCard("preview", true)
-                && !LiveTextModes.ShowsCard(LiveTextModes.Off, false) && !LiveTextModes.ShowsCard("sideways", false) && LiveTextModes.All.Count == 2);
+            Check("the recording control is all a take shows, whether or not typing works", !LiveTextModes.ShowsCard(LiveTextModes.TypeInApp, typingLive: true) && !LiveTextModes.ShowsCard(LiveTextModes.TypeInApp, typingLive: false)
+                && !LiveTextModes.ShowsCard("preview", false) && !LiveTextModes.ShowsCard(LiveTextModes.Off, false) && !LiveTextModes.ShowsCard("sideways", false) && LiveTextModes.All.Count == 2);
         } finally { Directory.Delete(directory, true); }
     }
 

@@ -90,12 +90,12 @@ struct LiveTextTests {
         // Type mode keeps the small capsule while pFlow types in the app; the
         // card appears only when typing could not start or has stopped.
         #expect(LiveTextMode.allCases.map { $0.showsCard(typingLive: true) } == [false, false])
-        #expect(LiveTextMode.allCases.map { $0.showsCard(typingLive: false) } == [false, true])
-        let defaults = UserDefaults(suiteName: "pflow-live-text-retired-preview-" + UUID().uuidString)!
-        defaults.set("preview", forKey: LiveTextMode.defaultsKey)
-        #expect(LiveTextMode.saved(in: defaults) == .typeInApp, "the retired Preview choice loads as Type")
-        defaults.set("sideways", forKey: LiveTextMode.defaultsKey)
-        #expect(LiveTextMode.saved(in: defaults) == .off)
+        #expect(LiveTextMode.allCases.map { $0.showsCard(typingLive: false) } == [false, false], "the capsule stays for the whole take")
+        let retired = UserDefaults(suiteName: "pflow-live-text-retired-preview-" + UUID().uuidString)!
+        retired.set("preview", forKey: LiveTextMode.defaultsKey)
+        #expect(LiveTextMode.saved(in: retired) == .typeInApp, "the retired Preview choice loads as Type")
+        retired.set("sideways", forKey: LiveTextMode.defaultsKey)
+        #expect(LiveTextMode.saved(in: retired) == .off)
     }
 
     // MARK: Coordinator
@@ -174,7 +174,7 @@ struct LiveTextTests {
         mode = .off
         session.emit("shown still")
         await coordinator.finish()
-        #expect(hud.previews == [false, true])
+        #expect(hud.previews == [false, false])
         #expect(hud.partials == ["shown", "shown still"])
     }
 
@@ -192,7 +192,7 @@ struct LiveTextTests {
                 #expect(injector.delivered.isEmpty)
             }
             await coordinator.finish()
-            #expect(hud.previews == [true])
+            #expect(hud.previews == [false])
             #expect(injector.delivered == ["hello world"], "\(mode)")
             #expect(history.saved.count == 1, "\(mode)")
         }

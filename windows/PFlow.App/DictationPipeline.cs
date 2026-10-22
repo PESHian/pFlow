@@ -119,11 +119,14 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         if (index >= 0) { store.History[index] = entry with { InsertionStatus = result }; store.Write("history.json", store.History); }
         // Words typed without a check went in the way a person's typing would: that is a done take, not a failure.
         bool inserted = result.StartsWith("Inserted", StringComparison.Ordinal) || result.StartsWith(InsertionTarget.Unchecked, StringComparison.Ordinal);
-        state(inserted ? Phase.Inserted : kept || result is InsertionTarget.SavedToHistory or InsertionTarget.Unreachable ? Phase.Saved : Phase.Failed, result);
+        // A write that went out but could not be read back is nearly always in the field already (web
+        // boxes read back late): no balloon and no card for it; the History status says to check.
+        bool unconfirmed = result.StartsWith(InsertionTarget.Unconfirmed, StringComparison.Ordinal);
+        state(inserted ? Phase.Inserted : kept || unconfirmed || result is InsertionTarget.SavedToHistory or InsertionTarget.Unreachable ? Phase.Saved : Phase.Failed, result);
         // Anything short of a done take is said every time; words that never went in are shown in the card to copy.
-        string? notice = !inserted ? result : unavailable ? "Dictation inserted. AI report formatting did not finish; your words were kept."
+        string? notice = !inserted ? unconfirmed ? null : result : unavailable ? "Dictation inserted. AI report formatting did not finish; your words were kept."
             : prepared.CleanupIncomplete ? "Dictation inserted. Cleanup did not finish; your original words were kept." : null;
-        return new Result(result, notice, InsertionPrompt.Offer(text, result, kept));
+        return new Result(result, notice, unconfirmed ? null : InsertionPrompt.Offer(text, result, kept));
     }
 }
 
