@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 namespace PFlow.Windows;
 
 /// Recorded as a number in last-processing-times.json (no words); ProcessingTimes names it.
-internal enum CleanupOutcome { NotRun = 0, Applied = 1, Rejected = 2, TimedOut = 3, Failed = 4, Skipped = 5, LocalAIOff = 6, Partial = 7 }
+internal enum CleanupOutcome { NotRun = 0, Applied = 1, Rejected = 2, TimedOut = 3, Failed = 4, Skipped = 5, LocalAIOff = 6, Partial = 7, RejectedSymbols = 8 }
 
 internal sealed class LocalTextModel
 {
@@ -124,7 +124,7 @@ internal sealed class LocalTextModel
             catch (Exception error) when (error is not OperationCanceledException) { LastIssue = error.Message; LastOutcome = CleanupOutcome.Failed; return string.Join("\n\n", paragraphs); }
         }
         LastIssue = Issue(applied, rejected, symbolsOnly);
-        LastOutcome = rejected == 0 ? applied > 0 ? CleanupOutcome.Applied : CleanupOutcome.Skipped : applied > 0 ? CleanupOutcome.Partial : CleanupOutcome.Rejected;
+        LastOutcome = rejected == 0 ? applied > 0 ? CleanupOutcome.Applied : CleanupOutcome.Skipped : applied > 0 ? CleanupOutcome.Partial : symbolsOnly ? CleanupOutcome.RejectedSymbols : CleanupOutcome.Rejected;
         return string.Join("\n\n", paragraphs);
     }
     public async Task<(string Text, string? Rtf)?> Report(string source, DictationTemplate template, string directory, CancellationToken cancel)

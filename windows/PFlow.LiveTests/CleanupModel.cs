@@ -60,7 +60,14 @@ internal static partial class Program
             var cutPrepared = await cutPipeline.Shape(flat, directory, (_, _) => { }, CancellationToken.None);
             var delivered = await cutPipeline.Deliver(cutPrepared, 1.0, new InsertingTarget(), IntPtr.Zero, (_, _) => { }, CancellationToken.None);
             Check("a delivered cut-off take carries the cleanup issue and History says it with the status", delivered.Status == "Inserted" && delivered.CleanupIssue == LocalTextModel.TimedOutIssue
-                && delivered.Notice == "Dictation inserted. " + LocalTextModel.TimedOutIssue && store.History[0].InsertionStatus == "Inserted " + LocalTextModel.TimedOutIssue && HistoryRow.Status(store.History[0].InsertionStatus) == HistoryRow.Inserted);
+                && delivered.Notice == "Dictation inserted. " + LocalTextModel.TimedOutIssue && delivered.NoticeIsCleanup && store.History[0].InsertionStatus == "Inserted · " + LocalTextModel.TimedOutIssue && HistoryRow.Status(store.History[0].InsertionStatus) == HistoryRow.Inserted);
+            // The same cut-off take whose clipboard could not be put back: that notice is not the cleanup one, so it is never the once-per-start balloon.
+            const string blocked = "Clipboard restore was blocked. Keep pFlow open and check your clipboard.";
+            var blockedTake = await cutPipeline.Deliver(cutPrepared, 1.0, new UncheckedTarget(blocked), IntPtr.Zero, (_, _) => { }, CancellationToken.None);
+            Check("a cut-off take with a clipboard notice keeps that notice, which is not the cleanup one", blockedTake.Notice == blocked && blockedTake.CleanupIssue == LocalTextModel.TimedOutIssue && !blockedTake.NoticeIsCleanup
+                && store.History[0].InsertionStatus == blocked + " · " + LocalTextModel.TimedOutIssue);
+            store.Write("last-processing-times.json", new Dictionary<string, double> { ["totalAfterReleaseMs"] = 1, ["cleanupMs"] = 5000, ["cleanupOutcome"] = (double)CleanupOutcome.RejectedSymbols });
+            Check("a symbols-only rejection is named on the processing line", ProcessingTimes.Read(directory).Contains("AI cleanup: 5.0 s (changed punctuation inside a number, so not used)"));
             // Local text model switched off with AI cleanup on: the processing line says which switch.
             store.Preferences.UseLocalAI = false; var offTiming = new Dictionary<string, double>();
             var off = new DictationPipeline(store, whisper, model) { Timing = (name, ms) => offTiming[name] = ms };

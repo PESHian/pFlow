@@ -22,7 +22,13 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
     internal const string CopyFailed = "Inserted, but it could not be copied to the clipboard. Copy it from History.";
     /// `Prompt` carries the words for pFlow's "couldn't type this" card, with the
     /// reason line, whenever the words did not go into the app (one rule: InsertionPrompt.Offer).
-    internal readonly record struct Result(string Status, string? Notice, (string Text, string Reason)? Prompt = null, string? CleanupIssue = null);
+    internal readonly record struct Result(string Status, string? Notice, (string Text, string Reason)? Prompt = null, string? CleanupIssue = null)
+    {
+        /// True only when the balloon would say nothing but the cleanup note; any other notice
+        /// (clipboard, live typing kept, report formatting) is never the one shown just once.
+        public bool NoticeIsCleanup => CleanupIssue != null && Notice == CleanupNoticeText(CleanupIssue);
+    }
+    internal static string CleanupNoticeText(string issue) => "Dictation inserted. " + issue;
     internal readonly record struct Prepared(string Text, string? Rtf, int SpokenWords, bool ReportUnavailable, bool CleanupIncomplete, bool CleanupTimedOut, string? CleanupIssue = null);
     internal async Task<Prepared> Prepare(string audio, double seconds, string folder, Action<Phase, string?> state, CancellationToken cancel)
     {
@@ -129,7 +135,7 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         // History carries the cleanup note with the status, so a take whose words were kept as recognized can be told apart later.
         string? cleanupIssue = prepared.CleanupIncomplete ? prepared.CleanupIssue ?? LocalTextModel.TimedOutIssue : null;
         int index = store.History.FindIndex(x => x.Id == entry.Id);
-        if (index >= 0) { store.History[index] = entry with { InsertionStatus = cleanupIssue == null ? result : result + " " + cleanupIssue }; store.Write("history.json", store.History); }
+        if (index >= 0) { store.History[index] = entry with { InsertionStatus = cleanupIssue == null ? result : result + " · " + cleanupIssue }; store.Write("history.json", store.History); }
         // Words typed without a check went in the way a person's typing would: that is a done take, not a failure.
         bool inserted = result.StartsWith("Inserted", StringComparison.Ordinal) || result.StartsWith(InsertionTarget.Unchecked, StringComparison.Ordinal);
         // A write that went out but could not be read back is nearly always in the field already (web
@@ -138,7 +144,7 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         state(inserted ? Phase.Inserted : kept || unconfirmed || result is InsertionTarget.SavedToHistory or InsertionTarget.Unreachable ? Phase.Saved : Phase.Failed, result);
         // Anything short of a done take is said every time; words that never went in are shown in the card to copy.
         string? notice = !inserted ? unconfirmed ? null : result : unavailable ? "Dictation inserted. AI report formatting did not finish; your words were kept."
-            : cleanupIssue != null ? "Dictation inserted. " + cleanupIssue : null;
+            : cleanupIssue != null ? CleanupNoticeText(cleanupIssue) : null;
         return new Result(result, notice, unconfirmed ? null : InsertionPrompt.Offer(text, result, kept), cleanupIssue);
     }
 }

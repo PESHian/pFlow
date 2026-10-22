@@ -295,11 +295,13 @@ internal sealed partial class SettingsWindow : Window
     {
         // No sideways scrolling: a row's first words trim with an ellipsis at the list's edge instead.
         var list = Pannable(new ListBox { MinHeight = 120, Margin = new Thickness(0, 0, 0, 12) }); ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled); System.Windows.Automation.AutomationProperties.SetName(list, "Past dictations");
-        // The rows are all one height; the remainder below a whole number of them becomes bottom
-        // padding, so the last visible row is never sliced mid-glyph.
+        // The rows are all one height: the list is never shorter than two of them, and the remainder
+        // below a whole number of them becomes bottom padding, so no row is ever sliced mid-glyph.
         void WholeRows() {
             if (list.Items.Count == 0 || list.Items[0] is not ListBoxItem first || first.ActualHeight <= 0) return;
-            double inner = list.ActualHeight - list.BorderThickness.Top - list.BorderThickness.Bottom - 12, rest = inner - Math.Floor(inner / first.ActualHeight) * first.ActualHeight;
+            double frame = list.BorderThickness.Top + list.BorderThickness.Bottom + 12;
+            list.MinHeight = Math.Max(120, 2 * first.ActualHeight + frame);
+            double inner = Math.Max(list.ActualHeight, list.MinHeight) - frame, rest = inner - Math.Floor(inner / first.ActualHeight) * first.ActualHeight;
             list.Padding = new Thickness(6, 6, 6, 6 + rest);
         }
         list.SizeChanged += (_, _) => WholeRows(); list.Loaded += (_, _) => WholeRows();

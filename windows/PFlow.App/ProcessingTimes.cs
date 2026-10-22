@@ -10,7 +10,8 @@ internal static class ProcessingTimes
     static string Outcome(double? code) => code switch {
         (double)CleanupOutcome.Applied => " (used)", (double)CleanupOutcome.Rejected => " (changed the words, so not used)",
         (double)CleanupOutcome.TimedOut => " (took too long, not used)", (double)CleanupOutcome.Failed => " (engine failed, not used)",
-        (double)CleanupOutcome.Skipped => " (nothing to clean)", (double)CleanupOutcome.Partial => " (partly used)", _ => "" };
+        (double)CleanupOutcome.Skipped => " (nothing to clean)", (double)CleanupOutcome.Partial => " (partly used)",
+        (double)CleanupOutcome.RejectedSymbols => " (changed punctuation inside a number, so not used)", _ => "" };
     public static string Read(string directory)
     {
         string file = Path.Combine(directory, "last-processing-times.json");

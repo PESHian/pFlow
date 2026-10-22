@@ -225,7 +225,7 @@ internal sealed partial class Program : Application
             InsertionLog.Record("take done: " + seconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s, status=" + result.Status);
             // Words that did not go in are shown in the card to copy; the card says why, so no balloon then.
             if (result.Prompt is { } offer) prompt.ShowWords(offer.Text, offer.Reason, capsule.Handle);
-            else if (result.Notice != null && cleanupNotice.Allow(result.CleanupIssue != null)) Notify(result.Notice);
+            else if (result.Notice != null && cleanupNotice.Allow(result.NoticeIsCleanup)) Notify(result.Notice);
             else if (result.Notice != null) InsertionLog.Record("cleanup not used (balloon already shown this start): " + result.CleanupIssue);
         } catch (OperationCanceledException) { InsertionLog.Record("take canceled"); Set(Phase.Canceled); }
         catch (Exception error) { InsertionLog.Record("take failed: " + InsertionLog.Reason(error)); Failure(error); }
