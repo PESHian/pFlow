@@ -25,7 +25,7 @@ internal static partial class Program
                 string raw = await whisper.Transcribe(Path.Combine(root, audio), "en", [], CancellationToken.None);
                 var clock = Stopwatch.StartNew();
                 var prepared = await pipeline.Shape(raw, directory, (_, detail) => stages.Add(detail), CancellationToken.None);
-                Console.WriteLine($"CLEANUP {audio}: words={TextProcessing.WordCount(raw)} cleanupMs={timing.GetValueOrDefault("cleanupMs"):F0} outcome={model.LastOutcome} issue={model.LastIssue ?? "none"} elapsed={clock.ElapsedMilliseconds}");
+                Console.WriteLine($"CLEANUP {audio}: words={TextProcessing.WordCount(raw)} cleanupMs={timing.GetValueOrDefault("cleanupMs"):F0} budgetMs={DictationPipeline.BudgetFor(TextProcessing.WordCount(raw)).TotalMilliseconds:F0} outcome={(CleanupOutcome)(int)timing.GetValueOrDefault("cleanupOutcome")} issue={prepared.CleanupIssue ?? "none"} elapsed={clock.ElapsedMilliseconds}");
                 Console.WriteLine($"CLEANUP {audio} raw: {raw}");
                 Console.WriteLine($"CLEANUP {audio} model: {model.LastModelText}");
                 Console.WriteLine($"CLEANUP {audio} final: {prepared.Text}");

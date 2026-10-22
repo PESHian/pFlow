@@ -14,9 +14,11 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
     }
     /// A fixed wait for AI cleanup (the live checks); otherwise BudgetFor the take's words.
     internal TimeSpan? CleanupBudget { get; init; }
-    /// How long AI cleanup may take: the 4B model needs about 0.1 s a word on the ARM64 test VM
-    /// (75 words in 8-10 s), so the wait grows with the take, between 8 s and a minute.
-    internal static TimeSpan BudgetFor(int words) => TimeSpan.FromSeconds(Math.Clamp(6 + 0.3 * words, 8, 60));
+    /// How long AI cleanup may take. The 4B model reads its instructions first (about 8 s on the
+    /// ARM64 test VM whatever the take; 13 words took 10 s, 60 words 11.4 s), then roughly 0.1 s
+    /// a word, so the wait is a fixed part plus the take's words, between 20 s and 90 s. This is
+    /// the cut-off, not the usual wait.
+    internal static TimeSpan BudgetFor(int words) => TimeSpan.FromSeconds(Math.Clamp(15 + 0.3 * words, 20, 90));
     internal const string CopyFailed = "Inserted, but it could not be copied to the clipboard. Copy it from History.";
     /// `Prompt` carries the words for pFlow's "couldn't type this" card, with the
     /// reason line, whenever the words did not go into the app (one rule: InsertionPrompt.Offer).
