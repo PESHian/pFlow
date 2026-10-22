@@ -41,7 +41,7 @@ internal static partial class Program
                     var rows = list.Items.Cast<ListBoxItem>().ToList();
                     string Row(ListBoxItem item) => string.Join(" | ", Descendants<TextBlock>(item).Select(x => x.Text));
                     Check(tag + "rows are newest first with a friendly time, the status word and the first words", rows.Count == 3
-                        && Row(rows[0]).StartsWith("Today ") && Row(rows[0]).Contains("·  Inserted | Fictional words that went in today: the lighthouse keeper counted seven blue kites over the…")
+                        && Row(rows[0]).StartsWith("Today ") && Row(rows[0]).Contains("·  Inserted | Fictional words that went in today: the lighthouse keeper counted seven…")
                         && Row(rows[1]).StartsWith("Yesterday ") && Row(rows[1]).Contains("·  Check the field | Fictional words typed yesterday into a web box.")
                         && Row(rows[2]).Contains("·  Kept | Fictional older words kept in History only.") && !Row(rows[2]).StartsWith("Today") && !Row(rows[2]).StartsWith("Yesterday"));
                     Check(tag + "no raw timestamp anywhere on the page", !Descendants<TextBlock>(settings).Any(x => x.Text.Contains(now.ToString()) || x.Text.Contains(now.ToString("yyyy")) && x.Text.Contains(":00")));
