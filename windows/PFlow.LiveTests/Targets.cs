@@ -255,9 +255,9 @@ internal static partial class Program
             var typed = await pipeline.Deliver(prepared, 1.0, new InsertingTarget(), IntPtr.Zero, (_, _) => { }, CancellationToken.None);
             Check("an inserted take never offers the card", typed.Prompt == null && typed.Status == "Inserted");
             Phase? uncheckedPhase = null;
-            var unchecked = await pipeline.Deliver(prepared, 1.0, new UncheckedTarget(), IntPtr.Zero, (phase, _) => uncheckedPhase = phase, CancellationToken.None);
+            var blind = await pipeline.Deliver(prepared, 1.0, new UncheckedTarget(), IntPtr.Zero, (phase, _) => uncheckedPhase = phase, CancellationToken.None);
             Check("words typed without a check end the take quietly: no card, no balloon, the take counts as inserted, History keeps the status",
-                unchecked.Prompt == null && unchecked.Notice == null && unchecked.Status == InsertionTarget.Unchecked && uncheckedPhase == Phase.Inserted
+                blind.Prompt == null && blind.Notice == null && blind.Status == InsertionTarget.Unchecked && uncheckedPhase == Phase.Inserted
                 && store.History.Last().InsertionStatus == InsertionTarget.Unchecked);
             // Recognition of the whole take fails (no engine in this folder) after live words: the card is offered only
             // when nothing was typed live; words already typed in the app stay there and get no "couldn't type this".
