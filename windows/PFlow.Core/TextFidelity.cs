@@ -28,21 +28,45 @@ public static class TextFidelity
         }
         EndWord(); return atoms.ToArray();
     }
+    static readonly HashSet<string> NumberWords = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+        "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundred", "thousand", "million", "billion"];
+    static bool PlainNumber(string atom) => NumberWords.Contains(atom) || atom.Any(char.IsDigit);
+    /// Atoms that carry a number: digits, number words, and "oh"/"o" inside a run of them
+    /// ("oh oh seven"). A repeat of one is a digit, never a stammer.
+    static bool[] Numeric(string[] atoms)
+    {
+        var numeric = new bool[atoms.Length];
+        for (int i = 0; i < atoms.Length;) {
+            if (!(PlainNumber(atoms[i]) || atoms[i] is "oh" or "o")) { i++; continue; }
+            int end = i; bool plain = false;
+            while (end < atoms.Length && (PlainNumber(atoms[end]) || atoms[end] is "oh" or "o")) { plain |= PlainNumber(atoms[end]); end++; }
+            for (int j = i; j < end; j++) numeric[j] = plain;
+            i = end;
+        }
+        return numeric;
+    }
+    /// The edit differs from the source only in guarded symbols (a comma inside a number, a sign,
+    /// a quote): every word and number is the same, in the same order.
+    public static bool OnlySymbolsDiffer(string source, string result)
+    {
+        static string[] WordsOnly(string text) => Atoms(text).Where(a => char.IsLetterOrDigit(a[0])).ToArray();
+        return WordsOnly(source).SequenceEqual(WordsOnly(result));
+    }
     public static bool CleanupIsFaithful(string source, string result)
     {
         if (string.IsNullOrWhiteSpace(result)) return false;
         var protectedWords = new HashSet<string>(["no", "not", "never", "cannot", "without", "can't", "won't", "don't", "didn't", "wasn't", "isn't"]);
-        var original = Atoms(source); var edited = Atoms(result);
+        var original = Atoms(source); var edited = Atoms(result); var numeric = Numeric(original);
         // Only punctuation/case, fillers and removal of adjacent repeated words are allowed.
-        // Each run stays in order and cannot gain words or lose a negation; a number or a
-        // guarded symbol is never collapsed ("five five" may be 55).
+        // Each run stays in order and cannot gain words or lose a negation; a number (digits or
+        // words: "five five" may be 55) or a guarded symbol is never collapsed.
         int a = 0, b = 0;
         while (a < original.Length && b < edited.Length) {
             if (original[a] != edited[b]) return false;
             string word = original[a]; int sourceRun = 0, editedRun = 0;
+            bool exact = protectedWords.Contains(word) || numeric[a] || !char.IsLetter(word[0]);
             while (a < original.Length && original[a] == word) { a++; sourceRun++; }
             while (b < edited.Length && edited[b] == word) { b++; editedRun++; }
-            bool exact = protectedWords.Contains(word) || word.Any(char.IsDigit) || !char.IsLetter(word[0]);
             if (editedRun > sourceRun || (exact && editedRun != sourceRun)) return false;
         }
         if (a != original.Length || b != edited.Length) return false;
