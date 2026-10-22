@@ -44,19 +44,25 @@ enum LiveInlineCancel: Equatable {
 final class LiveInlineSession {
     let id: String
     private let field: LiveTextField
+    /// One short wait before the field is re-read at the end of a take; tests inject a no-op.
+    private let settle: () -> Void
     private var ownership: LiveInlineOwnership
 
-    private init(id: String, field: LiveTextField, ownership: LiveInlineOwnership) {
+    private init(id: String, field: LiveTextField, ownership: LiveInlineOwnership, settle: @escaping () -> Void) {
         self.id = id
         self.field = field
         self.ownership = ownership
+        self.settle = settle
     }
 
-    static func begin(id: String, field: LiveTextField) -> Result<LiveInlineSession, LiveInlineOwnership.Stop> {
+    static let settleWait: UInt32 = 50_000
+
+    static func begin(id: String, field: LiveTextField,
+                      settle: @escaping () -> Void = { usleep(settleWait) }) -> Result<LiveInlineSession, LiveInlineOwnership.Stop> {
         let state = field.state()
         let writable = state.selection != nil && field.canWriteRanges()
         return LiveInlineOwnership.begin(state, writable: writable)
-            .map { LiveInlineSession(id: id, field: field, ownership: $0) }
+            .map { LiveInlineSession(id: id, field: field, ownership: $0, settle: settle) }
     }
 
     var stopped: LiveInlineOwnership.Stop? { ownership.stopped }
@@ -72,13 +78,13 @@ final class LiveInlineSession {
     func finalize(_ text: String) -> LiveInlineFinal {
         // Nothing of pFlow's is in the field, so the finished text goes in
         // exactly as in Preview mode, whatever stopped the typing.
-        if !ownership.touched { return .notTyped }
+        if confirmNothingTyped() { return .notTyped }
         if let stop = perform(ownership.finalize(text: text, observed: field.state())) { return .kept(stop) }
         return .applied
     }
 
     func cancel() -> LiveInlineCancel {
-        guard ownership.touched else { return .nothingTyped }
+        if confirmNothingTyped() { return .nothingTyped }
         if let stop = perform(ownership.cancel(observed: field.state())) { return .left(stop) }
         return .removed
     }
@@ -90,24 +96,20 @@ final class LiveInlineSession {
         case .write(let write):
             var accepted = field.replace(write.range, with: write.text)
             if accepted, let select = write.select { accepted = field.select(select) }
-            var observed = field.state()
-            // Some apps apply a successful write a little later (Chromium,
-            // Electron): give the field up to about 300 ms to show it before
-            // judging the write by what it reads back.
-            var reads = 0
-            while accepted, !ownership.settled(observed), reads < Self.settleReads {
-                Self.settle()
-                observed = field.state()
-                reads += 1
-            }
-            if case .stopped(let stop) = ownership.confirm(accepted: accepted, observed: observed) { return stop }
+            if case .stopped(let stop) = ownership.confirm(accepted: accepted, observed: field.state()) { return stop }
             return nil
         }
     }
 
-    static let settleReads = 6
-    /// One short wait between re-reads of the field; tests replace it.
-    nonisolated(unsafe) static var settle: () -> Void = { usleep(50_000) }
+    /// Before deciding that nothing was typed, give the field one short
+    /// moment (a refused Accessibility write can still land late) and read
+    /// it once more; any difference from its snapshot means it was touched.
+    private func confirmNothingTyped() -> Bool {
+        guard !ownership.touched else { return false }
+        settle()
+        ownership.noteFieldChanged(field.state())
+        return !ownership.touched
+    }
 }
 
 /// The captured field in another app, through Accessibility.
@@ -213,11 +215,13 @@ extension LiveInlineOwnership.Stop {
 @MainActor
 struct LiveInlineSlot {
     private var current: LiveInlineSession?
+    /// The one short wait before a take's final re-read; tests inject a no-op.
+    var settle: () -> Void = { usleep(LiveInlineSession.settleWait) }
 
     mutating func begin(id: String, field: LiveTextField?) -> LiveInlineStart {
         current = nil
         guard let field else { return .preview(.unsupported) }
-        switch LiveInlineSession.begin(id: id, field: field) {
+        switch LiveInlineSession.begin(id: id, field: field, settle: settle) {
         case .success(let session):
             current = session
             return .typing

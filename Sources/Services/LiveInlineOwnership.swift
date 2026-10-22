@@ -192,7 +192,9 @@ struct LiveInlineOwnership {
         // A write call that succeeded may have put pFlow's text in, whatever
         // the field reads back (Chromium and Electron apply it later), so the
         // take counts as typed. Only a write the app refused leaves nothing.
-        if accepted { touched = true }
+        // A refused write can still land (an Accessibility call that timed
+        // out): any difference from what the field held before also counts.
+        if accepted || !unchanged(state) { touched = true }
         guard accepted, settled(pending, state) else { return stop(.uncertain) }
         owned = pending.owned
         typedWords = pending.words
@@ -200,10 +202,18 @@ struct LiveInlineOwnership {
         return .none
     }
 
-    /// Whether the field shows exactly the result of the pending write.
-    func settled(_ state: LiveFieldState) -> Bool {
-        guard let pending else { return true }
-        return settled(pending, state)
+    /// Whether the field still holds exactly what it held before any pending
+    /// write: nothing of pFlow's beyond what was confirmed is in it.
+    func unchanged(_ state: LiveFieldState) -> Bool {
+        state.app == app && state.element == LiveFieldState.target
+            && state.value?.utf16.elementsEqual((before + owned + after).utf16) == true
+    }
+
+    /// A take that never had a successful write can still be touched if the
+    /// field no longer matches its snapshot; called once before the final
+    /// decision, after the field had time to settle.
+    mutating func noteFieldChanged(_ state: LiveFieldState) {
+        if !unchanged(state) { touched = true }
     }
 
     private func settled(_ pending: (owned: String, words: String, caret: NSRange), _ state: LiveFieldState) -> Bool {

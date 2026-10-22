@@ -305,7 +305,9 @@ final class PermissionsManager {
     /// Only a prompt window that appeared after our request counts; a dialog
     /// that was already on screen is not ours. Window titles are withheld
     /// without Screen Recording permission, so the window's owner and timing
-    /// are all there is to go on.
+    /// are all there is to go on: another app's Accessibility prompt raised
+    /// in the same 2.5 s would be mistaken for ours (the list is not opened;
+    /// the next press still works).
     static func watchForAccessibilityPrompt() -> () -> Bool {
         let before = Set(promptWindows().map(\.number))
         return { promptWindows().contains { !before.contains($0.number) } }

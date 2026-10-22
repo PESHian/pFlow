@@ -53,12 +53,13 @@ struct PermissionGrantTests {
         #expect(log.waits == PermissionsManager.promptWaits && PermissionsManager.promptWaits == 10, "about 2.5 s of looking for the prompt before opening the list")
     }
 
-    @Test func aPromptThatShowsUpAfterTheListOpenedChangesNothing() async {
+    @Test func aPromptThatTakesOverASecondStillCountsAndTheListStaysClosed() async {
         let log = Log()
-        log.showing = Array(repeating: false, count: PermissionsManager.promptWaits + 1) + [true]
+        log.showing = Array(repeating: false, count: 6) + [true]
         let outcome = await PermissionsManager.grantAccessibility(log.steps(trusted: false))
-        #expect(outcome == .settingsOpened)
-        #expect((log.resets, log.prompts, log.opens) == (1, 1, 1), "one action; the late prompt is left alone")
+        #expect(outcome == .promptShown)
+        #expect((log.resets, log.prompts, log.opens) == (1, 1, 0), "one action: the slow prompt, not the list on top of it")
+        #expect(log.waits == 6)
     }
 
     @Test func grantNoticedWhileWaitingOpensNothing() async {

@@ -59,6 +59,8 @@ final class SimulatedTextField: LiveTextField {
     /// shows the new text only after this many more reads (nil: at once).
     var appliesAfterReads: Int?
     private var pendingApply: (LiveFieldState, Int)?
+    /// Runs once, right after the next read, to model a change that lands late.
+    var afterNextRead: (() -> Void)?
 
     init(_ value: String, selection: NSRange? = nil) {
         current = LiveFieldState(app: 1, element: LiveFieldState.target, secure: false, trusted: true, value: value,
@@ -70,6 +72,7 @@ final class SimulatedTextField: LiveTextField {
     private(set) var reads = 0
     func state() -> LiveFieldState {
         reads += 1
+        if let late = afterNextRead { afterNextRead = nil; defer { late() }; return current }
         if let (applied, after) = pendingApply {
             if after <= 1 { current = applied; pendingApply = nil } else { pendingApply = (applied, after - 1) }
         }
@@ -103,7 +106,7 @@ final class LiveFakeInjector: TextInjecting {
     var field: SimulatedTextField?
     var delivered: [String] = []
     var liveCalls = 0
-    private var live = LiveInlineSlot()
+    private var live: LiveInlineSlot = { var slot = LiveInlineSlot(); slot.settle = {}; return slot }()
 
     init(field: SimulatedTextField?) { self.field = field }
 
@@ -295,10 +298,6 @@ struct LiveInlineTests {
         #expect(hud.hideDelays.last != 4, "the card stays until closed or the next take")
     }
 
-    /// An app that refuses Accessibility writes, or takes them without showing
-    /// them (Chromium and Electron apps build their tree lazily): typing stops
-    /// with nothing of pFlow's in the field, so the finished text must go in
-    /// the normal way, exactly as in Preview mode, not History only.
     /// An app that refuses every write call (returns an error, field
     /// unchanged) typed nothing, so the finished text goes in the normal way,
     /// exactly as in Preview mode, not History only.
@@ -339,7 +338,6 @@ struct LiveInlineTests {
         session.emit("meet at")
         session.emit("meet at the lighthouse")
         #expect(field.replaced.count == 1)
-        #expect(field.reads >= 1 + LiveInlineSession.settleReads, "the field is re-read before the write is judged")
         await coordinator.finish()
         #expect(injector.delivered.isEmpty, "never paste on top of words that may be there")
         #expect(history.saved == ["meet at the lighthouse at noon"])
@@ -347,23 +345,52 @@ struct LiveInlineTests {
         #expect(hud.offers == ["meet at the lighthouse at noon"] && hud.livePreview, "the card keeps the words with Copy")
     }
 
-    /// A field that shows the write a moment later keeps typing live.
-    @Test func aWriteThatSettlesAfterAMomentKeepsTyping() async {
+    /// A write the app accepted but shows only later is judged by its
+    /// read-back at once: typing stops, and because the call succeeded the
+    /// finished text is never pasted on top; it stays on the card with Copy.
+    @Test func aWriteAcceptedButShownLaterStopsTypingWithoutPastingOnTop() async {
         let field = SimulatedTextField("Note: ")
         field.appliesAfterReads = 2
         let session = FakeSession()
+        let hud = FakeHUD()
         session.textToReturn = "the lighthouse keeper waved"
-        let (coordinator, injector) = typingCoordinator(field, session: session)
+        let (coordinator, injector) = typingCoordinator(field, session: session, hud: hud)
         coordinator.begin()
         await Task.yield()
         session.emit("the light")
         session.emit("the lighthouse")
-        #expect(field.value == "Note: the")
-        session.emit("the lighthouse keeper")
-        #expect(field.value == "Note: the lighthouse")
+        #expect(hud.cards.first == true, "typing stopped")
         await coordinator.finish()
-        #expect(field.value == "Note: the lighthouse keeper waved")
         #expect(injector.delivered.isEmpty)
+        #expect(hud.offers == ["the lighthouse keeper waved"] && hud.livePreview)
+    }
+
+    /// A write call that returned failure can still land (an Accessibility
+    /// call that timed out). The field no longer matches its snapshot, so
+    /// the take is typed: no paste on top, the words stay on the card.
+    @Test func aRefusedWriteThatStillLandedCountsAsTyped() async {
+        for late in [false, true] {
+            let field = SimulatedTextField("Chat: ")
+            var landed = false
+            field.onReplace = { field, range, text in
+                let apply = { field.current.value = (field.value as NSString).replacingCharacters(in: range, with: text) }
+                if late { field.afterNextRead = apply } else { apply() }
+                landed = true
+                return false
+            }
+            let session = FakeSession()
+            let hud = FakeHUD()
+            session.textToReturn = "meet at the lighthouse at noon"
+            let (coordinator, injector) = typingCoordinator(field, session: session, hud: hud)
+            coordinator.begin()
+            await Task.yield()
+            session.emit("meet at")
+            session.emit("meet at the lighthouse")
+            #expect(landed)
+            await coordinator.finish()
+            #expect(injector.delivered.isEmpty, "late=\(late): never paste on top of words that landed")
+            #expect(hud.offers == ["meet at the lighthouse at noon"] && hud.livePreview, "late=\(late)")
+        }
     }
 
     /// Typing worked all take; only the final write fails (the person clicked
