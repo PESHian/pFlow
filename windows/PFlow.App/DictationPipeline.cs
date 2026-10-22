@@ -22,7 +22,7 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
     internal const string CopyFailed = "Inserted, but it could not be copied to the clipboard. Copy it from History.";
     /// `Prompt` carries the words for pFlow's "couldn't type this" card, with the
     /// reason line, whenever the words did not go into the app (one rule: InsertionPrompt.Offer).
-    internal readonly record struct Result(string Status, string? Notice, (string Text, string Reason)? Prompt = null);
+    internal readonly record struct Result(string Status, string? Notice, (string Text, string Reason)? Prompt = null, string? CleanupIssue = null);
     internal readonly record struct Prepared(string Text, string? Rtf, int SpokenWords, bool ReportUnavailable, bool CleanupIncomplete, bool CleanupTimedOut, string? CleanupIssue = null);
     internal async Task<Prepared> Prepare(string audio, double seconds, string folder, Action<Phase, string?> state, CancellationToken cancel)
     {
@@ -59,8 +59,8 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
             catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { cleanupSkipped = true; cleanupIssue = LocalTextModel.TimedOutIssue; }
             Timing?.Invoke("cleanupOutcome", (double)outcome);
         }
-        // AI cleanup is on but its model is not installed: the processing line says so.
-        else if (preferences.Cleanup && preferences.UseAICleanup && !localReady) Timing?.Invoke("cleanupOutcome", (double)CleanupOutcome.NotRun);
+        // AI cleanup is on but cannot run: the processing line says which switch or file is missing.
+        else if (preferences.Cleanup && preferences.UseAICleanup && !localReady) Timing?.Invoke("cleanupOutcome", (double)(preferences.UseLocalAI ? CleanupOutcome.NotRun : CleanupOutcome.LocalAIOff));
         if (preferences.Paragraphs) text = TextProcessing.Paragraphs(text);
         var template = spoken?.Template ?? preferences.Templates.FirstOrDefault(x => x.Id == preferences.ActiveTemplateId);
         bool unavailable = template?.NeedsAI == true;
@@ -126,8 +126,10 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
             try { result = await Measure("insertionMs", () => originalTarget.Insert(text, owner, preferences.CopyDictationToClipboard, cancel, rtf)); }
             catch (Exception error) when (error is not OperationCanceledException) { result = error.Message; InsertionLog.Record("insert failed: " + InsertionLog.Reason(error)); }
         } else InsertionLog.Record("live typing final: " + result);
+        // History carries the cleanup note with the status, so a take whose words were kept as recognized can be told apart later.
+        string? cleanupIssue = prepared.CleanupIncomplete ? prepared.CleanupIssue ?? LocalTextModel.TimedOutIssue : null;
         int index = store.History.FindIndex(x => x.Id == entry.Id);
-        if (index >= 0) { store.History[index] = entry with { InsertionStatus = result }; store.Write("history.json", store.History); }
+        if (index >= 0) { store.History[index] = entry with { InsertionStatus = cleanupIssue == null ? result : result + " " + cleanupIssue }; store.Write("history.json", store.History); }
         // Words typed without a check went in the way a person's typing would: that is a done take, not a failure.
         bool inserted = result.StartsWith("Inserted", StringComparison.Ordinal) || result.StartsWith(InsertionTarget.Unchecked, StringComparison.Ordinal);
         // A write that went out but could not be read back is nearly always in the field already (web
@@ -136,8 +138,8 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         state(inserted ? Phase.Inserted : kept || unconfirmed || result is InsertionTarget.SavedToHistory or InsertionTarget.Unreachable ? Phase.Saved : Phase.Failed, result);
         // Anything short of a done take is said every time; words that never went in are shown in the card to copy.
         string? notice = !inserted ? unconfirmed ? null : result : unavailable ? "Dictation inserted. AI report formatting did not finish; your words were kept."
-            : prepared.CleanupIncomplete ? "Dictation inserted. " + (prepared.CleanupIssue ?? LocalTextModel.TimedOutIssue) : null;
-        return new Result(result, notice, unconfirmed ? null : InsertionPrompt.Offer(text, result, kept));
+            : cleanupIssue != null ? "Dictation inserted. " + cleanupIssue : null;
+        return new Result(result, notice, unconfirmed ? null : InsertionPrompt.Offer(text, result, kept), cleanupIssue);
     }
 }
 

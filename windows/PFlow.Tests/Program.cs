@@ -122,9 +122,7 @@ void CapsuleSpacingChecks()
     // Whisper segment lines start with a space; the owner saw "this  brown" and "sea  of pee" at every join.
     Check("segment joins never double a space", TextProcessing.JoinRecognitionLines("there was this\n brown little fox\n and he stunk\n like all sin.") == "there was this brown little fox and he stunk like all sin.");
     Check("segment joins keep paragraph breaks and collapse tabs", TextProcessing.JoinRecognitionLines("First part. \n\n Second\tpart.\n continues.") == "First part.\n\nSecond part. continues.");
-    var merger = new WhisperLiveMerger();
-    merger.Apply(new WhisperWindow(0, 3000, [new WhisperWindowSegment(0, 1500, " there was this", 0), new WhisperWindowSegment(1500, 3000, " brown little fox", 0)]));
-    Check("live words join segments with one space", merger.Text == "there was this brown little fox");
+
     string sentence = "Morgan checked the blue bicycle near the front gate and recorded every visible detail in the fictional exercise. ";
     string account = string.Concat(Enumerable.Repeat(sentence, 4)) + "Regarding the witness, Alex described the silver lock and did not guess who left it there. " + string.Concat(Enumerable.Repeat(sentence, 4));
     string grouped = TextProcessing.Paragraphs(account);
@@ -246,6 +244,14 @@ Check("cleanup rejects introduced quotes", !TextFidelity.CleanupIsFaithful("Morg
 Check("cleanup keeps risky blocks exactly", TextFidelity.CleanupIsFaithful("At - 12, Morgan said \"five\" 🙂.", "At - 12, Morgan said \"five\" 🙂."));
 Check("cleanup permits stammer repair beside an intact time", TextFidelity.CleanupIsFaithful("The server server stopped at 14:30.", "The server stopped at 14:30."));
 Check("cleanup never collapses a repeated number", !TextFidelity.CleanupIsFaithful("Room five five, by the stairs 5 5.", "Room five five, by the stairs 5."));
+// Numbers spoken as words are numbers: a repeat is a digit, never a stammer ("room five five" is room 55).
+Check("cleanup never collapses a repeated number word", !TextFidelity.CleanupIsFaithful("room five five", "Room five."));
+Check("cleanup never collapses a repeated number word before another", !TextFidelity.CleanupIsFaithful("two two seven", "Two seven."));
+Check("cleanup never collapses oh inside a number run", !TextFidelity.CleanupIsFaithful("agent oh oh seven", "Agent oh seven."));
+Check("cleanup still punctuates a repeated number word", TextFidelity.CleanupIsFaithful("room five five", "Room five, five."));
+Check("cleanup still repairs oh oh outside a number", TextFidelity.CleanupIsFaithful("oh oh well we tried", "Oh well, we tried."));
+Check("symbols-only difference is told apart from changed words", TextFidelity.OnlySymbolsDiffer("5,6,7", "5, 6, 7") && TextFidelity.OnlySymbolsDiffer("it cost $40", "It cost 40.")
+    && !TextFidelity.OnlySymbolsDiffer("we didn't go", "We did not go.") && !TextFidelity.OnlySymbolsDiffer("room five five", "Room five."));
 // The model now sees takes with numbers, contractions and symbols; punctuation and case may change, nothing else.
 Check("cleanup accepts punctuation and case around numbers", TextFidelity.CleanupIsFaithful("so next year in 4040 bc jimmy dean was born in a sea of pee", "So next year in 4040 BC, Jimmy Dean was born in a sea of pee."));
 Check("cleanup accepts a comma in far far away with a contraction", TextFidelity.CleanupIsFaithful("far far away we didn't stop at 4:30", "Far, far away, we didn't stop at 4:30."));

@@ -1,11 +1,12 @@
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace PFlow.Windows;
 
 /// Recorded as a number in last-processing-times.json (no words); ProcessingTimes names it.
-internal enum CleanupOutcome { NotRun = 0, Applied = 1, Rejected = 2, TimedOut = 3, Failed = 4, Skipped = 5 }
+internal enum CleanupOutcome { NotRun = 0, Applied = 1, Rejected = 2, TimedOut = 3, Failed = 4, Skipped = 5, LocalAIOff = 6, Partial = 7 }
 
 internal sealed class LocalTextModel
 {
@@ -28,6 +29,15 @@ internal sealed class LocalTextModel
     internal string? LastModelText { get; private set; }
     internal const string TimedOutIssue = "AI cleanup took too long on this PC, so your words were kept as recognized.";
     internal const string RejectedIssue = "AI cleanup changed your words, so they were kept as recognized.";
+    internal const string SymbolsIssue = "AI cleanup changed punctuation inside a number or symbol, so your words were kept as recognized.";
+    internal const string PartialIssue = "AI cleanup cleaned part of the text; the rest was kept as recognized.";
+    /// What to tell the person after the paragraphs: nothing when all were used, the single
+    /// reason when none was, and the partial note when some were and some were not.
+    internal static string? Issue(int applied, int rejected, bool symbolsOnly) =>
+        rejected == 0 ? null : applied > 0 ? PartialIssue : symbolsOnly ? SymbolsIssue : RejectedIssue;
+    /// Transcript text goes into the prompt as a user turn; a spoken or dictionary "<|im_end|>"
+    /// or "<think>" must stay text, never end the turn or open a thinking block.
+    internal static string Sanitize(string text) => Regex.Replace(text.Replace("<|", "< |"), @"<(/?think)>", "< $1>", RegexOptions.IgnoreCase);
     /// The copyediting instructions. Qwen3-4B copies the transcript unchanged without the worked
     /// examples (checked on the VM: no periods, no commas, no capitals); with them it sentences,
     /// commas and capitalizes and keeps the words, which CleanupIsFaithful then verifies.
@@ -72,7 +82,7 @@ internal sealed class LocalTextModel
         try {
             await Verify(ModelPath, cancel);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancel); timeout.CancelAfter(TimeSpan.FromMinutes(3));
-            string prompt = "<|im_start|>system\n" + system + "<|im_end|>\n<|im_start|>user\n" + input + "\n/no_think<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
+            string prompt = "<|im_start|>system\n" + system + "<|im_end|>\n<|im_start|>user\n" + Sanitize(input) + "\n/no_think<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
             await File.WriteAllTextAsync(prefix + ".prompt", prompt, timeout.Token);
             await File.WriteAllTextAsync(prefix + ".schema", JsonSerializer.Serialize(schema), timeout.Token);
             var info = new ProcessStartInfo(Executable) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = Path.GetDirectoryName(Executable)! };
@@ -99,6 +109,7 @@ internal sealed class LocalTextModel
         // place or the paragraph is kept as recognized (the old skip meant the model never ran
         // on a take with a number in it).
         var paragraphs = text.Replace("\r\n", "\n").Split("\n\n");
+        int applied = 0, rejected = 0; bool symbolsOnly = true;
         for (int i = 0; i < paragraphs.Length; i++) {
             if (paragraphs[i].Length > 5000 || string.IsNullOrWhiteSpace(paragraphs[i])) continue;
             string original = paragraphs[i];
@@ -107,11 +118,13 @@ internal sealed class LocalTextModel
                     new { type = "object", properties = new { text = new { type = "string" } }, required = new[] { "text" }, additionalProperties = false }, directory, cancel);
                 string edited = result.RootElement.GetProperty("text").GetString() ?? "";
                 LastModelText = edited;
-                if (TextFidelity.CleanupIsFaithful(original, edited)) { paragraphs[i] = edited; if (LastOutcome == CleanupOutcome.Skipped) LastOutcome = CleanupOutcome.Applied; }
-                else { LastIssue = RejectedIssue; LastOutcome = CleanupOutcome.Rejected; }
-            } catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { LastIssue = TimedOutIssue; LastOutcome = CleanupOutcome.TimedOut; }
-            catch (Exception error) when (error is not OperationCanceledException) { LastIssue = error.Message; LastOutcome = CleanupOutcome.Failed; }
+                if (TextFidelity.CleanupIsFaithful(original, edited)) { paragraphs[i] = edited; applied++; }
+                else { rejected++; symbolsOnly &= TextFidelity.OnlySymbolsDiffer(original, edited); }
+            } catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { LastIssue = TimedOutIssue; LastOutcome = CleanupOutcome.TimedOut; return string.Join("\n\n", paragraphs); }
+            catch (Exception error) when (error is not OperationCanceledException) { LastIssue = error.Message; LastOutcome = CleanupOutcome.Failed; return string.Join("\n\n", paragraphs); }
         }
+        LastIssue = Issue(applied, rejected, symbolsOnly);
+        LastOutcome = rejected == 0 ? applied > 0 ? CleanupOutcome.Applied : CleanupOutcome.Skipped : applied > 0 ? CleanupOutcome.Partial : CleanupOutcome.Rejected;
         return string.Join("\n\n", paragraphs);
     }
     public async Task<(string Text, string? Rtf)?> Report(string source, DictationTemplate template, string directory, CancellationToken cancel)

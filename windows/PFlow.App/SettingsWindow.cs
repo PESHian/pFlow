@@ -295,6 +295,14 @@ internal sealed partial class SettingsWindow : Window
     {
         // No sideways scrolling: a row's first words trim with an ellipsis at the list's edge instead.
         var list = Pannable(new ListBox { MinHeight = 120, Margin = new Thickness(0, 0, 0, 12) }); ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled); System.Windows.Automation.AutomationProperties.SetName(list, "Past dictations");
+        // The rows are all one height; the remainder below a whole number of them becomes bottom
+        // padding, so the last visible row is never sliced mid-glyph.
+        void WholeRows() {
+            if (list.Items.Count == 0 || list.Items[0] is not ListBoxItem first || first.ActualHeight <= 0) return;
+            double inner = list.ActualHeight - list.BorderThickness.Top - list.BorderThickness.Bottom - 12, rest = inner - Math.Floor(inner / first.ActualHeight) * first.ActualHeight;
+            list.Padding = new Thickness(6, 6, 6, 6 + rest);
+        }
+        list.SizeChanged += (_, _) => WholeRows(); list.Loaded += (_, _) => WholeRows();
         var empty = Text("No dictations yet. Your takes appear here."); empty.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); empty.Margin = new Thickness(10, 8, 10, 8); empty.VerticalAlignment = VerticalAlignment.Top;
         var text = Pannable(new TextBox { AcceptsReturn = true, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MinHeight = 120, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }); System.Windows.Automation.AutomationProperties.SetName(text, "Dictation text");
         var result = Text(""); result.FontSize = 12; result.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); result.Margin = new Thickness(0, 8, 0, 8);
@@ -308,7 +316,7 @@ internal sealed partial class SettingsWindow : Window
                 var words = Text(HistoryRow.Words(t.Text)); words.TextWrapping = TextWrapping.NoWrap; words.TextTrimming = TextTrimming.CharacterEllipsis; words.Margin = new Thickness(0); row.Children.Add(words);
                 var item = new ListBoxItem { Content = row, Tag = t }; System.Windows.Automation.AutomationProperties.SetName(item, when.Text + " — " + words.Text); list.Items.Add(item);
             }
-            empty.Visibility = list.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            empty.Visibility = list.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed; list.UpdateLayout(); WholeRows();
             text.Clear(); result.Text = ""; copy.IsEnabled = delete.IsEnabled = false;
         }
         list.SelectionChanged += (_, _) => {

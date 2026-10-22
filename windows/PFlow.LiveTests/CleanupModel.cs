@@ -55,6 +55,19 @@ internal static partial class Program
             Check("unpunctuated recognition comes out with sentences, a capital start, the comma in far, far away and the number intact",
                 flatTiming["cleanupOutcome"] == (double)CleanupOutcome.Applied && shaped.CleanupIssue == null && char.IsUpper(shaped.Text[0]) && shaped.Text.Count(c => c == '.') >= 3
                 && shaped.Text.Contains("far, far away") && shaped.Text.Contains("4040 BC") && TextFidelity.CleanupIsFaithful(flat, shaped.Text) && !shaped.Text.Contains("  "));
+            // A cut-off take delivered: the result names the issue once for the balloon and History keeps it with the status.
+            var cutPipeline = new DictationPipeline(store, whisper, model) { CleanupBudget = TimeSpan.FromMilliseconds(1) };
+            var cutPrepared = await cutPipeline.Shape(flat, directory, (_, _) => { }, CancellationToken.None);
+            var delivered = await cutPipeline.Deliver(cutPrepared, 1.0, new InsertingTarget(), IntPtr.Zero, (_, _) => { }, CancellationToken.None);
+            Check("a delivered cut-off take carries the cleanup issue and History says it with the status", delivered.Status == "Inserted" && delivered.CleanupIssue == LocalTextModel.TimedOutIssue
+                && delivered.Notice == "Dictation inserted. " + LocalTextModel.TimedOutIssue && store.History[0].InsertionStatus == "Inserted " + LocalTextModel.TimedOutIssue && HistoryRow.Status(store.History[0].InsertionStatus) == HistoryRow.Inserted);
+            // Local text model switched off with AI cleanup on: the processing line says which switch.
+            store.Preferences.UseLocalAI = false; var offTiming = new Dictionary<string, double>();
+            var off = new DictationPipeline(store, whisper, model) { Timing = (name, ms) => offTiming[name] = ms };
+            var untouched = await off.Shape("fictional words with the model off", directory, (_, _) => { }, CancellationToken.None);
+            store.Write("last-processing-times.json", new Dictionary<string, double>(offTiming) { ["totalAfterReleaseMs"] = 1 });
+            Check("with the local text model off the processing line says so", untouched.Text == "fictional words with the model off" && ProcessingTimes.Read(directory).Contains("AI cleanup: not run (local text model off)"));
+            store.Preferences.UseLocalAI = true;
             // AI cleanup on, model missing: the processing line says it was not run.
             var absent = new DictationPipeline(store, whisper, new LocalTextModel(Path.Combine(directory, "no-model"), Path.Combine(directory, "no-model")));
             var noModelTiming = new Dictionary<string, double>(); absent = new DictationPipeline(store, whisper, new LocalTextModel(Path.Combine(directory, "no-model"), Path.Combine(directory, "no-model"))) { Timing = (name, ms) => noModelTiming[name] = ms };

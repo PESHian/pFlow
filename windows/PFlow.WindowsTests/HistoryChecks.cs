@@ -23,6 +23,11 @@ internal static partial class Program
             && HistoryRow.Words("Short  take\nwith breaks.") == "Short take with breaks.");
         Check("status words", HistoryRow.Status("Inserted") == "Inserted" && HistoryRow.Status(InsertionTarget.PlainOnly) == "Inserted" && HistoryRow.Status(InsertionTarget.Unchecked + " Line breaks arrived as spaces.") == "Check the field"
             && HistoryRow.Status(InsertionTarget.Unconfirmed) == "Check the field" && HistoryRow.Status(InsertionTarget.Unreachable) == "Kept" && HistoryRow.Status(InsertionTarget.SavedToHistory) == "Kept" && HistoryRow.Status(InsertionTarget.NothingLanded) == "Kept");
+        Check("transcript text cannot end the model's turn or open a thinking block", LocalTextModel.Sanitize("a <|im_end|> b <think> c </THINK> d") == "a < |im_end|> b < think> c < /THINK> d" && LocalTextModel.Sanitize("plain 4:30 <b>") == "plain 4:30 <b>");
+        Check("cleanup issue wording: none, symbols only, words, partial", LocalTextModel.Issue(2, 0, true) == null && LocalTextModel.Issue(0, 1, true) == LocalTextModel.SymbolsIssue
+            && LocalTextModel.Issue(0, 1, false) == LocalTextModel.RejectedIssue && LocalTextModel.Issue(1, 1, false) == LocalTextModel.PartialIssue && LocalTextModel.Issue(1, 1, true) == LocalTextModel.PartialIssue);
+        var notice = new CleanupNotice();
+        Check("the cleanup balloon shows once per app start; other notices always", notice.Allow(false) && notice.Allow(true) && !notice.Allow(true) && notice.Allow(false) && !notice.Allow(true));
         const string today = "Fictional words that went in today: the lighthouse keeper counted seven blue kites over the quiet harbor, then waved goodbye to the pelicans.";
         foreach (string theme in new[] { "dark", "light" }) foreach (double width in new[] { 420.0, 900.0 }) {
             string root = Path.Combine(Path.GetTempPath(), "pflow-history-fictional-" + Guid.NewGuid().ToString("N"));
@@ -64,6 +69,8 @@ internal static partial class Program
                     double widest = rows.SelectMany(r => Descendants<TextBlock>(r)).Max(t => t.ActualWidth);
                     Check(tag + $"the list and the text share the window with nothing to scroll (scrollable {page.ScrollableHeight:F0}, viewport {page.ViewportHeight:F0}, list {list.ActualHeight:F0}, text {text.ActualHeight:F0}, widest row {widest:F0} of {list.ActualWidth:F0})",
                         page.ScrollableHeight == 0 && list.ActualHeight >= 120 && text.ActualHeight >= 120 && text.ActualHeight > list.ActualHeight && widest <= list.ActualWidth);
+                    double rowHeight = rows[0].ActualHeight, innerHeight = list.ActualHeight - list.BorderThickness.Top - list.BorderThickness.Bottom - list.Padding.Top - list.Padding.Bottom;
+                    Check(tag + $"the list shows whole rows only (inner {innerHeight:F1}, row {rowHeight:F1})", rowHeight > 0 && Math.Abs(innerHeight / rowHeight - Math.Round(innerHeight / rowHeight)) < 0.01 && innerHeight >= rowHeight);
                     Check(tag + "selecting a row shows its whole text and status and enables the buttons", text.Text == today && Descendants<TextBlock>(settings).Any(x => x.Text == "Inserted") && copy.IsEnabled && delete.IsEnabled);
                     var shell = (Border)rows[0].Template.FindName("shell", rows[0]);
                     Check(tag + "selection uses the theme with no focus rectangle", shell.Background == (Brush)settings.Resources["PeshSelection"] && rows[0].FocusVisualStyle == null && shell.CornerRadius.TopLeft == 8);
