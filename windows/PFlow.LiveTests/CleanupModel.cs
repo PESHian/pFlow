@@ -44,6 +44,17 @@ internal static partial class Program
                 store.Write("last-processing-times.json", new Dictionary<string, double>(timing) { ["totalAfterReleaseMs"] = 1 });
                 Check(audio + ": the processing line says the cleanup took too long", ProcessingTimes.Read(directory).Contains("(took too long, not used)"));
             }
+            // Recognition without punctuation (the owner's case, fictional words): the pipeline's own cleanup
+            // sentences, commas and capitalizes it, keeps the number and the words, and says nothing.
+            const string flat = "once upon a time in a land far far away where the birds would fly there was this brown little fox that used to love to eat food and then it was a bad day the wolf came so next year in 4040 bc jimmy dean was born in a sea of pee";
+            var flatTiming = new Dictionary<string, double>();
+            var flatPipeline = new DictationPipeline(store, whisper, model) { Timing = (name, ms) => flatTiming[name] = ms };
+            var shaped = await flatPipeline.Shape(flat, directory, (_, _) => { }, CancellationToken.None);
+            Console.WriteLine($"CLEANUP flat: words={TextProcessing.WordCount(flat)} cleanupMs={flatTiming.GetValueOrDefault("cleanupMs"):F0} outcome={(CleanupOutcome)(int)flatTiming.GetValueOrDefault("cleanupOutcome")} issue={shaped.CleanupIssue ?? "none"}");
+            Console.WriteLine($"CLEANUP flat final: {shaped.Text}");
+            Check("unpunctuated recognition comes out with sentences, a capital start, the comma in far, far away and the number intact",
+                flatTiming["cleanupOutcome"] == (double)CleanupOutcome.Applied && shaped.CleanupIssue == null && char.IsUpper(shaped.Text[0]) && shaped.Text.Count(c => c == '.') >= 3
+                && shaped.Text.Contains("far, far away") && shaped.Text.Contains("4040 BC") && TextFidelity.CleanupIsFaithful(flat, shaped.Text) && !shaped.Text.Contains("  "));
             // AI cleanup on, model missing: the processing line says it was not run.
             var absent = new DictationPipeline(store, whisper, new LocalTextModel(Path.Combine(directory, "no-model"), Path.Combine(directory, "no-model")));
             var noModelTiming = new Dictionary<string, double>(); absent = new DictationPipeline(store, whisper, new LocalTextModel(Path.Combine(directory, "no-model"), Path.Combine(directory, "no-model"))) { Timing = (name, ms) => noModelTiming[name] = ms };
