@@ -256,10 +256,15 @@ internal static partial class Program
             var typed = await pipeline.Deliver(prepared, 1.0, new InsertingTarget(), IntPtr.Zero, (_, _) => { }, CancellationToken.None);
             Check("an inserted take never offers the card", typed.Prompt == null && typed.Status == "Inserted");
             Phase? uncheckedPhase = null;
-            var blind = await pipeline.Deliver(prepared, 1.0, new UncheckedTarget(), IntPtr.Zero, (phase, _) => uncheckedPhase = phase, CancellationToken.None);
+            var blind = await pipeline.Deliver(prepared, 1.0, new UncheckedTarget(InsertionTarget.Unchecked), IntPtr.Zero, (phase, _) => uncheckedPhase = phase, CancellationToken.None);
             Check("words typed without a check end the take quietly: no card, no balloon, the take counts as inserted, History keeps the status",
                 blind.Prompt == null && blind.Notice == null && blind.Status == InsertionTarget.Unchecked && uncheckedPhase == Phase.Inserted
                 && store.History.Count(h => h.InsertionStatus == InsertionTarget.Unchecked) == 1);
+            string noted = InsertionTarget.Unchecked + " Line breaks arrived as spaces.";
+            var blindNoted = await pipeline.Deliver(prepared, 1.0, new UncheckedTarget(noted), IntPtr.Zero, (phase, _) => uncheckedPhase = phase, CancellationToken.None);
+            Check("an unchecked take with a note (line breaks as spaces, plain styles, copy failed) still ends quietly as inserted; History keeps the note",
+                blindNoted.Prompt == null && blindNoted.Notice == null && blindNoted.Status == noted && uncheckedPhase == Phase.Inserted
+                && store.History.Count(h => h.InsertionStatus == noted) == 1);
             // Recognition of the whole take fails (no engine in this folder) after live words: the card is offered only
             // when nothing was typed live; words already typed in the app stay there and get no "couldn't type this".
             var typing = new LiveTyping(_ => (LiveFinal.Applied, null), () => true, () => (LiveCancel.NothingTyped, null));
@@ -274,10 +279,10 @@ internal static partial class Program
         public bool CanInsert => true; public string ApplicationName => "Fictional"; public string ApplicationId => "fictional";
         public Task<string> Insert(string text, IntPtr owner, bool keep, CancellationToken cancel, string? rtf = null) => Task.FromResult(InsertionTarget.Unreachable);
     }
-    sealed class UncheckedTarget : IInsertionTarget
+    sealed class UncheckedTarget(string status) : IInsertionTarget
     {
         public bool CanInsert => true; public string ApplicationName => "Fictional"; public string ApplicationId => "fictional";
-        public Task<string> Insert(string text, IntPtr owner, bool keep, CancellationToken cancel, string? rtf = null) => Task.FromResult(InsertionTarget.Unchecked);
+        public Task<string> Insert(string text, IntPtr owner, bool keep, CancellationToken cancel, string? rtf = null) => Task.FromResult(status);
     }
     sealed class InsertingTarget : IInsertionTarget
     {

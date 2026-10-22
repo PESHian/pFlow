@@ -232,11 +232,12 @@ internal sealed class InsertionTarget : IInsertionTarget
     {
         ValidateHost(); cancel.ThrowIfCancellationRequested();
         if (new[] { 0x10, 0x11, 0x12, 0x5B, 0x5C }.Any(x => Native.GetAsyncKeyState(x) < 0)) throw new InvalidOperationException("Release the shortcut keys first. Your text is in History.");
-        string line = OneLine(text);
-        Log("path=unchecked typing " + InsertionLog.Length(line) + (line.Length != text.Length ? " line breaks as spaces" : ""));
+        string line = OneLine(text); bool flattened = text.IndexOfAny(['\n', '\r']) >= 0;
+        Log("path=unchecked typing " + InsertionLog.Length(line) + (flattened ? " line breaks as spaces" : ""));
         Native.Send(Native.UnicodeText(line));
         await Task.Delay(100);
         string status = Unchecked;
+        if (flattened) status += " Line breaks arrived as spaces.";
         if (rtf != null) status += " Template styles arrived as plain text.";
         if (keepClipboard) {
             // "Copy dictation to clipboard": the words, once, after they went in.

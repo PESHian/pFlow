@@ -118,7 +118,7 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         int index = store.History.FindIndex(x => x.Id == entry.Id);
         if (index >= 0) { store.History[index] = entry with { InsertionStatus = result }; store.Write("history.json", store.History); }
         // Words typed without a check went in the way a person's typing would: that is a done take, not a failure.
-        bool inserted = result.StartsWith("Inserted", StringComparison.Ordinal) || result == InsertionTarget.Unchecked;
+        bool inserted = result.StartsWith("Inserted", StringComparison.Ordinal) || result.StartsWith(InsertionTarget.Unchecked, StringComparison.Ordinal);
         state(inserted ? Phase.Inserted : kept || result is InsertionTarget.SavedToHistory or InsertionTarget.Unreachable ? Phase.Saved : Phase.Failed, result);
         // Anything short of a done take is said every time; words that never went in are shown in the card to copy.
         string? notice = !inserted ? result : unavailable ? "Dictation inserted. AI report formatting did not finish; your words were kept."
