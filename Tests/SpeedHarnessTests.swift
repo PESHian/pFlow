@@ -263,7 +263,7 @@ struct SpeedHarnessTests {
                                                    appleEngine: { TranscriptionService(fastResults: fast) })
                     session.selectedEngine = { .apple }
                     takes.append(try await take(url, session: session, capture: capture,
-                                                live: run == "apple-off" ? .off : .preview, index: index))
+                                                live: run == "apple-off" ? .off : .typeInApp, index: index))
                 }
             }
             report["takes"] = takes
@@ -278,7 +278,7 @@ struct SpeedHarnessTests {
                                                    capture: capture, whisperModel: model)
                     session.selectedEngine = { .whisper }
                     takes.append(try await take(url, session: session, capture: capture,
-                                                live: run == "whisper-on" ? .preview : .off, index: index))
+                                                live: run == "whisper-on" ? .typeInApp : .off, index: index))
                 }
             }
             report["takes"] = takes
@@ -374,7 +374,7 @@ struct SpeedHarnessTests {
         for (label, locale) in [("first", english), ("again", english), ("changed", other), ("back", english)] {
             guard let locale else { continue }
             if label == "changed" || label == "back" { session.setLocale(locale) }
-            var row = try await take(url, session: session, capture: capture, live: .preview, index: takes.count + 1)
+            var row = try await take(url, session: session, capture: capture, live: .typeInApp, index: takes.count + 1)
             row["step"] = label
             row["locale"] = locale.identifier(.bcp47)
             takes.append(row)

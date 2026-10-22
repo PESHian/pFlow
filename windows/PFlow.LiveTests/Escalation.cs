@@ -41,7 +41,7 @@ internal static partial class Program
             const string audio = "medium-1.wav";
             var pipeline = new DictationPipeline(store, whisper, new LocalTextModel(directory, PackageAssets));
             // 1. Every live window outlives a 1 ms limit: canceled, counted as slow, live words end with the plain note.
-            var report = await FeedTake("final-priority", audio, LiveTextModes.Preview, false, whisper, store, preview, capsule, windowLimit: TimeSpan.FromMilliseconds(1));
+            var report = await FeedTake("final-priority", audio, LiveTextModes.TypeInApp, false, whisper, store, preview, capsule, windowLimit: TimeSpan.FromMilliseconds(1));
             Check("two live windows slower than the limit end live words with the plain note", report.TooSlowAtMs > 0 && report.Windows == LiveSession.SlowWindowsBeforeStop && preview.Note == LiveTake.TooSlowNote);
             Check("canceled live windows leave the warm worker running", whisper.WorkerId == worker);
             Check("live stop returned at once after the slow windows", report.StopMs < 3000);

@@ -126,7 +126,7 @@ struct WhisperLiveHarnessTests {
         let coordinator = RecordingCoordinator(
             session: session, injector: injector, history: history, hud: hud, sounds: FakeSounds(),
             cleaner: FakeCleaner(), cleanupEnabled: { false }, vocabulary: { [] }, deviceName: { nil },
-            liveTextMode: { live ? .preview : .off })
+            liveTextMode: { live ? .typeInApp : .off })
         var keys = RightCommandActivation()
         var effects: [RightCommandActivation.Effect] = []
         func send(_ produced: [RightCommandActivation.Effect]) {

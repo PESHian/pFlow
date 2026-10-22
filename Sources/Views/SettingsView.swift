@@ -429,8 +429,8 @@ struct SettingsToggleRow: View {
 
 /// The Live text choice, all three options in view as tiles, and a plain note
 /// on what the selected one does. Settings shows it once, in its own section.
-/// A segmented control cannot shrink below its labels (495 pt for these three)
-/// and made the whole page wider than the window; tiles wrap their titles.
+/// A segmented control cannot shrink below its labels and made the whole page
+/// wider than the window; tiles wrap their titles.
 struct LiveTextPicker: View {
     @Binding var mode: LiveTextMode
     let engine: TranscriptionEngine
@@ -438,7 +438,7 @@ struct LiveTextPicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.s3) {
-            // Wraps to more rows when the text size makes three tiles too wide.
+            // Wraps to more rows when the text size makes the tiles too wide.
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 110 * Theme.textScale(typeSize)), spacing: 10)], spacing: 10) {
                 ForEach(LiveTextMode.allCases) { choice in
                     ChoiceTile(title: choice.title, selected: mode == choice) { mode = choice }
@@ -456,8 +456,6 @@ struct LiveTextPicker: View {
         switch mode {
         case .off:
             return "Words appear in your app after you stop talking."
-        case .preview:
-            note = "Shows your words in a small pFlow window while you talk. Your app gets the finished text once you stop."
         case .typeInApp:
             note = "Types your words into the app as you talk, a little behind, and puts in the finished text when you stop. If you move the cursor, type, or switch apps, typing stops and the finished text is saved in History. Apps that don't allow this show the preview instead. Template styles such as bold arrive as plain text."
         }

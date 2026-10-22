@@ -3,7 +3,7 @@
     <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms><EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
-    <AssemblyName>pFlow Setup</AssemblyName><Product>pFlow Setup</Product><Company>Pesh</Company><Version>0.1.21</Version>
+    <AssemblyName>pFlow Setup</AssemblyName><Product>pFlow Setup</Product><Company>Pesh</Company><Version>0.1.22</Version>
     <ApplicationIcon>../PFlow.App/Assets/Pesh.ico</ApplicationIcon><ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <!-- One x86 file runs on x64 and ARM64 Windows too; it only unpacks and runs the install script. -->
     <RuntimeIdentifier>win-x86</RuntimeIdentifier><SelfContained>true</SelfContained>

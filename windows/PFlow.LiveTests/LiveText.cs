@@ -126,7 +126,7 @@ internal static partial class Program
             var pipeline = new DictationPipeline(store, whisper, new LocalTextModel(directory, PackageAssets));
             var reports = new List<TakeReport>();
             foreach (var (name, audio, mode, continuous, tail) in new[] {
-                ("hold", "latency-long.wav", LiveTextModes.Preview, false, "to its owner"),
+                ("hold", "latency-long.wav", LiveTextModes.TypeInApp, false, "to its owner"),
                 ("continuous", "latency-extended.wav", LiveTextModes.TypeInApp, true, "went home"),
                 ("off", "latency-extended.wav", LiveTextModes.Off, true, "went home") }) {
                 var report = await FeedTake(name, audio, mode, continuous, whisper, store, preview, capsule);
@@ -176,12 +176,10 @@ internal static partial class Program
             try {
                 window.Show(); await Task.Delay(150); window.UpdateLayout();
                 var picker = Descendants<System.Windows.Controls.ComboBox>(window).Single(x => System.Windows.Automation.AutomationProperties.GetName(x) == "Live text");
-                Check("Live text offers the three choices", picker.Items.Cast<object>().Select(x => x.ToString()).SequenceEqual(new[] { "Off", "Preview in pFlow", "Type in the current app" }));
+                Check("Live text offers the two choices", picker.Items.Cast<object>().Select(x => x.ToString()).SequenceEqual(new[] { "Off", "Type in the current app" }));
                 if (theme == "light" && width > 500) {
                     Check("Live text starts Off", picker.SelectedValue as string == LiveTextModes.Off);
                     picker.SelectedIndex = 1;
-                    Check("Preview in pFlow is saved for the next recording", new StateStore(directory).Preferences.LiveTextMode == LiveTextModes.Preview);
-                    picker.SelectedIndex = 2;
                     Check("Type in the current app is saved", new StateStore(directory).Preferences.LiveTextMode == LiveTextModes.TypeInApp);
                     Check("Settings explains typing into the app", Descendants<System.Windows.Controls.TextBlock>(window).Any(x => x.Text.StartsWith("Types your words into the app as you talk")));
                 }
@@ -282,7 +280,7 @@ internal static partial class Program
                         }
                     }
                 }
-                var report = await FeedTake(take, "latency-long.wav", LiveTextModes.Preview, take == "crash", whisper, store, preview, capsule, During, Watch);
+                var report = await FeedTake(take, "latency-long.wav", LiveTextModes.TypeInApp, take == "crash", whisper, store, preview, capsule, During, Watch);
                 Check(take + " preview never took focus, the caret or the clipboard", checks > 10 && focusKept);
                 Check(take + " preview is no-activate and click-through", styleKept);
                 Check(take + " preview stays above the control inside the work area", inside);

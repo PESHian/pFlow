@@ -136,7 +136,7 @@ struct LiveSpeechHarnessTests {
         let coordinator = RecordingCoordinator(
             session: session, injector: injector, history: history, hud: hud, sounds: FakeSounds(),
             cleaner: FakeCleaner(), cleanupEnabled: { false }, vocabulary: { [] }, deviceName: { nil },
-            liveTextMode: { .preview })
+            liveTextMode: { .typeInApp })
         var keys = RightCommandActivation()
         var effects: [RightCommandActivation.Effect] = []
         func send(_ produced: [RightCommandActivation.Effect]) {
@@ -183,7 +183,7 @@ struct LiveSpeechHarnessTests {
             "hudPreviewAfterStop": hud.real.model.partial,
         ])
         #expect(effects == (style == "hold" ? [.start, .finish] : [.start, .pause, .resume, .finish]))
-        #expect(hud.previewShown == [true])
+        #expect(hud.typeInAppShown == [true])
         #expect(partialsBeforeEnd.count >= 3)
         #expect(!previewAtAudioEnd.isEmpty)
         #expect(injector.delivered.count == 1)

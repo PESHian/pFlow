@@ -85,12 +85,12 @@ struct LiveTextTests {
         #expect(TranscriptionEngine.saved(in: defaults) == .whisper)
         #expect(defaults.object(forKey: "soundsEnabled") as? Bool == false)
         #expect(defaults.string(forKey: "dictationLanguage") == "de-DE")
-        #expect(LiveTextMode.allCases.map(\.title) == ["Off", "Preview in pFlow", "Type in the current app"])
-        #expect(LiveTextMode.allCases.map(\.showsPreview) == [false, true, true])
+        #expect(LiveTextMode.allCases.map(\.title) == ["Off", "Type in the current app"])
+        #expect(LiveTextMode.allCases.map(\.showsPreview) == [false, true])
         // Type mode keeps the small capsule while pFlow types in the app; the
         // card appears only when typing could not start or has stopped.
-        #expect(LiveTextMode.allCases.map { $0.showsCard(typingLive: true) } == [false, true, false])
-        #expect(LiveTextMode.allCases.map { $0.showsCard(typingLive: false) } == [false, true, true])
+        #expect(LiveTextMode.allCases.map { $0.showsCard(typingLive: true) } == [false, false])
+        #expect(LiveTextMode.allCases.map { $0.showsCard(typingLive: false) } == [false, true])
     }
 
     // MARK: Coordinator
@@ -102,7 +102,7 @@ struct LiveTextTests {
         let history = FakeHistory()
         let hud = FakeHUD()
         let coordinator = makeCoordinator(session: session, injector: injector, history: history, hud: hud,
-                                          liveTextMode: { .preview })
+                                          liveTextMode: { .typeInApp })
         await coordinator.toggle()
         session.emit("The light")
         session.emit("The lighthouse keeper")
@@ -119,7 +119,7 @@ struct LiveTextTests {
         let injector = FakeInjector()
         let history = FakeHistory()
         let coordinator = makeCoordinator(session: session, injector: injector, history: history, hud: hud,
-                                          liveTextMode: { .preview })
+                                          liveTextMode: { .typeInApp })
         await coordinator.toggle()
         session.emit("hello")
         // A partial still on its way when the take ended: older than the final one.
@@ -144,7 +144,7 @@ struct LiveTextTests {
     @Test func earlierTakeCannotReachTheNextTake() async {
         let session = FakeSession()
         let hud = FakeHUD()
-        let coordinator = makeCoordinator(session: session, hud: hud, liveTextMode: { .preview })
+        let coordinator = makeCoordinator(session: session, hud: hud, liveTextMode: { .typeInApp })
         await coordinator.toggle()
         let old = TranscriptUpdate(session: session.take!, sequence: 99, text: "old take", isFinal: false)
         await coordinator.finish()
@@ -160,7 +160,7 @@ struct LiveTextTests {
         let hud = FakeHUD()
         let coordinator = makeCoordinator(session: session, hud: hud, liveTextMode: { mode })
         await coordinator.toggle()
-        mode = .preview
+        mode = .typeInApp
         session.emit("not shown")
         await coordinator.finish()
         #expect(hud.partials.isEmpty)
@@ -169,12 +169,12 @@ struct LiveTextTests {
         mode = .off
         session.emit("shown still")
         await coordinator.finish()
-        #expect(hud.previews == [false, true])
+        #expect(hud.typeInApps == [false, true])
         #expect(hud.partials == ["shown", "shown still"])
     }
 
     @Test func previewAndTypeInAppTypeOnceAfterStopping() async {
-        for mode in [LiveTextMode.preview, .typeInApp] {
+        for mode in [LiveTextMode.typeInApp] {
             let session = FakeSession()
             let injector = FakeInjector()
             let history = FakeHistory()
@@ -187,7 +187,7 @@ struct LiveTextTests {
                 #expect(injector.delivered.isEmpty)
             }
             await coordinator.finish()
-            #expect(hud.previews == [true])
+            #expect(hud.typeInApps == [true])
             #expect(injector.delivered == ["hello world"], "\(mode)")
             #expect(history.saved.count == 1, "\(mode)")
         }
@@ -200,7 +200,7 @@ struct LiveTextTests {
         await coordinator.toggle()
         session.emit("anything")
         await coordinator.finish()
-        #expect(hud.previews == [false])
+        #expect(hud.typeInApps == [false])
         #expect(hud.partials.isEmpty)
     }
 
@@ -243,7 +243,7 @@ struct LiveTextTests {
             let session = FakeSession()
             let injector = FakeInjector()
             let hud = FakeHUD()
-            let coordinator = makeCoordinator(session: session, injector: injector, hud: hud, liveTextMode: { .preview })
+            let coordinator = makeCoordinator(session: session, injector: injector, hud: hud, liveTextMode: { .typeInApp })
             for effect in presses.dropLast() { coordinator.handle(effect) }
             await Task.yield()
             while session.startCalled == 0 { await Task.yield() }
@@ -368,14 +368,14 @@ struct LiveTextTests {
         let shots = ProcessInfo.processInfo.environment["PFLOW_HUD_SHOTS"].map { URL(fileURLWithPath: $0) }
         let text = "The lighthouse keeper counted seven blue kites over the quiet harbor, then waved goodbye to the pelicans and walked home along the sea wall, where the orchard lanterns glowed."
         var heights: [String: CGFloat] = [:]
-        for width in [HUDModel.previewWidth, 288] {
+        for width in [HUDModel.typeInAppWidth, 288] {
             for (sizeName, size) in [("normal", DynamicTypeSize.large), ("large", .accessibility2)] {
                 for (look, appearance, scheme) in [("light", NSAppearance.Name.aqua, ColorScheme.light),
                                                    ("dark", .darkAqua, .dark)] {
                     let model = HUDModel()
                     model.livePreview = true
                     model.colorScheme = scheme
-                    model.previewMaxWidth = width
+                    model.typeInAppMaxWidth = width
                     model.partial = LivePreviewText.tail(of: text)
                     let view = NSHostingView(rootView: RecordingHUDView(model: model)
                         .environment(\.dynamicTypeSize, size))
@@ -420,8 +420,8 @@ struct LiveTextTests {
                             .write(to: shots.appending(path: "card-\(name)-\(look).png"))
                     }
                 }
-                for (mode, engine) in [(LiveTextMode.off, TranscriptionEngine.apple), (.preview, .apple),
-                                       (.typeInApp, .apple), (.preview, .whisper)] {
+                for (mode, engine) in [(LiveTextMode.off, TranscriptionEngine.apple), (.typeInApp, .apple),
+                                       (.typeInApp, .whisper)] {
                     let view = NSHostingView(rootView: Card {
                         LiveTextPicker(mode: .constant(mode), engine: engine)
                     }.frame(width: 460).padding(Theme.s4).background(Color(nsColor: .windowBackgroundColor)))

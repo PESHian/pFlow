@@ -1,10 +1,11 @@
 import Foundation
 
 /// What pFlow does with words while the person is still speaking.
-/// The labels match the Windows app.
+/// The labels match the Windows app. "Preview in pFlow" was a third choice
+/// until 2026-10-22; Type mode shows the same card whenever it cannot type,
+/// so a saved "preview" loads as Type.
 enum LiveTextMode: String, CaseIterable, Identifiable {
     case off
-    case preview
     case typeInApp = "type"
 
     var id: String { rawValue }
@@ -13,12 +14,11 @@ enum LiveTextMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .off: return "Off"
-        case .preview: return "Preview in pFlow"
         case .typeInApp: return "Type in the current app"
         }
     }
 
-    /// Live recognition runs for the take (Preview and Type).
+    /// Live recognition runs for the take (Type).
     var showsPreview: Bool { self != .off }
 
     /// Whether the take shows the text card or the small waveform capsule.
@@ -29,7 +29,6 @@ enum LiveTextMode: String, CaseIterable, Identifiable {
     func showsCard(typingLive: Bool) -> Bool {
         switch self {
         case .off: return false
-        case .preview: return true
         case .typeInApp: return !typingLive
         }
     }
@@ -37,7 +36,9 @@ enum LiveTextMode: String, CaseIterable, Identifiable {
     /// Missing or unknown saved values are Off, so existing installs keep
     /// today's behavior until the person picks something else.
     static func saved(in defaults: UserDefaults = .standard) -> Self {
-        Self(rawValue: defaults.string(forKey: defaultsKey) ?? "") ?? .off
+        let raw = defaults.string(forKey: defaultsKey) ?? ""
+        if raw == "preview" { return .typeInApp }
+        return Self(rawValue: raw) ?? .off
     }
 
     func save(in defaults: UserDefaults = .standard) {

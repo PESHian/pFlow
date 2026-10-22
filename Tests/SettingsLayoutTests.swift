@@ -23,7 +23,7 @@ struct SettingsLayoutTests {
     }()
 
     /// Fictional values only; the page never reads the app.
-    static func fixture(mode: LiveTextMode = .preview, engine: TranscriptionEngine = .apple) -> SettingsPageModel {
+    static func fixture(mode: LiveTextMode = .typeInApp, engine: TranscriptionEngine = .apple) -> SettingsPageModel {
         SettingsPageModel(
             activeTemplate: "Fictional radiology report",
             liveTextMode: .constant(mode),
@@ -96,14 +96,14 @@ struct SettingsLayoutTests {
     }
 
     @Test func everySettingsSectionFitsTheWindow() throws {
-        for (mode, engine) in [(LiveTextMode.off, TranscriptionEngine.apple), (.preview, .apple), (.typeInApp, .whisper)] {
+        for (mode, engine) in [(LiveTextMode.off, TranscriptionEngine.apple), (.typeInApp, .apple), (.typeInApp, .whisper)] {
             let sections = SettingsContent(model: Self.fixture(mode: mode, engine: engine)).sections
             #expect(sections.count >= 15)
             for section in sections {
                 for width in Self.widths {
                     for (look, name) in Self.looks {
                         for (size, text) in Self.textSizes {
-                            let shot = (look == "light" || look == "dark") && size == "normal" && mode == .preview
+                            let shot = (look == "light" || look == "dark") && size == "normal" && mode == .typeInApp
                                 ? "section-\(section.name.lowercased().replacingOccurrences(of: " ", with: "-"))-\(Int(width))-\(look)" : nil
                             let fit = try fit(ScrollView { section.view.padding(Theme.s5) }, width: width, look: name, text: text, shot: shot)
                             #expect(!fit.clipped, "\(section.name) (\(mode.rawValue)) at \(Int(width)) \(look) \(size): \(fit.detail)")
@@ -115,11 +115,11 @@ struct SettingsLayoutTests {
     }
 
     @Test func theWholeSettingsPageFitsTheWindow() throws {
-        for (mode, engine) in [(LiveTextMode.preview, TranscriptionEngine.apple), (.typeInApp, .whisper)] {
+        for (mode, engine) in [(LiveTextMode.typeInApp, TranscriptionEngine.apple), (.typeInApp, .whisper)] {
             for width in Self.widths {
                 for (look, name) in Self.looks {
                     for (size, text) in Self.textSizes {
-                        let shot = mode == .preview ? "settings-\(Int(width))-\(look)-\(size)" : nil
+                        let shot = mode == .typeInApp ? "settings-\(Int(width))-\(look)-\(size)" : nil
                         let fit = try fit(ScrollView { SettingsContent(model: Self.fixture(mode: mode, engine: engine)) },
                                           width: width, look: name, text: text, shot: shot)
                         #expect(!fit.clipped, "Settings (\(mode.rawValue)) at \(Int(width)) \(look) \(size): \(fit.detail)")

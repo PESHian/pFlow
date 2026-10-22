@@ -73,7 +73,7 @@ internal static class LiveTextChecks
 
     static void Settings()
     {
-        Check("Live text labels match the Mac app", LiveTextModes.All.Select(x => x.ToString()).SequenceEqual(new[] { "Off", "Preview in pFlow", "Type in the current app" }));
+        Check("Live text labels match the Mac app", LiveTextModes.All.Select(x => x.ToString()).SequenceEqual(new[] { "Off", "Type in the current app" }));
         Check("Live text is Off for new users", new Preferences().LiveTextMode == LiveTextModes.Off);
         foreach (string? unknown in new[] { null, "", "Off", "Preview", "inline", "type ", "on" }) {
             var preferences = new Preferences { LiveTextMode = unknown! }; preferences.Validate();
@@ -94,17 +94,17 @@ internal static class LiveTextChecks
             var changed = before.Where(pair => !JsonNode.DeepEquals(pair.Value, loaded[pair.Key])).Select(pair => pair.Key).ToList();
             Check("every earlier setting survives unchanged " + string.Join(",", changed), changed.Count == 0);
             Check("the only new setting is Live text", loaded.Select(x => x.Key).Except(before.Select(x => x.Key)).SequenceEqual(new[] { "liveTextMode" }));
-            store.Preferences.LiveTextMode = LiveTextModes.Preview; store.SavePreferences();
-            Check("Preview in pFlow persists", new StateStore(directory).Preferences.LiveTextMode == LiveTextModes.Preview);
+            store.Preferences.LiveTextMode = "preview"; store.SavePreferences();
+            Check("a saved Preview in pFlow choice loads as Type in the current app", new StateStore(directory).Preferences.LiveTextMode == LiveTextModes.TypeInApp);
             store.Preferences.LiveTextMode = LiveTextModes.TypeInApp; store.SavePreferences();
             var reopened = new StateStore(directory).Preferences;
             Check("Type in the current app persists with other settings intact", reopened.LiveTextMode == LiveTextModes.TypeInApp && reopened.Language == "es" && reopened.Templates.Single().Name == "Garden log");
             File.WriteAllText(settings, File.ReadAllText(settings).Replace("\"liveTextMode\": \"type\"", "\"liveTextMode\": \"sideways\""));
             Check("an unknown saved Live text value loads as Off", new StateStore(directory).Preferences.LiveTextMode == LiveTextModes.Off);
-            Check("Type in the current app also shows the preview", LiveTextModes.ShowsPreview(LiveTextModes.TypeInApp) && LiveTextModes.ShowsPreview(LiveTextModes.Preview) && !LiveTextModes.ShowsPreview("sideways"));
+            Check("Type in the current app runs live words; Off and unknown values do not", LiveTextModes.ShowsPreview(LiveTextModes.TypeInApp) && !LiveTextModes.ShowsPreview(LiveTextModes.Off) && !LiveTextModes.ShowsPreview("sideways"));
             Check("Type in the current app shows only the recording control while typing works", !LiveTextModes.ShowsCard(LiveTextModes.TypeInApp, typingLive: true) && LiveTextModes.ShowsCard(LiveTextModes.TypeInApp, typingLive: false));
-            Check("Preview always shows the card and Off never does", LiveTextModes.ShowsCard(LiveTextModes.Preview, true) && LiveTextModes.ShowsCard(LiveTextModes.Preview, false)
-                && !LiveTextModes.ShowsCard(LiveTextModes.Off, false) && !LiveTextModes.ShowsCard("sideways", false));
+            Check("a retired saved preview behaves as Type; Off and unknown values never show the card", LiveTextModes.ShowsCard("preview", false) && !LiveTextModes.ShowsCard("preview", true)
+                && !LiveTextModes.ShowsCard(LiveTextModes.Off, false) && !LiveTextModes.ShowsCard("sideways", false) && LiveTextModes.All.Count == 2);
         } finally { Directory.Delete(directory, true); }
     }
 

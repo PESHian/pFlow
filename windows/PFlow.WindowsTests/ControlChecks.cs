@@ -54,11 +54,11 @@ internal static partial class Program
                 var headings = Descendants<TextBlock>(settings).Where(x => x.FontFamily.Source == "Consolas" && x.FontSize == 10).Select(x => x.Text).ToList();
                 Check("Live text has its own section right after Shortcut", headings.Count(x => x == "LIVE TEXT") == 1 && headings.IndexOf("LIVE TEXT") == headings.IndexOf("SHORTCUT") + 1);
                 var liveChoices = Descendants<RadioButton>(settings).Where(x => x.GroupName == "LiveText").ToList();
-                Check("Settings shows all three Live text choices, no drop-down", liveChoices.Select(x => (string)x.Tag).SequenceEqual(LiveTextModes.All.Select(c => c.Id))
+                Check("Settings shows both Live text choices, no drop-down", liveChoices.Count == 2 && liveChoices.Select(x => (string)x.Tag).SequenceEqual(LiveTextModes.All.Select(c => c.Id))
                     && liveChoices.All(x => x.IsVisible) && !Descendants<ComboBox>(settings).Any(x => System.Windows.Automation.AutomationProperties.GetName(x) == "Live text"));
                 Check("the saved Live text choice is the one selected", liveChoices.Single(x => x.IsChecked == true).Tag as string == LiveTextModes.Off);
                 liveChoices[1].IsChecked = true; Drain();
-                Check("picking Preview in pFlow saves it for the next take", new StateStore(root).Preferences.LiveTextMode == LiveTextModes.Preview && liveChoices.Count(x => x.IsChecked == true) == 1);
+                Check("picking Type in the current app saves it for the next take", new StateStore(root).Preferences.LiveTextMode == LiveTextModes.TypeInApp && liveChoices.Count(x => x.IsChecked == true) == 1);
                 liveChoices[0].IsChecked = true; Drain();
                 Check("picking Off saves it again", new StateStore(root).Preferences.LiveTextMode == LiveTextModes.Off);
                 var sound = Descendants<CheckBox>(settings).Single(x => x.Content as string == "Quiet start and stop sounds");

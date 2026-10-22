@@ -65,7 +65,7 @@ internal static partial class Program
             var formatted = Wait(pipeline.Shape(raw, root, (_, _) => { }, CancellationToken.None));
             Check("the template formats the finished words", formatted.Text.Contains("Narrative") && formatted.Text.Contains("Sinton met us") && formatted.Rtf != null);
 
-            foreach (var (mode, prepared) in new[] { (LiveTextModes.Off, plain), (LiveTextModes.Preview, plain), (LiveTextModes.TypeInApp, plain), (LiveTextModes.TypeInApp, formatted) }) {
+            foreach (var (mode, prepared) in new[] { (LiveTextModes.Off, plain), (LiveTextModes.TypeInApp, plain), (LiveTextModes.TypeInApp, formatted) }) {
                 string label = mode + (prepared.Rtf != null ? " with a template" : "");
                 Clipboard.SetText("Older fictional copy");
                 var target = new RecordingTarget(); var phases = new List<Phase>();

@@ -63,7 +63,7 @@ internal static partial class Program
             int take = 0;
             foreach (string audio in SpeedOption("files", "short-1.wav").Split(','))
             for (int repeat = 1; repeat <= int.Parse(SpeedOption("takes", "2")); repeat++)
-            foreach (string mode in SpeedOption("modes", LiveTextModes.Preview).Split(',')) {
+            foreach (string mode in SpeedOption("modes", LiveTextModes.TypeInApp).Split(',')) {
                 take++;
                 var report = await FeedTake($"{label}-{audio}-{mode}-{take}", audio, mode, false, whisper, store, preview, capsule);
                 timing.Clear();
