@@ -54,18 +54,19 @@ internal static partial class Program
                         && deleteAt.Y + delete.ActualHeight <= settings.ActualHeight && !copy.IsEnabled && !delete.IsEnabled);
                     var text = Descendants<TextBox>(settings).Single(x => System.Windows.Automation.AutomationProperties.GetName(x) == "Dictation text");
                     var page = Descendants<ScrollViewer>(settings).First(x => x.Content is Border);
-                    Check(tag + "the list and the text share the window with nothing to scroll", page.ScrollableHeight == 0 && list.ActualHeight >= 120 && text.ActualHeight >= 120 && text.ActualHeight > list.ActualHeight
-                        && rows.All(r => Descendants<TextBlock>(r).All(t => t.ActualWidth <= list.ActualWidth)));
                     rows[0].IsSelected = true; settings.UpdateLayout(); Drain();
-                    Check(tag + "selecting a row shows its whole text and status and enables the buttons", text.Text == today && Descendants<TextBlock>(settings).Any(x => x.Text == "Inserted") && copy.IsEnabled && delete.IsEnabled);
-                    var shell = (Border)rows[0].Template.FindName("shell", rows[0]);
-                    Check(tag + "selection uses the theme with no focus rectangle", shell.Background == (Brush)settings.Resources["PeshSelection"] && rows[0].FocusVisualStyle == null && shell.CornerRadius.TopLeft == 8);
                     if (shots != null) {
                         var content = (FrameworkElement)settings.Content;
                         var bitmap = new System.Windows.Media.Imaging.RenderTargetBitmap((int)Math.Ceiling(content.ActualWidth * 2), (int)Math.Ceiling(content.ActualHeight * 2), 192, 192, PixelFormats.Pbgra32); bitmap.Render(content);
                         var png = new System.Windows.Media.Imaging.PngBitmapEncoder(); png.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bitmap));
                         Directory.CreateDirectory(shots); using var file = File.Create(Path.Combine(shots, $"history-{theme}-{width:F0}.png")); png.Save(file);
                     }
+                    double widest = rows.SelectMany(r => Descendants<TextBlock>(r)).Max(t => t.ActualWidth);
+                    Check(tag + $"the list and the text share the window with nothing to scroll (scrollable {page.ScrollableHeight:F0}, viewport {page.ViewportHeight:F0}, list {list.ActualHeight:F0}, text {text.ActualHeight:F0}, widest row {widest:F0} of {list.ActualWidth:F0})",
+                        page.ScrollableHeight == 0 && list.ActualHeight >= 120 && text.ActualHeight >= 120 && text.ActualHeight > list.ActualHeight && widest <= list.ActualWidth);
+                    Check(tag + "selecting a row shows its whole text and status and enables the buttons", text.Text == today && Descendants<TextBlock>(settings).Any(x => x.Text == "Inserted") && copy.IsEnabled && delete.IsEnabled);
+                    var shell = (Border)rows[0].Template.FindName("shell", rows[0]);
+                    Check(tag + "selection uses the theme with no focus rectangle", shell.Background == (Brush)settings.Resources["PeshSelection"] && rows[0].FocusVisualStyle == null && shell.CornerRadius.TopLeft == 8);
                     Clipboard.SetText("Fictional clipboard before Copy");
                     copy.RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent)); Drain();
                     Check(tag + "Copy puts the selected text on the clipboard", Clipboard.GetText() == today);

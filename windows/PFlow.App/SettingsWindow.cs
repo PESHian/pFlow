@@ -293,7 +293,8 @@ internal sealed partial class SettingsWindow : Window
     }
     UIElement History()
     {
-        var list = Pannable(new ListBox { MinHeight = 120, Margin = new Thickness(0, 0, 0, 12) }); System.Windows.Automation.AutomationProperties.SetName(list, "Past dictations");
+        // No sideways scrolling: a row's first words trim with an ellipsis at the list's edge instead.
+        var list = Pannable(new ListBox { MinHeight = 120, Margin = new Thickness(0, 0, 0, 12) }); ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled); System.Windows.Automation.AutomationProperties.SetName(list, "Past dictations");
         var empty = Text("No dictations yet. Your takes appear here."); empty.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); empty.Margin = new Thickness(10, 8, 10, 8); empty.VerticalAlignment = VerticalAlignment.Top;
         var text = Pannable(new TextBox { AcceptsReturn = true, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MinHeight = 120, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }); System.Windows.Automation.AutomationProperties.SetName(text, "Dictation text");
         var result = Text(""); result.FontSize = 12; result.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); result.Margin = new Thickness(0, 8, 0, 8);
