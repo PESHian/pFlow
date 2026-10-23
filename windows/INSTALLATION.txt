@@ -31,7 +31,7 @@ editions are LTSC/Enterprise; Windows 10/older hardware is not fully tested here
    unless you choose it as your activation key.
 
 Whisper, its verified speech model, and the .NET runtime are included. Recording
-and transcription work offline. A separate optional 1.1 GB text model can be
+and transcription work offline. A separate optional 2.5 GB text model can be
 downloaded in pFlow Settings on 64-bit Windows for AI cleanup and report sections.
 That optional AI feature is unavailable on 32-bit Windows; dictation, basic
 cleanup, dictionary, and full-narrative templates remain available.

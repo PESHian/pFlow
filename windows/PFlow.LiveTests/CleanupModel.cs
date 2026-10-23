@@ -6,7 +6,7 @@ using System.Text.Json;
 
 internal static partial class Program
 {
-    /// --cleanup-model [files=a.wav,b.wav]: the real pipeline with the real 1.1 GB text model
+    /// --cleanup-model [files=a.wav,b.wav]: the real pipeline with the real 2.5 GB text model
     /// (hard-linked into the harness package assets, never in the repo) on fictional takes:
     /// the raw recognition, the model's own text, the outcome, the time, the final text; then
     /// the same take under a 1 ms budget so the person is told plainly and the processing line

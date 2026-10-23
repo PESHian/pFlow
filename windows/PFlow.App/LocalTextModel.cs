@@ -19,15 +19,14 @@ internal sealed record TextModelFile(string Label, string FileName, string Url, 
 
 internal sealed class LocalTextModel
 {
-    /// The model since 0.1.24: Qwen3-1.7B Q4_K_M (unsloth's GGUF of Qwen's release; Qwen's own
-    /// GGUF repo ships only Q8_0), pinned to one revision and checksum. On the ARM64 test VM it
-    /// takes 3-4 s for 13-60 words and 10 s for 286 words where the 4B took 9 s and 20 s (x64
-    /// emulated there: 9, 12 and 31 s against 23, 31 and 76 s); the owner's Core Ultra 5 PC ran
-    /// about as slow as the emulated x64, so the cut-off is 10 s + 0.15 s a word, at least 18 s.
-    public static readonly TextModelFile Current = new("Qwen3-1.7B", "Qwen3-1.7B-Q4_K_M.gguf", "https://huggingface.co/unsloth/Qwen3-1.7B-GGUF/resolve/d7f544eead698dbd1f15126ef60b45a1e1933222/Qwen3-1.7B-Q4_K_M.gguf", "b139949c5bd74937ad8ed8c8cf3d9ffb1e99c866c823204dc42c0d91fa181897", 1107409472, 10, 0.15, 18);
-    /// The 2.5 GB model 0.1.22 and 0.1.23 downloaded. It keeps working until the smaller one is on
-    /// this PC; the person is offered its removal and it is never deleted on its own.
-    public static readonly TextModelFile Previous = new("Qwen3-4B", "Qwen3-4B-Q4_K_M.gguf", "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q4_K_M.gguf", "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5", 2497280256, 15, 0.3, 20);
+    /// The pinned model: Qwen3-4B Q4_K_M from Qwen's own GGUF repo, one revision and checksum.
+    /// W024 measured Qwen3-1.7B (Q4_K_M and Q8_0, same prompt and grammar) as the owner asked:
+    /// 2.2-2.5x faster, but it returns a flat unpunctuated take unchanged ("once upon a time in a
+    /// land far far away … 4040 bc jimmy dean" came back with only its first capital, where the
+    /// 4B gives "far, far away … The wolf came. So next year in 4040 BC, Jimmy Dean …"), so the
+    /// 4B stays. Its cut-off: 15 s + 0.3 s a word, at least 20 s (ARM64 test VM: 13 words 9 s,
+    /// 60 words 9 s, 286 words 20 s; x64 emulated 23, 31 and 76 s with 4 threads).
+    public static readonly TextModelFile Current = new("Qwen3-4B", "Qwen3-4B-Q4_K_M.gguf", "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/bc640142c66e1fdd12af0bd68f40445458f3869b/Qwen3-4B-Q4_K_M.gguf", "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5", 2497280256, 15, 0.3, 20);
     public static string Url => Current.Url;
     public static long Size => Current.Size;
     readonly string root;
@@ -39,16 +38,13 @@ internal sealed class LocalTextModel
     internal string Source { get; init; } = Current.Url;
     string PathFor(TextModelFile file) => Path.Combine(root, file.FileName);
     string ShippedPathFor(TextModelFile file) => Path.Combine(assets, "models", file.FileName);
-    /// The model that runs: the current one once it is on this PC (downloaded, or shipped with the
-    /// package), otherwise the previous one when an earlier version downloaded it, otherwise none.
-    public TextModelFile? InUse => File.Exists(PathFor(Current)) || File.Exists(ShippedPathFor(Current)) ? Current : File.Exists(PathFor(Previous)) ? Previous : null;
+    /// The model runs from the download when there is one, else from the package's models folder.
+    public TextModelFile? InUse => File.Exists(PathFor(Current)) || File.Exists(ShippedPathFor(Current)) ? Current : null;
     public bool CurrentInstalled => InUse == Current;
-    public bool PreviousOnDisk => File.Exists(PathFor(Previous));
-    public string ModelPath => InUse is { } file && File.Exists(PathFor(file)) ? PathFor(file) : ShippedPathFor(InUse ?? Current);
-    public TimeSpan Budget(int words) => (InUse ?? Current).Budget(words);
+    public string ModelPath => File.Exists(PathFor(Current)) ? PathFor(Current) : ShippedPathFor(Current);
+    public TimeSpan Budget(int words) => Current.Budget(words);
     /// The Settings line that says which model is in use.
     public string Status => InUse == Current ? $"Text model in use: {Current.Label} ({FileSize.Describe(Current.Size)}). Processing stays on this PC."
-        : InUse == Previous ? $"Text model in use: the older {Previous.Label} ({FileSize.Describe(Previous.Size)}), until the smaller {Current.Label} is downloaded."
         : "Local AI is unavailable until its model is installed. Plain dictation still works.";
     string Executable => Path.Combine(assets, "text-engine", "llama-completion.exe");
     public static bool IsSupported => Environment.Is64BitProcess;
@@ -95,12 +91,6 @@ internal sealed class LocalTextModel
         if (!Convert.ToHexString(sha).Equals(file.Sha, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The text model checksum did not match. Dictation is still available.");
         verified = (path, info.Length, info.LastWriteTimeUtc);
     }
-    /// Removes the previous 2.5 GB model, only when the person asks (the Settings button).
-    public void RemovePrevious()
-    {
-        if (!gate.Wait(0)) throw new IOException("Finish or cancel dictation first.");
-        try { if (File.Exists(PathFor(Previous))) File.Delete(PathFor(Previous)); verified = null; } finally { gate.Release(); }
-    }
     public async Task Download(IProgress<double> progress, CancellationToken cancel)
     {
         if (!IsSupported) throw new NotSupportedException(UnsupportedReason);
@@ -125,7 +115,7 @@ internal sealed class LocalTextModel
         await gate.WaitAsync(cancel);
         string prefix = Path.Combine(directory, "text-" + Guid.NewGuid());
         try {
-            await Verify(ModelPath, InUse ?? Current, cancel);
+            await Verify(ModelPath, Current, cancel);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancel); timeout.CancelAfter(TimeSpan.FromMinutes(3));
             string prompt = "<|im_start|>system\n" + system + "<|im_end|>\n<|im_start|>user\n" + Sanitize(input) + "\n/no_think<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
             await File.WriteAllTextAsync(prefix + ".prompt", prompt, timeout.Token);

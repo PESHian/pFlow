@@ -26,7 +26,16 @@ internal sealed class DownloadControl : StackPanel
         _ => new($"Download ({FileSize.Describe(total)})", false, false, note ?? ""),
     };
     readonly Button download, cancel;
-    readonly ProgressBar bar = new() { Minimum = 0, Maximum = 1, Height = 5, Margin = new Thickness(0, 6, 0, 2) };
+    readonly ProgressBar bar = new() { Minimum = 0, Maximum = 1, Height = 6, Margin = new Thickness(0, 8, 0, 4), Template = BarTemplate() };
+    /// The bar in the theme's own brushes: the segment track with the palette gradient filling it
+    /// (the default bar is a hairline that reads the same empty or full on these cards).
+    static ControlTemplate BarTemplate()
+    {
+        var track = new FrameworkElementFactory(typeof(Border), "PART_Track"); track.SetValue(Border.CornerRadiusProperty, new CornerRadius(3)); track.SetResourceReference(Border.BackgroundProperty, "PeshSegment"); track.SetResourceReference(Border.BorderBrushProperty, "PeshBorder"); track.SetValue(Border.BorderThicknessProperty, new Thickness(.75));
+        var fill = new FrameworkElementFactory(typeof(Border), "PART_Indicator"); fill.SetValue(Border.CornerRadiusProperty, new CornerRadius(3)); fill.SetResourceReference(Border.BackgroundProperty, "PeshGradient"); fill.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Left);
+        var grid = new FrameworkElementFactory(typeof(Grid)); grid.AppendChild(track); grid.AppendChild(fill);
+        return new ControlTemplate(typeof(ProgressBar)) { VisualTree = grid };
+    }
     readonly TextBlock line = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 1) };
     readonly long total;
     readonly Func<bool> installed;

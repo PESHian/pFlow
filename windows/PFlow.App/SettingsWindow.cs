@@ -14,8 +14,7 @@ internal sealed partial class SettingsWindow : Window
     readonly Action? checkUpdates;
     Action? cancelKeySelection;
     DownloadControl textDownload = null!, whisperDownload = null!;
-    readonly TextBlock modelStatus = Text(""), oldModelLine = Text("");
-    readonly StackPanel oldModelRow = new();
+    readonly TextBlock modelStatus = Text("");
     readonly TextBlock processingTime = Text("Processing time appears here after your next dictation.");
     readonly ContentControl page = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
     UIElement home = null!;
@@ -212,9 +211,7 @@ internal sealed partial class SettingsWindow : Window
         Check(p, "AI cleanup (slower, English)", store.Preferences.UseAICleanup, x => store.Preferences.UseAICleanup = x);
         p.Children.Add(Text("English cleanup removes filler words immediately. Other languages keep their recognized words. AI cleanup is optional and English only: the local text model adds sentences, commas and capitals and keeps every word and number as spoken; it can take about as long as the recording. When it cannot finish, your words are kept as recognized and the processing line below says so. Reports use your sentences."));
         modelStatus.Text = textModel.Status; p.Children.Add(modelStatus);
-        textDownload = new DownloadControl("Text model", LocalTextModel.Current.Size, () => textModel.CurrentInstalled, textModel.Download, Blocked, RefreshModelStatus); p.Children.Add(textDownload);
-        oldModelLine.Text = $"The older {LocalTextModel.Previous.Label} model ({FileSize.Describe(LocalTextModel.Previous.Size)}) is still on this PC. pFlow never removes it on its own.";
-        oldModelRow.Children.Add(oldModelLine); oldModelRow.Children.Add(Button($"Remove old model ({FileSize.Describe(LocalTextModel.Previous.Size)})", RemoveOldModel)); p.Children.Add(oldModelRow); RefreshModelStatus();
+        textDownload = new DownloadControl("Text model", LocalTextModel.Current.Size, () => textModel.CurrentInstalled, textModel.Download, Blocked, () => modelStatus.Text = textModel.Status); p.Children.Add(textDownload);
         } else p.Children.Add(Text(LocalTextModel.UnsupportedReason));
         p = Section(root, "Speech recognition");
         p.Children.Add(Text("Language"));
@@ -242,18 +239,6 @@ internal sealed partial class SettingsWindow : Window
         if (enabled) key.SetValue("pFlow by Pesh", "\"" + Environment.ProcessPath + "\""); else key.DeleteValue("pFlow by Pesh", false);
     }
     string? Blocked() => busy() ? "Finish or cancel dictation first." : null;
-    void RefreshModelStatus()
-    {
-        modelStatus.Text = textModel.Status;
-        oldModelRow.Visibility = textModel.PreviousOnDisk ? Visibility.Visible : Visibility.Collapsed;
-    }
-    /// The previous 2.5 GB model goes only when the person presses the button.
-    void RemoveOldModel()
-    {
-        if (Blocked() is { } why) { oldModelLine.Text = why; return; }
-        try { textModel.RemovePrevious(); } catch (Exception error) { oldModelLine.Text = error.Message; return; }
-        RefreshModelStatus();
-    }
     UIElement Dictionary()
     {
         var p = Panel(); p.Children.Add(Text("Learned terms bias Whisper. Exact replacements change only whole words or phrases and never cascade."));

@@ -70,7 +70,8 @@ internal static partial class Program
                     Check(tag + "before any download each card shows one Download button and no Cancel", Descendants<Button>(textCard).Count(b => b.IsVisible && b.Content is string s && s.StartsWith("Download")) == 1
                         && Descendants<Button>(speechCard).Count(b => b.IsVisible && b.Content is string s && s.StartsWith("Download")) == 1 && !Descendants<Button>(settings).Any(b => b.IsVisible && b.Content as string == "Cancel")
                         && !Descendants<Button>(settings).Any(b => b.IsVisible && b.Content as string == "Cancel download"));
-                    Check(tag + "the Settings line names the model in use", Descendants<TextBlock>(textCard).Any(t => t.IsVisible && t.Text == "Local AI is unavailable until its model is installed. Plain dictation still works.") && !Descendants<Button>(textCard).Any(b => b.IsVisible && b.Content is string s && s.StartsWith("Remove old model")));
+                    Check(tag + "the Settings line says no model is in use yet and the button carries the model's size", Descendants<TextBlock>(textCard).Any(t => t.IsVisible && t.Text == "Local AI is unavailable until its model is installed. Plain dictation still works.")
+                        && Descendants<Button>(textCard).Any(b => b.IsVisible && b.Content as string == $"Download ({FileSize.Describe(LocalTextModel.Current.Size)})") && Descendants<Button>(speechCard).Any(b => b.IsVisible && b.Content as string == "Download (488 MB)"));
                     textControl.Show(DownloadState.Downloading, 120_000_000); speechControl.Show(DownloadState.Downloading, 61_000_000); settings.UpdateLayout(); Drain();
                     var bar = Descendants<ProgressBar>(textControl).Single(); var button = Descendants<Button>(textControl).Single(b => b.IsVisible);
                     var barAt = bar.TranslatePoint(new Point(0, 0), settings); var lineAt = textControl.Children.OfType<TextBlock>().Single(t => t.IsVisible).TranslatePoint(new Point(0, 0), settings);
@@ -104,34 +105,16 @@ internal static partial class Program
             } finally { server.Stop(); try { serving.Wait(2000); } catch (Exception) { } if (Directory.Exists(root)) Directory.Delete(root, true); }
         }
 
-        // Which model runs, by the files on this PC (fictional bytes, names only).
+        // The model in use, by the file on this PC (fictional bytes, the name only), and its cut-off.
         {
             string root = Path.Combine(Path.GetTempPath(), "pflow-models-fictional-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
             try {
                 var model = new LocalTextModel(root, root);
-                Check("no model file: nothing in use, the Settings line says so, the budget is the new model's", model.InUse == null && !model.CurrentInstalled && !model.PreviousOnDisk && model.Status.StartsWith("Local AI is unavailable") && model.Budget(60) == TimeSpan.FromSeconds(19));
-                File.WriteAllText(Path.Combine(root, LocalTextModel.Previous.FileName), "fictional");
-                Check("only the old 4B file: it stays in use with its own slower cut-off and the line says until the smaller one is downloaded",
-                    model.InUse == LocalTextModel.Previous && !model.CurrentInstalled && model.PreviousOnDisk && model.Status == "Text model in use: the older Qwen3-4B (2.5 GB), until the smaller Qwen3-1.7B is downloaded." && model.Budget(60) == TimeSpan.FromSeconds(33) && model.ModelPath.EndsWith(LocalTextModel.Previous.FileName));
+                Check("no model file: nothing in use and the Settings line says so", model.InUse == null && !model.CurrentInstalled && model.Status.StartsWith("Local AI is unavailable") && model.ModelPath.EndsWith(LocalTextModel.Current.FileName));
                 File.WriteAllText(Path.Combine(root, LocalTextModel.Current.FileName), "fictional");
-                Check("both files: the new one is in use and the old one is still on disk, never removed on its own",
-                    model.InUse == LocalTextModel.Current && model.CurrentInstalled && model.PreviousOnDisk && model.Status == "Text model in use: Qwen3-1.7B (1.1 GB). Processing stays on this PC." && model.ModelPath.EndsWith(LocalTextModel.Current.FileName)
-                    && model.Budget(13) == TimeSpan.FromSeconds(18) && model.Budget(60) == TimeSpan.FromSeconds(19) && model.Budget(286) == TimeSpan.FromSeconds(52.9) && model.Budget(1000) == TimeSpan.FromSeconds(90));
-                model.RemovePrevious();
-                Check("Remove old model deletes only the old file", !model.PreviousOnDisk && model.CurrentInstalled && File.Exists(Path.Combine(root, LocalTextModel.Current.FileName)));
-                var settings = new SettingsWindow(new StateStore(root), new Whisper(root), model, new KeyboardHook(_ => { }) { Enabled = false }, () => { }, () => false) { ShowActivated = false };
-                try {
-                    File.WriteAllText(Path.Combine(root, LocalTextModel.Previous.FileName), "fictional"); File.Delete(Path.Combine(root, LocalTextModel.Current.FileName));
-                    var fresh = new SettingsWindow(new StateStore(root), new Whisper(root), model, new KeyboardHook(_ => { }) { Enabled = false }, () => { }, () => false) { ShowActivated = false };
-                    try {
-                        fresh.Show(); fresh.UpdateLayout(); Drain();
-                        var remove = Descendants<Button>(fresh).Single(b => b.IsVisible && b.Content as string == "Remove old model (2.5 GB)");
-                        Check("with the old file on disk Settings offers its removal beside the Download button and says the old one is in use",
-                            Descendants<TextBlock>(fresh).Any(t => t.IsVisible && t.Text.StartsWith("Text model in use: the older Qwen3-4B")) && Descendants<Button>(fresh).Any(b => b.IsVisible && b.Content as string == "Download (1.1 GB)"));
-                        remove.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent)); Drain();
-                        Check("pressing Remove old model deletes it and the offer goes away", !model.PreviousOnDisk && !Descendants<Button>(fresh).Any(b => b.IsVisible && b.Content is string s && s.StartsWith("Remove old model")) && Descendants<TextBlock>(fresh).Any(t => t.IsVisible && t.Text.StartsWith("Local AI is unavailable")));
-                    } finally { fresh.Close(); }
-                } finally { settings.Close(); }
+                Check("with the file: the model is in use, named with its size on the Settings line", model.InUse == LocalTextModel.Current && model.CurrentInstalled && model.Status == "Text model in use: Qwen3-4B (2.5 GB). Processing stays on this PC.");
+                Check("the cut-off is 15 s + 0.3 s a word between 20 and 90 s", model.Budget(13) == TimeSpan.FromSeconds(20) && model.Budget(60) == TimeSpan.FromSeconds(33) && model.Budget(100) == TimeSpan.FromSeconds(45) && model.Budget(286) == TimeSpan.FromSeconds(90));
+                Check("the engine gets one thread per core, two to eight", LocalTextModel.Threads >= 2 && LocalTextModel.Threads <= 8 && LocalTextModel.Threads == Math.Clamp(Native.PhysicalCores(), 2, 8) && Native.PhysicalCores() <= Environment.ProcessorCount);
             } finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
         }
     }
