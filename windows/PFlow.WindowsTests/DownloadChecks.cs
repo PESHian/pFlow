@@ -63,7 +63,7 @@ internal static partial class Program
                     var controls = Descendants<DownloadControl>(settings).ToList();
                     var textControl = controls.Single(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Text model download");
                     var speechControl = controls.Single(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Whisper model download");
-                    var textCard = (StackPanel)textControl.Parent; var speechCard = (StackPanel)speechControl.Parent;
+                    var textCard = CardAround(textControl); var speechCard = CardAround(speechControl);
                     Check(tag + "the text model control is in the Report templates card, the Whisper one in Speech recognition, each bar under its own button",
                         textCard != speechCard && Descendants<CheckBox>(textCard).Any(c => (string)c.Content == "Use the local text model for report templates") && Descendants<ComboBox>(speechCard).Any(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Speech language")
                         && Descendants<ProgressBar>(textControl).Count() == 1 && Descendants<ProgressBar>(speechControl).Count() == 1 && !Descendants<ProgressBar>(textCard).Except(Descendants<ProgressBar>(textControl)).Any());
@@ -162,4 +162,11 @@ internal static partial class Program
         }
     }
     static bool Run(Action action) { action(); Drain(); return true; }
+    /// The section card's body around a control: the StackPanel whose parent is the card's Border (a model row sits in between).
+    static StackPanel CardAround(FrameworkElement control)
+    {
+        for (var node = control.Parent as FrameworkElement; node != null; node = node.Parent as FrameworkElement)
+            if (node is StackPanel body && body.Parent is Border) return body;
+        throw new Exception("no card around " + System.Windows.Automation.AutomationProperties.GetName(control));
+    }
 }
