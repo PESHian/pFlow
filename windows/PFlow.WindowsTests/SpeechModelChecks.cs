@@ -36,13 +36,15 @@ internal static partial class Program
             var whisper = new Whisper(root, root);
             // The real pins never match these fictional bytes: by name alone nothing is deleted any more.
             var untouched = whisper.RemoveRetiredModels();
-            Check("files under the retired names that are not pFlow's downloads (other size) are left alone", untouched.Count == 2 && File.Exists(Path.Combine(root, turbo)) && File.Exists(Path.Combine(root, medium)));
+            // Their unfinished downloads are always pFlow's own and go at once; the files stay.
+            Check($"files under the retired names that are not pFlow's downloads (other size) are left alone; their unfinished downloads go ({string.Join(", ", untouched)})",
+                untouched.Count == 2 && untouched.All(entry => entry.Contains("unfinished download")) && File.Exists(Path.Combine(root, turbo)) && File.Exists(Path.Combine(root, medium)));
             // Fictional pins with the fixture files' own sizes and checksums stand in for the real downloads.
             SpeechModel Pin(string file) { byte[] bytes = File.ReadAllBytes(Path.Combine(root, file)); return new SpeechModel(file, file, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)), bytes.Length); }
             var pins = new[] { Pin(turbo), Pin(medium) };
             var removed = whisper.RemoveRetiredModels(pins);
-            Check($"at start the two retired speech models and their unfinished downloads are deleted ({string.Join(", ", removed)})",
-                removed.Count == 4 && removed.Contains(turbo) && removed.Contains(medium) && doomed.All(file => !File.Exists(Path.Combine(root, file))));
+            Check($"at start the two retired speech models (size and checksum matching the pins) are deleted ({string.Join(", ", removed)})",
+                removed.Count == 2 && removed.Contains(turbo) && removed.Contains(medium) && doomed.All(file => !File.Exists(Path.Combine(root, file))));
             Check("nothing else in pFlow's folder is touched: small's copy, the text model and its download, look-alike names, the app's files, a subfolder", Snapshot() == expected);
             string log; lock (lines) log = string.Join("\n", lines);
             Check("the log names the removed files and never a path", log.Contains("removed retired speech models: ") && log.Contains(turbo) && log.Contains(medium) && !log.Contains(root) && !log.Contains(":\\"));
