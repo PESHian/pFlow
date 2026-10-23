@@ -18,7 +18,7 @@ using PFlow.Windows;
 //                to fewer cores (PFLOW_SLOW_CORES, e.g. "6,2,1").
 internal static partial class Program
 {
-    static bool diagTakesOnly, chromeLiveOnly, slowLiveOnly, reportButtonOnly, chromeGuardOnly;
+    static bool diagTakesOnly, chromeLiveOnly, slowLiveOnly, reportButtonOnly, chromeGuardOnly, chromeReplaceOnly;
     static readonly string[] FixtureWords = ["Saturday", "market", "square", "stalls", "honey", "pottery", "Ellis", "fountain", "samples", "plum", "bakery", "cousin", "Ruth", "jars", "Morgan", "tomato", "storm", "folding", "shed"];
 
     sealed class TypeResult
@@ -85,7 +85,7 @@ internal static partial class Program
         DictationPipeline.Result run;
         try {
             run = await pipeline.Run(wav, result.Report.AudioMs / 1000, target, directory, owner, (_, _) => { }, CancellationToken.None, result.Report.LiveWords,
-                typing ? new LiveTyping(text => slot.Finalize(session, text), () => slot.Typed(session), () => slot.Cancel(session)) : null);
+                typing ? new LiveTyping(text => slot.Finalize(session, text), () => slot.Typed(session), () => slot.Cancel(session), () => slot.Collapse(session)) : null);
         } catch (RecognitionFailure error) {
             // As Program.Finish does: the take failed; the recorder says so.
             InsertionLog.Record("take failed: " + InsertionLog.Reason(error));
@@ -213,16 +213,59 @@ internal static partial class Program
                             Check(take + ": the password box got nothing it could see", shown == "len:0" || r.Status.StartsWith(InsertionTarget.Unchecked, StringComparison.Ordinal));
                             continue;
                         }
-                        // 0.1.27: no live typing in browsers; the take works exactly as 0.1.26: the finished text goes in once at the end.
+                        // 0.1.28: live words as typed keys, then the finished text replaces them once (end-of-take replace).
                         bool uncheckedTyping = r.Status.StartsWith(InsertionTarget.Unchecked, StringComparison.Ordinal);
-                        Check($"{take}: no live key typing in a browser, and the report says why ({r.FieldWhy})", r.Writes == 0 && !r.Typed
-                            && (r.FieldWhy == InsertionTarget.BrowserNote || r.Section.Contains(InsertionTarget.BrowserNote) || r.FieldWhy.StartsWith("Chromium placeholder pane", StringComparison.Ordinal)));
-                        Check($"{take}: the finished text is in the field exactly once after the prefix, no Copy card ({r.Status})",
-                            (r.Status == "Inserted" || uncheckedTyping) && exact && copies == 1 && !r.Status.StartsWith("Live typing stopped", StringComparison.Ordinal));
+                        Check($"{take}: live words typed in the browser and read back ({r.Writes} writes, {r.Matched} matched; {r.FieldWhy})", r.Writes > 0 && r.Matched == r.Writes);
+                        Check($"{take}: the finished text is in the field exactly once after the prefix, no partial words, no Copy card ({r.Status})",
+                            (r.Status == "Inserted" || uncheckedTyping) && exact && copies == 1 && r.Status != LiveInlineText.LiveLeft && !r.Status.StartsWith("Live typing stopped", StringComparison.Ordinal));
                     }
                 } finally { await ClosePage(browser, page); }
             }
         } finally { rig.Preview.Close(); rig.Capsule.Close(); rig.Owner.Dispose(); await rig.Whisper.DisposeAsync(); try { Directory.Delete(rig.Directory, true); } catch (IOException) { } }
+    }
+
+    /// --chrome-replace (W028): live key typing ON in Edge and Chrome (body, textarea, input), each page opened
+    /// fresh 5 times: a cold take then a warm one, every take a real Type-mode take through the pipeline. A take
+    /// counts only when live words were typed, the finished text then replaced them and the field ends with
+    /// exactly the prefix and the finished text once (no partial words, no Copy card).
+    static async Task ChromeReplace()
+    {
+        var rig = Rig("chrome-replace");
+        bool wasEnabled = LiveKeyField.Enabled; LiveKeyField.Enabled = true;
+        var tally = new Dictionary<string, (int Good, int All)>();
+        try {
+            await rig.Whisper.Prewarm();
+            Console.WriteLine($"REPLACE engine '{rig.Whisper.EngineDescription}'");
+            string prefix = "Fictional prefix.";
+            string[] audios = ["medium-1.wav", "medium-2.wav", "medium-3.wav", "medium-4.wav", "medium-5.wav"];
+            int turn = 0;
+            foreach (var (browser, variant) in new[] { ("edge", "body"), ("edge", "textarea"), ("edge", "input"), ("chrome", "body"), ("chrome", "textarea"), ("chrome", "input") })
+                for (int open = 0; open < 5; open++) {
+                    var page = await OpenPage(browser, variant, prefix);
+                    try {
+                        foreach (string temperature in new[] { "cold", "warm" }) {
+                            if (temperature == "warm") { Front(page.Window); await Task.Delay(500); }
+                            string before = Title(page.Window), beforeShown = before.Length > page.Name.Length + 3 ? before[(page.Name.Length + 3)..] : "";
+                            string take = $"{browser}-{variant}-{temperature}-{open + 1}";
+                            var r = await TypeTake(take, audios[turn++ % audios.Length], rig.Whisper, rig.Store, rig.Text, rig.Preview, rig.Capsule, rig.Owner.Handle, rig.Directory, browser == "chrome" ? "chrome" : "msedge");
+                            await Task.Delay(600);
+                            string title = Title(page.Window), shown = title.Length > page.Name.Length + 3 ? title[(page.Name.Length + 3)..] : "";
+                            bool exact = Flat(shown) == Flat(Flat(beforeShown) + " " + r.Final);
+                            int copies = r.Final.Length > 20 ? Occurrences(Flat(shown), Flat(r.Final)[..20]) - Occurrences(Flat(beforeShown), Flat(r.Final)[..20]) : -1;
+                            bool good = r.Writes > 0 && r.Status == "Inserted" && exact && copies == 1;
+                            string key = browser + "-" + variant + "-" + temperature;
+                            var t = tally.GetValueOrDefault(key); tally[key] = (t.Good + (good ? 1 : 0), t.All + 1);
+                            string final = r.Section.Split('\n').LastOrDefault(l => l.Contains(" typing.final "))?.Trim() ?? "typing.final -";
+                            Console.WriteLine($"REPLACE {take}: good={good} writes={r.Writes} matched={r.Matched} firstWrite={r.FirstWriteMs:F0}ms late={r.LateBegin} stops={string.Join(",", r.Stops)} status=[{r.Status}] exact={exact} copies={copies} final=[{final[(final.IndexOf("typing.final", StringComparison.Ordinal))..]}]");
+                        }
+                    } finally { await ClosePage(browser, page); }
+                }
+        } finally {
+            LiveKeyField.Enabled = wasEnabled;
+            rig.Preview.Close(); rig.Capsule.Close(); rig.Owner.Dispose(); await rig.Whisper.DisposeAsync(); try { Directory.Delete(rig.Directory, true); } catch (IOException) { }
+        }
+        foreach (var (key, t) in tally) Console.WriteLine($"REPLACE total {key}: {t.Good}/{t.All}");
+        foreach (var (key, t) in tally) Check($"{key}: every take ends with exactly the finished text once after live words ({t.Good}/{t.All})", t.Good == t.All);
     }
 
     static async Task DiagTakes()
@@ -283,8 +326,8 @@ internal static partial class Program
         var startNote = new ProcessStartInfo("notepad.exe") { UseShellExecute = true }; startNote.ArgumentList.Add(note); Process.Start(startNote);
         var notepad = await WindowWith(noteName); var edit = await Editor(notepad);
         string noteBefore = Read(edit); IntPtr noteWindow = (IntPtr)notepad.Current.NativeWindowHandle;
-        // Key typing is off in 0.1.27; these checks keep its guard honest for when it comes back.
-        LiveKeyField.Enabled = true;
+        // Key typing is on in 0.1.28 (it was off in 0.1.27); the checks set it either way.
+        bool wasEnabled = LiveKeyField.Enabled; LiveKeyField.Enabled = true;
         try {
             foreach (string slow in new[] { "", "slow" }) {
                 var page = await OpenPage("edge", slow == "slow" ? "slow" : "guard", "Fictional prefix.", accessible: true);
@@ -376,26 +419,65 @@ internal static partial class Program
                         Check($"a window switched during the field lookup gets no key, typing stops ({stop})", sawFront == noteWindow && Read(edit) == noteBefore && stop != null && Flat(Shown()) == Flat(before));
                     }
                     // 1c. Recognition revises a word pFlow already typed: live typing ends with no key at all (no
-                    // selection, no Backspace); at the end, finished text that starts with exactly the typed words is
-                    // only appended, anything else leaves the field as it is (the Copy card offers the text).
+                    // selection, no Backspace). At the end (W028) exactly pFlow's own words are selected through UI
+                    // Automation and the finished text goes over them the checked way; every moment that could go wrong
+                    // between the selection and the write is made to happen, and nothing lands anywhere else.
+                    string Selected() { try { var sel = ((TextPattern)AutomationElement.FocusedElement.GetCurrentPattern(TextPattern.Pattern)).GetSelection(); return sel.Length == 1 ? sel[0].GetText(-1) : "?"; } catch (Exception) { return "?"; } }
                     {
                         var (slot, before) = await Begin("revised");
                         var stop = slot.Reconcile("revised", "harbor lighthouse keeper waves");
                         stop ??= slot.Reconcile("revised", "harbor lighthouse keeper waves again");
                         await Task.Delay(400);
-                        var sel = ((TextPattern)AutomationElement.FocusedElement.GetCurrentPattern(TextPattern.Pattern)).GetSelection();
-                        bool caret = sel.Length == 1 && sel[0].GetText(-1).Length == 0;
-                        Check($"a revised word ends live typing with nothing sent: field unchanged, no selection ({stop})", stop == LiveStop.Revised && Shown() == before && caret);
+                        Check($"a revised word ends live typing with nothing sent: field unchanged, no selection ({stop})", stop == LiveStop.Revised && Shown() == before && Selected().Length == 0);
+                        var target = InsertionTarget.Capture();
                         var (final, finalStop) = slot.Finalize("revised", "Harbor lighthouse keeper waves.");
-                        await Task.Delay(400);
-                        Check($"finished text that does not start with the typed words leaves the field as it is ({final}, {finalStop})", final == LiveFinal.Kept && Shown() == before);
+                        await Task.Delay(300);
+                        string selected = Selected();
+                        Check($"end of take: exactly pFlow's own words are selected, no key ({final}, [{selected}])", final == LiveFinal.Replace && Shown() == before && Flat(selected) == "harbor lights");
+                        string status = await target.InsertOverSelection("Harbor lighthouse keeper waves.", IntPtr.Zero, false, CancellationToken.None);
+                        await Task.Delay(500);
+                        Console.WriteLine($"GUARD replace: selected=[{selected.Replace(' ', '_').Replace('\u00A0', '~')}] before=[{before}] status=[{status}] shown=[{Flat(Shown())}]");
+                        Check($"end of take: the finished text replaces pFlow's words exactly once, nothing else changed ({status})", status == "Inserted" && Flat(Shown()) == Flat(before[..^"harbor lights".Length] + "Harbor lighthouse keeper waves.") && Selected().Length == 0);
                     }
                     {
-                        var (slot, before) = await Begin("revised-append");
-                        var stop = slot.Reconcile("revised-append", "harbor lighthouse keeper");
-                        var (final, _) = slot.Finalize("revised-append", "harbor lights glow tonight.");
+                        // Another window comes to the front between the selection and the write.
+                        var (slot, before) = await Begin("replace-away");
+                        var target = InsertionTarget.Capture();
+                        var (final, _) = slot.Finalize("replace-away", "Harbor lights glow tonight.");
+                        Front(noteWindow); await Task.Delay(500);
+                        string status; try { status = await target.InsertOverSelection("Harbor lights glow tonight.", IntPtr.Zero, false, CancellationToken.None); } catch (InvalidOperationException error) { status = error.Message; }
+                        bool collapsed = slot.Collapse("replace-away"); await Task.Delay(300);
+                        Front(page.Window); await Task.Delay(400);
+                        Console.WriteLine($"GUARD replace-away: final={final} status=[{status}] collapsed={collapsed} selected=[{Selected()}]");
+                        Check($"focus moves after the selection: no key in the other window, live words left, selection ended ({status})",
+                            final == LiveFinal.Replace && status.StartsWith("Focus changed", StringComparison.Ordinal) && Read(edit) == noteBefore && Shown() == before && collapsed && Selected().Length == 0);
+                    }
+                    {
+                        // The person types over the selection before pFlow writes: their key stays, pFlow writes nothing.
+                        var (slot, before) = await Begin("replace-person");
+                        var target = InsertionTarget.Capture();
+                        var (final, _) = slot.Finalize("replace-person", "Harbor lights glow tonight.");
+                        await Task.Delay(300);
+                        Native.Send(Native.Key(0x51), Native.Key(0x51, true)); await Task.Delay(500);
+                        string status; try { status = await target.InsertOverSelection("Harbor lights glow tonight.", IntPtr.Zero, false, CancellationToken.None); } catch (InvalidOperationException error) { status = error.Message; }
+                        slot.Collapse("replace-person"); await Task.Delay(400);
+                        Console.WriteLine($"GUARD replace-person: final={final} status=[{status}] shown=[{Flat(Shown())}]");
+                        Check($"the person types over the selection: pFlow writes nothing after it ({status})", final == LiveFinal.Replace && status != "Inserted" && Flat(Shown()) == Flat(before[..^"harbor lights".Length] + "q"));
+                    }
+                    {
+                        // A password box on the page takes focus between the selection and the write.
+                        var (slot, before) = await Begin("replace-password");
+                        var target = InsertionTarget.Capture();
+                        var (final, _) = slot.Finalize("replace-password", "Harbor lights glow tonight.");
+                        var secret = Find("Fictional secret");
+                        try { secret.SetFocus(); } catch (InvalidOperationException) { Native.Send(Native.Key(0x09), Native.Key(0x09, true)); }
                         await Task.Delay(400);
-                        Check($"finished text that starts with exactly the typed words is appended after them ({stop}, {final})", stop == LiveStop.Revised && final == LiveFinal.Applied && Flat(Shown()) == Flat(before + " glow tonight."));
+                        string status; try { status = await target.InsertOverSelection("Harbor lights glow tonight.", IntPtr.Zero, false, CancellationToken.None); } catch (InvalidOperationException error) { status = error.Message; }
+                        await Task.Delay(400);
+                        bool untouched = Title(page.Window).Contains("pw len:0");
+                        slot.Collapse("replace-password"); await Task.Delay(300);
+                        Console.WriteLine($"GUARD replace-password: final={final} status=[{status}] pw untouched={untouched}");
+                        Check($"a password box focused after the selection gets nothing; live words left ({status})", final == LiveFinal.Replace && status != "Inserted" && untouched && Shown() == before);
                     }
                     // 3. The person presses a real key (a letter, held down) between pFlow's checks: the last, fast check
                     // sees it, typing stops, and pFlow's batch never mixes with the person's typing.
@@ -448,12 +530,22 @@ internal static partial class Program
                             Check($"a composing input language at take start: no key typing ({why})", why.Contains("input method"));
                         }
                         PostMessage(page.Window, 0x0050, IntPtr.Zero, LoadKeyboardLayout("00000409", 0)); await Task.Delay(500);
+                        {
+                            // A composing input language becomes active before the end-of-take selection: no selection, words left.
+                            var (endSlot, endBefore) = await Begin("ime-end");
+                            PostMessage(page.Window, 0x0050, IntPtr.Zero, japanese); await Task.Delay(500);
+                            var (final, finalStop) = endSlot.Finalize("ime-end", "Harbor lights glow tonight.");
+                            await Task.Delay(300);
+                            Console.WriteLine($"GUARD ime-end: final={final} stop={finalStop} selected=[{Selected()}]");
+                            Check($"a composing input language at the end: nothing selected, live words left ({final})", final == LiveFinal.Left && Shown() == endBefore && Selected().Length == 0);
+                            PostMessage(page.Window, 0x0050, IntPtr.Zero, LoadKeyboardLayout("00000409", 0)); await Task.Delay(500);
+                        }
                         // The Japanese layout leaves the session's list again.
                         UnloadKeyboardLayout(japanese);
                     }
                 } finally { LiveKeyField.BeforeSend = null; LiveKeyField.AfterLookup = null; await ClosePage("edge", page); }
             }
-        } finally { LiveKeyField.Enabled = false; await CloseOurNotepadTab(notepad, noteName); try { Directory.Delete(directory, true); } catch (IOException) { } }
+        } finally { LiveKeyField.Enabled = wasEnabled; await CloseOurNotepadTab(notepad, noteName); try { Directory.Delete(directory, true); } catch (IOException) { } }
     }
     /// `part` is empty or the first whole words of `spoken` (never half a word).
     static bool WholeWords(string part, string spoken) => part.Length == 0 || spoken.StartsWith(part, StringComparison.Ordinal) && (part.Length == spoken.Length || spoken[part.Length] == ' ');

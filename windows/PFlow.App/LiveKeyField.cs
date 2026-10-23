@@ -6,18 +6,20 @@ namespace PFlow.Windows;
 
 /// A web field in Chrome or Edge whose text UI Automation can read: live words go in as typed
 /// characters (SendInput, Unicode), the way a person's typing would, because a browser has no range
-/// write. Append only: pFlow only ever adds settled words at the caret right after its own words; it
-/// never selects, never presses Backspace, Shift or an arrow, and never revises what it typed. A word the
-/// recognizer revises ends live typing for the take (LiveInlineSession); at the end the finished text is
-/// added only if it starts with exactly what was typed, otherwise what is there stays and the finished
-/// text is offered in the Copy card. Each write is read back before the next. Never a password field,
+/// write. Append only while words come: pFlow only ever adds settled words at the caret right after its
+/// own words; it never presses Backspace, Shift or an arrow, and never revises what it typed. A word the
+/// recognizer revises ends live typing for the take (LiveInlineSession). At the end pFlow's own words are
+/// selected through UI Automation (no keys), read back, and the finished text goes over them the normal
+/// checked way (InsertionTarget.InsertOverSelection); any doubt leaves the words, ends the selection and
+/// offers the finished text in the Copy card. Each write is read back before the next. Never a password field,
 /// never Enter (line breaks are spaces while words come live), and every key batch is sent only right
 /// after the checks in `Unsafe` (one rule, `SendChecked`).
-/// OFF in 0.1.27 (`Enabled` is false; only the guard checks turn it on): append-only typing ended every
-/// browser take worse than 0.1.26 (partial live words and the Copy card), so browsers get no live typing.
+/// ON again in 0.1.28: 0.1.27's append-only ending left partial words and the Copy card, so it was off; the
+/// end-of-take replace ends every take with exactly the finished text (VM: 60/60 Edge and Chrome takes).
+/// `Enabled` false turns browser live typing off (the 0.1.27 behaviour: the finished text goes in at the end).
 internal sealed class LiveKeyField : ILiveTextField
 {
-    internal static bool Enabled { get; set; }
+    internal static bool Enabled { get; set; } = true;
     static readonly string[] Browsers = ["chrome", "msedge"], Hosts = ["Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND"];
     readonly AutomationElement element;
     readonly int[] runtimeId;
@@ -94,8 +96,41 @@ internal sealed class LiveKeyField : ILiveTextField
         return Until(() => Value() == expected && Selection() == caret, 800 + 15 * text.Length);
     }
 
-    /// No keys: the caret is already where the last write left it; this only checks.
-    public bool Select(TextSpan range) => Until(() => Selection() == range, 300);
+    /// An empty range: no keys, the caret is already where the last write left it; this only checks.
+    /// pFlow's own words at the end of a take: selected through UI Automation (no keys) only when the field
+    /// and the window are still as the key checks require and the range's text is exactly what the field
+    /// shows there; then read back. Any doubt ends the selection again (Collapse) and returns false.
+    public bool Select(TextSpan range)
+    {
+        if (range.Length == 0) return Until(() => Selection() == range, 300);
+        string? why = aborted ? "typing already stopped" : Unsafe();
+        if (why != null) { Diagnostics.Recorder.Event("typing.guard", new DiagField("stopped", why), new DiagField("stage", "select own words")); return false; }
+        try {
+            var pattern = (TextPattern)element.GetCurrentPattern(TextPattern.Pattern); var document = pattern.DocumentRange;
+            if (Value() is not string value || range.Start + range.Length > value.Length) return false;
+            var span = document.Clone();
+            span.MoveEndpointByRange(TextPatternRangeEndpoint.End, document, TextPatternRangeEndpoint.Start);
+            if (span.MoveEndpointByUnit(TextPatternRangeEndpoint.End, TextUnit.Character, range.Start + range.Length) != range.Start + range.Length
+                || span.MoveEndpointByUnit(TextPatternRangeEndpoint.Start, TextUnit.Character, range.Start) != range.Start) return false;
+            if (span.GetText(-1).Replace('\u00A0', ' ') != value.Substring(range.Start, range.Length)) return false;
+            span.Select();
+            if (Until(() => Selection() == range && Value() == value, 500)) return true;
+        } catch (Exception error) when (error is ElementNotAvailableException or COMException or InvalidOperationException or ArgumentException) { }
+        Collapse();
+        return false;
+    }
+
+    /// Ends any selection in the field at its end, through UI Automation (no keys).
+    public bool Collapse()
+    {
+        try {
+            var selections = ((TextPattern)element.GetCurrentPattern(TextPattern.Pattern)).GetSelection();
+            if (selections.Length != 1) return false;
+            if (selections[0].CompareEndpoints(TextPatternRangeEndpoint.Start, selections[0], TextPatternRangeEndpoint.End) == 0) return true;
+            var end = selections[0].Clone(); end.MoveEndpointByRange(TextPatternRangeEndpoint.Start, end, TextPatternRangeEndpoint.End); end.Select();
+            return Until(() => Selection() is { Length: 0 }, 300);
+        } catch (Exception error) when (error is ElementNotAvailableException or COMException or InvalidOperationException) { return false; }
+    }
 
     /// Test hooks: `BeforeSend` runs before the checks of a key batch; `AfterLookup` runs between the slow
     /// UI Automation checks and the fast ones (the window a person could switch during the lookup).

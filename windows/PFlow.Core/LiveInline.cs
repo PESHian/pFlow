@@ -240,7 +240,20 @@ public sealed class LiveInlineOwnership
     /// revises a word already typed, live typing ends for the take and the planned write is dropped.
     public LiveStep Halt(LiveStop reason) { pending = null; return Stop(reason); }
 
-    /// The end of a take in an append-only field: the finished text goes in only as an addition right after
+    /// The end of a take in an append-only field: pFlow's own words, where they are, in a field still exactly
+    /// as pFlow left them (a take stopped only because a word was revised still counts). The spaces pFlow put
+    /// around them stay outside: the finished text replaces the words and keeps that spacing. Null otherwise.
+    public TextSpan? OwnSpan(LiveFieldState state)
+    {
+        if (pending != null || Stopped is LiveStop stopped && stopped != LiveStop.Revised || Check(state) != null || Original.Length != 0) return null;
+        int lead = Owned.Length - Owned.TrimStart().Length, words = Owned.Trim().Length;
+        return words == 0 ? null : new TextSpan(Original.Start + lead, words);
+    }
+
+    /// The same words as the finished text: nothing to replace.
+    public bool Finished(string text) => string.Equals(Owned, Spaced(text), StringComparison.Ordinal);
+
+    /// (W027, unused since W028's end-of-take replace) The finished text goes in only as an addition right after
     /// exactly what pFlow typed, in a field still exactly as pFlow left it, and never with a line break.
     /// Anything else keeps what is there (Stopped). A take stopped only because a word was revised may
     /// still end this way. None means the typed words already are the finished text.
@@ -299,13 +312,17 @@ public interface ILiveTextField
     /// False while a write cannot be made safely right now (a key the person holds would change
     /// typed characters); the update is skipped, nothing is written and typing goes on.
     bool ReadyToWrite => true;
-    /// True for a field typed into with keys: pFlow only ever adds characters at the caret after its own
-    /// words. A revised word ends live typing; the finished text is added only when it starts with exactly
-    /// what was typed; nothing typed is ever taken back out.
+    /// True for a field typed into with keys: while words come, pFlow only ever adds characters at the caret
+    /// after its own words, and a revised word ends live typing. At the end pFlow's own span is selected
+    /// (Select, no keys) and the finished text goes over it the normal checked way; nothing else is touched.
     bool AppendOnly => false;
+    /// Ends a selection pFlow made without a key, leaving the caret at its end. True when nothing is selected.
+    bool Collapse() => true;
 }
 
-public enum LiveFinal { Applied, NotTyped, Kept }
+/// Replace: pFlow's own typed words are selected (no keys) for the finished text to go over them the normal,
+/// checked way. Left: the live words stay as typed and the finished text is offered in the card.
+public enum LiveFinal { Applied, NotTyped, Kept, Replace, Left }
 public enum LiveCancel { NothingTyped, Removed, Left }
 
 /// One take's live typing: the ownership rules applied to one real field.
@@ -355,9 +372,21 @@ public sealed class LiveInlineSession
             // Nothing typed: the finished text goes in the normal, checked way.
             if (!ownership.Touched) return (LiveFinal.NotTyped, null);
             var now = field.State();
-            var appended = Perform(ownership.FinalizeAppend(text.Replace("\r\n", "\n").Replace('\r', '\n'), now), now, "final") is LiveStop kept ? (LiveFinal.Kept, kept) : (LiveFinal.Applied, (LiveStop?)null);
-            Recorder.Event("typing.final", new DiagField("result", appended.Item1.ToString()), new DiagField("stop", appended.Item2?.ToString()), new DiagField("mode", "append only"), new DiagField("chars", text.Length));
-            return appended;
+            if (ownership.OwnSpan(now) is not TextSpan span) {
+                var reason = ownership.Stopped is LiveStop s && s != LiveStop.Revised ? s : ownership.Check(now) ?? LiveStop.Uncertain;
+                Recorder.Event("typing.final", new DiagField("result", "left"), new DiagField("stop", reason.ToString()), new DiagField("mode", "replace own words"));
+                return (LiveFinal.Left, reason);
+            }
+            if (ownership.Finished(text.Replace("\r\n", "\n").Replace('\r', '\n'))) { Recorder.Event("typing.final", new DiagField("result", "Applied"), new DiagField("mode", "typed words are the finished text")); return (LiveFinal.Applied, null); }
+            // pFlow's own words, selected without a key and read back; the caller types or pastes the finished text over them.
+            if (!field.Select(span)) {
+                field.Collapse();
+                Recorder.Event("typing.final", new DiagField("result", "left"), new DiagField("stop", "selection not confirmed"), new DiagField("mode", "replace own words"));
+                return (LiveFinal.Left, LiveStop.Uncertain);
+            }
+            selected = true;
+            Recorder.Event("typing.final", new DiagField("result", "Replace"), new DiagField("mode", "replace own words"), new DiagField("selected", span.Length), new DiagField("chars", text.Length));
+            return (LiveFinal.Replace, null);
         }
         if (!field.ReadyToWrite) {
             if (!ownership.Touched) return (LiveFinal.NotTyped, null);
@@ -369,6 +398,10 @@ public sealed class LiveInlineSession
         Recorder.Event("typing.final", new DiagField("result", result.Item1.ToString()), new DiagField("stop", result.Item2?.ToString()), new DiagField("chars", text.Length));
         return result;
     }
+
+    bool selected;
+    /// After a Replace that did not go in: pFlow's selection is ended without a key.
+    public bool Collapse() => !selected || field.Collapse();
 
     public (LiveCancel Result, LiveStop? Stop) Cancel()
     {
@@ -434,9 +467,12 @@ public sealed class LiveInlineSlot
     public (LiveFinal Result, LiveStop? Stop) Finalize(string session, string text)
     {
         if (current is not { } live || live.Id != session) return (LiveFinal.NotTyped, null);
-        current = null;
+        current = null; finished = live;
         return live.Finalize(text);
     }
+    LiveInlineSession? finished;
+    /// Ends the selection a Replace made, when the finished text did not go over it.
+    public bool Collapse(string session) => finished is not { } live || live.Id != session || live.Collapse();
 
     public (LiveCancel Result, LiveStop? Stop) Cancel(string session)
     {
@@ -500,6 +536,8 @@ public static class LiveInlineText
         _ => "pFlow couldn't check what it typed"
     } + ". The finished text is in History.";
 
+    /// The finished text could not replace pFlow's live words safely: they stay, and the card offers the finished text.
+    public const string LiveLeft = "Your live words are still in the field; the finished text could not replace them safely. Copy it from the card.";
     public const string Left = "Canceled. The words pFlow already typed are still in your app, because the field changed.";
     public const string KeptTyped = "Kept in History. Recognition stopped before it finished; the words already typed stay in your app.";
 }

@@ -41,8 +41,8 @@ internal static partial class Program
 
     static void NativeLiveTyping()
     {
-        // 0.1.27 decision B, kept in 0.1.28: no live key typing in Chrome, Edge or Electron apps unless a guard check turns it on.
-        Check("browser live key typing is off by default", !LiveKeyField.Enabled);
+        // 0.1.28: live key typing in Chrome and Edge is on again, with the end-of-take replace (0.1.27 had it off).
+        Check("browser live key typing is on by default", LiveKeyField.Enabled);
         string root = Path.Combine(Path.GetTempPath(), "pflow-live-typing-fictional-" + Guid.NewGuid().ToString("N"));
         try {
             // The preview names the app as it names itself, read from its program file only.

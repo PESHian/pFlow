@@ -328,10 +328,12 @@ internal static partial class Program
                 string before = Read(field!);
                 var (_, slot, refused) = Begin("edge");
                 slot.Reconcile("edge", "harbor lights"); slot.Reconcile("edge", "harbor lights glow");
-                // 0.1.27: browsers get no live typing (as 0.1.26); the reason is the browser note.
-                string reason = ""; try { InsertionTarget.Capture().LiveField(out reason); } catch (InvalidOperationException) { }
-                Check($"Edge {label} uses the preview ({refused}; {reason})", refused == LiveStop.Unsupported && Read(field!) == before && reason == InsertionTarget.BrowserNote);
-                matrix.Add($"Edge {label} (Chromium, file:// page): no live typing (browser), page unchanged");
+                // 0.1.28: Edge fields get live words as typed keys (append only); a cancel leaves them (no Backspace).
+                await Task.Delay(400);
+                bool typed = Normalize(Read(field!)).Replace(" ", "") == Normalize(before + "harbor lights").Replace(" ", "");
+                var cancel = slot.Cancel("edge");
+                Check($"Edge {label}: live words typed with keys ({refused}); a cancel leaves them ({cancel.Result})", refused == null && typed && cancel.Result == LiveCancel.Left);
+                matrix.Add($"Edge {label} (Chromium, file:// page): live words typed, cancel leaves them");
             }
             if (window.TryGetCurrentPattern(WindowPattern.Pattern, out var pattern)) ((WindowPattern)pattern).Close();
         } finally {

@@ -139,7 +139,7 @@ internal sealed partial class Program : Application
     void ShowCard(string note) { preview.SetNote(note); InsertionLog.Record("live: " + note); }
     /// The words typed live for this take, as the pipeline finishes it.
     LiveTyping? TypingFor(string? session) => session == null ? null
-        : new LiveTyping(text => typing.Finalize(session, text), () => typing.Typed(session), () => typing.Cancel(session));
+        : new LiveTyping(text => typing.Finalize(session, text), () => typing.Typed(session), () => typing.Cancel(session), () => typing.Collapse(session));
     void LiveStopped(LiveRecognizer owner) { if (ReferenceEquals(live, owner)) ShowCard("Live words stopped"); }
     void LiveTooSlow(LiveRecognizer owner) { if (ReferenceEquals(live, owner)) ShowCard(LiveTake.TooSlowNote); }
     void EndLive()

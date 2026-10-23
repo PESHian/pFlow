@@ -102,6 +102,18 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
                 }
             }
             else if (final == LiveFinal.Kept) { result = LiveInlineText.Kept(stop ?? LiveStop.Uncertain); kept = true; }
+            else if (final == LiveFinal.Left) result = LiveInlineText.LiveLeft;
+            else if (final == LiveFinal.Replace) {
+                // pFlow's own live words are selected: the finished text goes over them through the normal checked path.
+                try { result = await Measure("insertionMs", () => originalTarget.InsertOverSelection(text, owner, preferences.CopyDictationToClipboard, cancel, rtf)); }
+                catch (Exception error) when (error is not OperationCanceledException) { result = error.Message; InsertionLog.Record("replace failed: " + InsertionLog.Reason(error)); }
+                if (InsertionPrompt.Needed(result, false)) {
+                    // Nothing went over the live words: the selection ends without a key, the words stay, the card offers the text.
+                    bool collapsed = typing.Collapse?.Invoke() ?? true;
+                    InsertionLog.Record("live typing final: replace refused (" + result + "); live words left" + (collapsed ? "" : "; selection could not be ended"));
+                    result = LiveInlineText.LiveLeft;
+                }
+            }
         }
         if (result == null) {
             try { result = await Measure("insertionMs", () => originalTarget.Insert(text, owner, preferences.CopyDictationToClipboard, cancel, rtf)); }
@@ -122,4 +134,4 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
 }
 
 /// One take's live typing, as the pipeline sees it at the end of the take.
-internal sealed record LiveTyping(Func<string, (LiveFinal Result, LiveStop? Stop)> Finalize, Func<bool> Typed, Func<(LiveCancel Result, LiveStop? Stop)> Cancel);
+internal sealed record LiveTyping(Func<string, (LiveFinal Result, LiveStop? Stop)> Finalize, Func<bool> Typed, Func<(LiveCancel Result, LiveStop? Stop)> Cancel, Func<bool>? Collapse = null);

@@ -10,6 +10,9 @@ internal interface IInsertionTarget
     string ApplicationName { get; }
     string ApplicationId { get; }
     Task<string> Insert(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf = null);
+    /// The finished text over the selection pFlow made of its own live words, through the same checked path.
+    Task<string> InsertOverSelection(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf = null) =>
+        Task.FromResult("The field changed. Your text is in History.");
 }
 
 internal sealed class InsertionTarget : IInsertionTarget
@@ -137,8 +140,8 @@ internal sealed class InsertionTarget : IInsertionTarget
         if (!readable) { why = placeholder ? "Chromium placeholder pane (field not readable yet)" : "field not readable: " + Refusal; return null; }
         if (LiveTextField.Create(element, foreground, processId, out why) is { } win32) return win32;
         string win32Why = why;
-        // Chrome, Edge and Electron apps: no live typing in 0.1.27 (the take works as in 0.1.26: the finished text
-        // goes in at the end). LiveKeyField stays off unless a test turns it on.
+        // Chrome and Edge: live words as typed keys, replaced by the finished text at the end (LiveKeyField).
+        // With LiveKeyField off, browsers get no live typing (0.1.27: the finished text goes in at the end).
         if (!LiveKeyField.Enabled) {
             bool browser;
             try { browser = element.Current.FrameworkId == "Chrome"; } catch (Exception error) when (error is ElementNotAvailableException or COMException) { browser = false; }
@@ -262,6 +265,20 @@ internal sealed class InsertionTarget : IInsertionTarget
             if (!readable) { Log("saved to History: " + Refusal); return SavedToHistory; }
             return await Deliver(text, clipboardOwner, keepClipboard, cancel, rtf);
         } catch (Exception error) when (error is not OperationCanceledException) { Log("refused: " + error.Message); throw; }
+    }
+    /// The end of a take with live words in a browser field: pFlow's own words are selected (LiveKeyField,
+    /// no keys). The same field, read again now, with that selection, takes the finished text the 0.1.27
+    /// way (typed, or pasted with line breaks), checked against what it then shows.
+    public async Task<string> InsertOverSelection(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf = null)
+    {
+        cancel.ThrowIfCancellationRequested();
+        var now = Capture();
+        if (!SameWindow(now) || !now.runtimeId.SequenceEqual(runtimeId)) throw new InvalidOperationException("Focus changed. Your text is in History.");
+        if (!now.readable || now.placeholder || now.weak != null || now.length == 0) throw new InvalidOperationException("The field changed. Your text is in History.");
+        now.Log("over pFlow's selection: field " + InsertionLog.Length(now.before) + ", selection at " + now.start + "+" + now.length
+            + (now.start > 0 && char.IsWhiteSpace(now.before[now.start - 1]) ? ", space before" : "") + (char.IsWhiteSpace(now.before[now.start]) ? ", starts with a space" : ""));
+        try { return await now.Deliver(text, clipboardOwner, keepClipboard, cancel, rtf); }
+        catch (Exception error) when (error is not OperationCanceledException) { now.Log("refused: " + error.Message); throw; }
     }
     /// The tree had the whole take to arrive, and gets a little longer now: a
     /// readable field takes the checked path (and a password field is refused);

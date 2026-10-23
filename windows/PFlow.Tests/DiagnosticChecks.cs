@@ -28,11 +28,14 @@ internal static class DiagnosticChecks
             if (DropNext) { DropNext = false; text = text[..(text.Length / 2)]; }
             Value = Value[..range.Start] + text + Value[range.End..]; Caret = new(range.Start + text.Length, 0); return true;
         }
-        public bool Select(TextSpan range) { Caret = range; return true; }
+        public bool FailSelect; public int Collapses;
+        public bool Select(TextSpan range) { if (FailSelect && range.Length > 0) return false; Caret = range; return true; }
+        public bool Collapse() { Collapses++; Caret = new(Caret.End, 0); return true; }
     }
 
-    /// Append-only fields (typed keys): a revised word stops live typing with no write; the end appends only
-    /// when the finished text starts with exactly the typed words; a cancel never removes anything.
+    /// Append-only fields (typed keys): a revised word stops live typing with no write; at the end pFlow's own
+    /// words (and nothing else) are selected for the finished text to go over them the checked way, or left
+    /// with the card when the field is not as pFlow left it; a cancel never removes anything.
     static void AppendOnly()
     {
         {
@@ -42,13 +45,39 @@ internal static class DiagnosticChecks
             Check("append only: a word already typed being revised stops live typing with no write", stop == LiveStop.Revised && field.Value == "Note: harbor lights" && field.Ranges.Count == 1);
             Check("append only: nothing more is typed for the take", slot.Reconcile("a", "harbor lights glow over the water") == null && field.Value == "Note: harbor lights");
             var final = slot.Finalize("a", "harbor lights glow tonight.");
-            Check("append only: finished text starting with the typed words is appended after them", final.Result == LiveFinal.Applied && field.Value == "Note: harbor lights glow tonight." && field.Ranges.All(r => r.Length == 0));
+            Check("end of take: exactly pFlow's own typed words are selected, no key, for the finished text to replace", final.Result == LiveFinal.Replace && field.Value == "Note: harbor lights"
+                && field.Caret == new TextSpan(6, "harbor lights".Length) && field.Ranges.Count == 1);
         }
         {
             var field = new Field("Note: ", keys: true); var slot = new LiveInlineSlot();
             slot.Begin("b", field); slot.Reconcile("b", "harbor lights"); slot.Reconcile("b", "harbor lights glow");
             var final = slot.Finalize("b", "Harbor lights glow.");
-            Check("append only: finished text that differs from the typed words leaves the field as it is (Copy card)", final.Result == LiveFinal.Kept && final.Stop == LiveStop.Revised && field.Value == "Note: harbor lights" && field.Ranges.Count == 1);
+            Check("end of take: different finished text (capitals, punctuation) still selects only pFlow's words", final.Result == LiveFinal.Replace && field.Caret == new TextSpan(6, "harbor lights".Length) && field.Ranges.Count == 1);
+            Check("after a refused replace the selection ends without a key", slot.Collapse("b") && field.Collapses == 1 && field.Caret == new TextSpan(6 + "harbor lights".Length, 0) && field.Value == "Note: harbor lights");
+        }
+        {
+            var field = new Field("Note: ", keys: true); var slot = new LiveInlineSlot();
+            slot.Begin("e", field); slot.Reconcile("e", "harbor lights"); slot.Reconcile("e", "harbor lights glow");
+            field.Value += " QQ"; field.Caret = new(field.Value.Length, 0);
+            var final = slot.Finalize("e", "Harbor lights glow.");
+            Check("end of take: a field the person changed is left as it is, nothing selected (card)", final.Result == LiveFinal.Left && final.Stop == LiveStop.Text && field.Caret.Length == 0 && field.Ranges.Count == 1);
+        }
+        {
+            var field = new Field("Note: ", keys: true) { FailSelect = true }; var slot = new LiveInlineSlot();
+            slot.Begin("f", field); slot.Reconcile("f", "harbor lights"); slot.Reconcile("f", "harbor lights glow");
+            var final = slot.Finalize("f", "Harbor lights glow.");
+            Check("end of take: a selection that cannot be confirmed is ended and the words are left (card)", final.Result == LiveFinal.Left && field.Collapses == 1 && field.Caret.Length == 0);
+        }
+        {
+            var field = new Field("Note:", keys: true); var slot = new LiveInlineSlot();
+            slot.Begin("h", field); slot.Reconcile("h", "harbor lights"); slot.Reconcile("h", "harbor lights glow");
+            var final = slot.Finalize("h", "Harbor lights glow.");
+            Check("end of take: the space pFlow typed before its words stays outside the selection", final.Result == LiveFinal.Replace && field.Value == "Note: harbor lights" && field.Caret == new TextSpan(6, "harbor lights".Length));
+        }
+        {
+            var field = new Field("Note: ", keys: true); var slot = new LiveInlineSlot();
+            slot.Begin("g", field); slot.Reconcile("g", "harbor lights"); slot.Reconcile("g", "harbor lights glow");
+            Check("end of take: typed words that already are the finished text need nothing", slot.Finalize("g", "harbor lights").Result == LiveFinal.Applied && field.Caret.Length == 0);
         }
         {
             var field = new Field("Note: ", keys: true); var slot = new LiveInlineSlot();
@@ -116,7 +145,7 @@ internal static class DiagnosticChecks
             web.Held = false; webSlot.Reconcile("t2", "Tessaly copper kettle"); webSlot.Reconcile("t2", "Tessaly copper kettle lid");
             Check("keys typing resumes once the key is up", web.Value == "Tessaly copper kettle");
             var handed = webSlot.Finalize("t2", "Tessaly copper kettle.\nSecond line.");
-            Check("append only: finished text with a line break leaves the typed words and adds nothing (Copy card)", handed.Result == LiveFinal.Kept && web.Value == "Tessaly copper kettle");
+            Check("end of take: finished text with a line break selects pFlow's words for the checked path (which pastes line breaks)", handed.Result == LiveFinal.Replace && web.Value == "Tessaly copper kettle" && web.Caret == new TextSpan(0, "Tessaly copper kettle".Length));
             Check("append only: no write ever replaced or removed characters", web.Ranges.All(range => range.Length == 0));
             AppendOnly();
             recorder.EndTake(new DiagField("result", "Inserted"));
@@ -128,7 +157,7 @@ internal static class DiagnosticChecks
                 stop == LiveStop.Uncertain && report.Contains("typing.stop reason=Uncertain stage=live writeAccepted=yes") && report.Contains("firstDifferenceAt="));
             Check("the report keeps every live window with its verdict", report.Split('\n').Count(l => l.Contains(" live.window ")) == 3 && report.Contains("tookMs=7000 limitMs=6000 slow=yes slowInARow=1"));
             Check("the report keeps each write with its method, size and read-back", report.Contains("typing.write stage=live method=\"range write\"") && report.Contains("readBackMatches=no") && report.Contains("method=keys"));
-            Check("the report says a held key paused typing and the line-break hand-back", report.Contains("typing.wait") && report.Contains("mode=\"append only\""));
+            Check("the report says a held key paused typing and the end-of-take replace", report.Contains("typing.wait") && report.Contains("mode=\"replace own words\""));
             Check("the take's summary counts its steps in insertion.log", compact.Any(l => l.StartsWith("diag take 1 ") && l.Contains("take.end") && l.Contains("live.window=3") && l.Contains("typing.write=")));
             Check("insertion.log gets the decisions, not every window", compact.Any(l => l.Contains("typing.stop")) && !compact.Any(l => l.Contains(" live.window ")));
             Check("no fixture word appears in the report or the log lines", !fixture.Any(word => everything.Contains(word, StringComparison.OrdinalIgnoreCase)));
