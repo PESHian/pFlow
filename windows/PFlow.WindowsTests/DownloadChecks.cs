@@ -31,7 +31,8 @@ internal static partial class Program
         window.Resources.MergedDictionaries.Add((ResourceDictionary)Application.LoadComponent(new Uri("/pFlow;component/SettingsStyles.xaml", UriKind.Relative)));
         List<string> Buttons() => Descendants<Button>(control).Where(b => b.IsVisible).Select(b => (string)b.Content).ToList();
         bool Bar() => Descendants<ProgressBar>(control).Single().IsVisible;
-        string Line() => Descendants<TextBlock>(control).Where(t => t.IsVisible).Select(t => t.Text).SingleOrDefault() ?? "";
+        // The control's own line, not the label inside a themed button (that is a TextBlock too).
+        string Line() => control.Children.OfType<TextBlock>().Where(t => t.IsVisible).Select(t => t.Text).SingleOrDefault() ?? "";
         void Press(string label) { Descendants<Button>(control).Single(b => b.IsVisible && (string)b.Content == label).RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent)); Drain(); }
         try {
             window.Show(); window.UpdateLayout(); Drain();
@@ -72,7 +73,7 @@ internal static partial class Program
                     Check(tag + "the Settings line names the model in use", Descendants<TextBlock>(textCard).Any(t => t.IsVisible && t.Text == "Local AI is unavailable until its model is installed. Plain dictation still works.") && !Descendants<Button>(textCard).Any(b => b.IsVisible && b.Content is string s && s.StartsWith("Remove old model")));
                     textControl.Show(DownloadState.Downloading, 120_000_000); speechControl.Show(DownloadState.Downloading, 61_000_000); settings.UpdateLayout(); Drain();
                     var bar = Descendants<ProgressBar>(textControl).Single(); var button = Descendants<Button>(textControl).Single(b => b.IsVisible);
-                    var barAt = bar.TranslatePoint(new Point(0, 0), settings); var lineAt = Descendants<TextBlock>(textControl).Single(t => t.IsVisible).TranslatePoint(new Point(0, 0), settings);
+                    var barAt = bar.TranslatePoint(new Point(0, 0), settings); var lineAt = textControl.Children.OfType<TextBlock>().Single(t => t.IsVisible).TranslatePoint(new Point(0, 0), settings);
                     var cardAt = textCard.TranslatePoint(new Point(0, 0), settings); var nextCard = speechCard.TranslatePoint(new Point(0, 0), settings);
                     Check(tag + "while downloading the bar and the line sit inside the Local intelligence card, above the next card", bar.IsVisible && barAt.Y > cardAt.Y && lineAt.Y > barAt.Y && lineAt.Y + 19 <= nextCard.Y && (string)button.Content == "Cancel");
                     if (shots != null) {
