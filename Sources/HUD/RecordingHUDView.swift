@@ -42,6 +42,8 @@ struct RecordingHUDView: View {
             Capsule().fill(Color.black)
                 .overlay(Capsule().strokeBorder(model.palette.gradient.opacity(Self.capsuleOutlineOpacity), lineWidth: 1))
         }
+        // Everything inside draws for a black background, the spinner included.
+        .environment(\.colorScheme, .dark)
         .preferredColorScheme(.dark)
         .accessibilityLabel(title)
     }
@@ -341,8 +343,24 @@ struct SelectableText: NSViewRepresentable {
     let size: CGFloat
     let scheme: ColorScheme
 
+    /// Scrolls to the top on the next layout after new words arrive, so the
+    /// card opens on the first line whatever size the box settles at.
+    final class TopScrollView: NSScrollView {
+        var wantsTop = false
+        override func layout() {
+            super.layout()
+            if wantsTop {
+                wantsTop = false
+                contentView.scroll(to: .zero)
+                reflectScrolledClipView(contentView)
+            }
+        }
+    }
+
     func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSTextView.scrollableTextView()
+        let scroll = TopScrollView()
+        let view = NSTextView(frame: .zero)
+        scroll.documentView = view
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
@@ -372,7 +390,12 @@ struct SelectableText: NSViewRepresentable {
         view.layoutManager?.ensureLayout(for: view.textContainer!)
         view.sizeToFit()
         // New words read from the top; the person scrolls down for the rest.
-        if changed { scroll.contentView.scroll(to: .zero); scroll.reflectScrolledClipView(scroll.contentView) }
+        if changed {
+            (scroll as? TopScrollView)?.wantsTop = true
+            scroll.contentView.scroll(to: .zero)
+            scroll.reflectScrolledClipView(scroll.contentView)
+            scroll.needsLayout = true
+        }
     }
 }
 

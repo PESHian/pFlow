@@ -117,7 +117,7 @@ struct LiveInlineLooksTests {
                         model.waveformStyle = style
                         model.palette = palette
                         model.levels = levels
-                        try save(RecordingHUDView(model: model), "capsule-\(name)-\(style.rawValue)-\(phase)", scheme: scheme)
+                        try save(RecordingHUDView(model: model), "capsule-\(name)-\(style.rawValue)-\(phase)", scheme: scheme, hosted: true)
                     }
                 }
             }
