@@ -122,6 +122,8 @@ internal sealed class InsertionTarget : IInsertionTarget
     /// The captured field for live typing, made before any pFlow window shows.
     /// Null when the field cannot take verified range writes: the take uses Preview.
     internal ILiveTextField? LiveField() => LiveField(out _);
+    /// What the diagnostic report and insertion.log say for a browser field.
+    internal const string BrowserNote = "live typing: not available in this app (browser)";
     /// The field live words can be typed into: a Win32 edit or rich edit control (range writes), else a
     /// readable Chrome or Edge web field (typed characters); null with the reason otherwise.
     internal ILiveTextField? LiveField(out string why)
@@ -129,6 +131,14 @@ internal sealed class InsertionTarget : IInsertionTarget
         if (!readable) { why = placeholder ? "Chromium placeholder pane (field not readable yet)" : "field not readable: " + Refusal; return null; }
         if (LiveTextField.Create(element, foreground, processId, out why) is { } win32) return win32;
         string win32Why = why;
+        // Chrome, Edge and Electron apps: no live typing in 0.1.27 (the take works as in 0.1.26: the finished text
+        // goes in at the end). LiveKeyField stays off unless a test turns it on.
+        if (!LiveKeyField.Enabled) {
+            bool browser;
+            try { browser = element.Current.FrameworkId == "Chrome"; } catch (Exception error) when (error is ElementNotAvailableException or COMException) { browser = false; }
+            why = browser ? BrowserNote : win32Why;
+            return null;
+        }
         try { if (LiveKeyField.Create(element, foreground, processId, ApplicationName, out why) is { } web) return web; }
         catch (Exception error) { why = "web field check failed (" + error.GetType().Name + ")"; }
         why = win32Why + "; " + why;

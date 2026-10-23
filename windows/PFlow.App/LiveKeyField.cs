@@ -13,8 +13,11 @@ namespace PFlow.Windows;
 /// text is offered in the Copy card. Each write is read back before the next. Never a password field,
 /// never Enter (line breaks are spaces while words come live), and every key batch is sent only right
 /// after the checks in `Unsafe` (one rule, `SendChecked`).
+/// OFF in 0.1.27 (`Enabled` is false; only the guard checks turn it on): append-only typing ended every
+/// browser take worse than 0.1.26 (partial live words and the Copy card), so browsers get no live typing.
 internal sealed class LiveKeyField : ILiveTextField
 {
+    internal static bool Enabled { get; set; }
     static readonly string[] Browsers = ["chrome", "msedge"], Hosts = ["Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND"];
     readonly AutomationElement element;
     readonly int[] runtimeId;

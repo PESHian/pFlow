@@ -179,7 +179,7 @@ internal static partial class Program
             await rig.Whisper.Prewarm();
             Console.WriteLine($"CHROME LIVE engine '{rig.Whisper.EngineDescription}'");
             string prefix = "Fictional prefix.";
-            foreach (var (browser, variant) in new[] { ("edge", "body"), ("edge", "textarea"), ("edge", "input"), ("edge", "password"), ("chrome", "body") }) {
+            foreach (var (browser, variant) in new[] { ("edge", "body"), ("edge", "textarea"), ("edge", "input"), ("edge", "password"), ("chrome", "body"), ("chrome", "textarea") }) {
                 var page = await OpenPage(browser, variant, variant == "password" ? "" : prefix);
                 try {
                     foreach (string temperature in new[] { "cold", "warm" }) {
@@ -208,21 +208,12 @@ internal static partial class Program
                             Check(take + ": the password box got nothing it could see", shown == "len:0" || r.Status.StartsWith(InsertionTarget.Unchecked, StringComparison.Ordinal));
                             continue;
                         }
-                        if (temperature == "cold" && r.Refused != null && !r.LateBegin && r.Status.StartsWith(InsertionTarget.Unchecked, StringComparison.Ordinal)) {
-                            // A cold browser whose page tree never built during the take (its placeholder pane stayed to the end):
-                            // nothing could be read, so no live words; the finished words went in unchecked, as before 0.1.27.
-                            Console.WriteLine($"CHROME LIVE {take}: the placeholder pane never gave way during the take: no live typing possible (as in 0.1.26)");
-                            Check(take + ": with the pane never giving way, nothing was typed live and the finished words arrived once", r.Writes == 0 && Flat(shown).EndsWith(Flat(r.Final).Replace("\n", " "), StringComparison.Ordinal));
-                            continue;
-                        }
-                        Check($"{take}: live words reached the field before the take ended ({r.Matched} writes read back, first at {r.FirstWriteMs:F0} ms)",
-                            r.Matched > 0 && r.FirstWriteMs > 0 && r.FirstWriteMs < r.Report.AudioEndMs);
-                        Check($"{take}: every live write read back right, and typing stopped only for a revised word", r.Matched == r.Writes && r.Stops.All(stop => stop == LiveStop.Revised));
-                        // Append only: the finished text is added when it starts with exactly the typed words; otherwise the field keeps the
-                        // typed words, nothing is added or removed, and the Copy card offers the finished text.
-                        if (r.Status == "Inserted") Check($"{take}: the finished text is in the field exactly once, after the prefix", exact && copies == 1);
-                        else Check($"{take}: the finished text did not start with the typed words: the field keeps them, no duplicate, Copy card ({r.Status})",
-                            r.Status.StartsWith("Live typing stopped because", StringComparison.Ordinal) && copies <= 1 && Flat(shown).StartsWith(Flat(beforeShown), StringComparison.Ordinal) && Flat(shown).Length > Flat(beforeShown).Length);
+                        // 0.1.27: no live typing in browsers; the take works exactly as 0.1.26: the finished text goes in once at the end.
+                        bool uncheckedTyping = r.Status.StartsWith(InsertionTarget.Unchecked, StringComparison.Ordinal);
+                        Check($"{take}: no live key typing in a browser, and the report says why ({r.FieldWhy})", r.Writes == 0 && !r.Typed
+                            && (r.FieldWhy == InsertionTarget.BrowserNote || r.Section.Contains(InsertionTarget.BrowserNote) || r.FieldWhy.StartsWith("Chromium placeholder pane", StringComparison.Ordinal)));
+                        Check($"{take}: the finished text is in the field exactly once after the prefix, no Copy card ({r.Status})",
+                            (r.Status == "Inserted" || uncheckedTyping) && exact && copies == 1 && !r.Status.StartsWith("Live typing stopped", StringComparison.Ordinal));
                     }
                 } finally { await ClosePage(browser, page); }
             }
@@ -287,6 +278,8 @@ internal static partial class Program
         var startNote = new ProcessStartInfo("notepad.exe") { UseShellExecute = true }; startNote.ArgumentList.Add(note); Process.Start(startNote);
         var notepad = await WindowWith(noteName); var edit = await Editor(notepad);
         string noteBefore = Read(edit); IntPtr noteWindow = (IntPtr)notepad.Current.NativeWindowHandle;
+        // Key typing is off in 0.1.27; these checks keep its guard honest for when it comes back.
+        LiveKeyField.Enabled = true;
         try {
             foreach (string slow in new[] { "", "slow" }) {
                 var page = await OpenPage("edge", slow == "slow" ? "slow" : "guard", "Fictional prefix.", accessible: true);
@@ -455,7 +448,7 @@ internal static partial class Program
                     }
                 } finally { LiveKeyField.BeforeSend = null; LiveKeyField.AfterLookup = null; await ClosePage("edge", page); }
             }
-        } finally { await CloseOurNotepadTab(notepad, noteName); try { Directory.Delete(directory, true); } catch (IOException) { } }
+        } finally { LiveKeyField.Enabled = false; await CloseOurNotepadTab(notepad, noteName); try { Directory.Delete(directory, true); } catch (IOException) { } }
     }
     /// `part` is empty or the first whole words of `spoken` (never half a word).
     static bool WholeWords(string part, string spoken) => part.Length == 0 || spoken.StartsWith(part, StringComparison.Ordinal) && (part.Length == spoken.Length || spoken[part.Length] == ' ');

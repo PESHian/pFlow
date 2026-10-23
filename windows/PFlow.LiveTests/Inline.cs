@@ -328,13 +328,10 @@ internal static partial class Program
                 string before = Read(field!);
                 var (_, slot, refused) = Begin("edge");
                 slot.Reconcile("edge", "harbor lights"); slot.Reconcile("edge", "harbor lights glow");
-                // 0.1.27: a readable Edge field takes live words as typed characters (LiveKeyField), append only.
-                string typed = Read(field!);
-                var (cancel, stop) = slot.Cancel("edge"); await Task.Delay(300);
-                // Append only: a cancel never sends keys to take words back out; they stay and the person is told.
-                Check($"Edge {label} types the settled words live; cancel leaves them, no keys ({refused?.ToString() ?? "typing"}, {cancel})",
-                    refused == null && typed == before + "harbor lights" && cancel == LiveCancel.Left && stop == null && Read(field!) == typed);
-                matrix.Add($"Edge {label} (Chromium, file:// page): typed live with keys (append only), read back, left on cancel");
+                // 0.1.27: browsers get no live typing (as 0.1.26); the reason is the browser note.
+                string reason = ""; try { InsertionTarget.Capture().LiveField(out reason); } catch (InvalidOperationException) { }
+                Check($"Edge {label} uses the preview ({refused}; {reason})", refused == LiveStop.Unsupported && Read(field!) == before && reason == InsertionTarget.BrowserNote);
+                matrix.Add($"Edge {label} (Chromium, file:// page): no live typing (browser), page unchanged");
             }
             if (window.TryGetCurrentPattern(WindowPattern.Pattern, out var pattern)) ((WindowPattern)pattern).Close();
         } finally {
