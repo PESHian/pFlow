@@ -100,12 +100,13 @@ internal sealed class Capsule : Window
         wave.Advance(AudioLevel?.Invoke() ?? 0, store.Preferences.Waveform, seconds);
     }
     /// Solid black in every theme (no acrylic, no blur), a 1 px outline in the accent at 65%, the
-    /// waveform in the palette's ink; the same in every phase. Matches the Mac capsule (96 x 26 pt).
+    /// waveform in the palette's ink, both lifted when too dark for black (PeshTheme.OnBlack);
+    /// the same in every phase. Matches the Mac capsule (96 x 26 pt).
     public void ApplyTheme()
     {
         shell.Background = Brushes.Black;
-        shell.BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#" + store.Preferences.Accent)) { Opacity = OutlineOpacity };
-        wave.Color = PeshTheme.Gradient(store.Preferences);
+        shell.BorderBrush = new SolidColorBrush(PeshTheme.OnBlack((Color)ColorConverter.ConvertFromString("#" + store.Preferences.Accent))) { Opacity = OutlineOpacity };
+        wave.Color = PeshTheme.OnBlack(PeshTheme.Gradient(store.Preferences));
     }
     internal void Reveal() { Show(); Place(); Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => Place())); SyncAnimation(); }
     void HideControl() { Hide(); SyncAnimation(); }

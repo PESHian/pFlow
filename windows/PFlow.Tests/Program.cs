@@ -260,6 +260,12 @@ Check("cleanup rejects a changed number beside punctuation", !TextFidelity.Clean
 Check("cleanup rejects a lost apostrophe", !TextFidelity.CleanupIsFaithful("we didn't go", "We did not go."));
 Check("cleanup rejects a dropped currency sign", !TextFidelity.CleanupIsFaithful("it cost $40 at the store", "It cost 40 at the store."));
 Check("cleanup rejects a thousands separator turned into words", !TextFidelity.CleanupIsFaithful("about 1,000 people came", "About 1 000 people came."));
+Check("cleanup accepts a spoken clock time written with a colon", TextFidelity.CleanupIsFaithful("we met him at about 6 30 and left", "We met him at about 6:30 and left.") && TextFidelity.CleanupIsFaithful("the train at 12 05 was late", "The train at 12:05 was late."));
+Check("cleanup rejects a colon after an hour past 24", !TextFidelity.CleanupIsFaithful("the code was 25 30 today", "The code was 25:30 today."));
+Check("cleanup rejects a colon before a minute past 59", !TextFidelity.CleanupIsFaithful("we met at 6 60", "We met at 6:60."));
+Check("cleanup rejects a colon before a one-digit minute", !TextFidelity.CleanupIsFaithful("we met at 6 5", "We met at 6:5."));
+Check("cleanup rejects a colon that was not inserted between the two numbers", !TextFidelity.CleanupIsFaithful("we met at 6 30", "We met at: 6 30."));
+Check("cleanup still rejects a thousands comma or a decimal point joined into the number", !TextFidelity.CleanupIsFaithful("about 1 000 people", "About 1,000 people.") && !TextFidelity.CleanupIsFaithful("it was 3 5 metres", "It was 3.5 metres."));
 Check("cleanup keeps a decimal inside a number", TextFidelity.CleanupIsFaithful("dose was 3.5 mg then rest", "Dose was 3.5 mg. Then rest."));
 Check("cleanup rejects a dropped percent", !TextFidelity.CleanupIsFaithful("maybe 40% done", "Maybe 40 done."));
 Check("cleanup accepts filler removal with symbols present", TextFidelity.CleanupIsFaithful("um the price is $5 uh each", "The price is $5 each."));

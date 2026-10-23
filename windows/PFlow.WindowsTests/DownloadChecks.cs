@@ -114,8 +114,52 @@ internal static partial class Program
                 File.WriteAllText(Path.Combine(root, LocalTextModel.Current.FileName), "fictional");
                 Check("with the file: the model is in use, named with its size on the Settings line", model.InUse == LocalTextModel.Current && model.CurrentInstalled && model.Status == "Text model in use: Qwen3-4B (2.5 GB). Processing stays on this PC.");
                 Check("the cut-off is 15 s + 0.3 s a word between 20 and 90 s", model.Budget(13) == TimeSpan.FromSeconds(20) && model.Budget(60) == TimeSpan.FromSeconds(33) && model.Budget(100) == TimeSpan.FromSeconds(45) && model.Budget(286) == TimeSpan.FromSeconds(90));
-                Check("the engine gets one thread per core, two to eight", LocalTextModel.Threads >= 2 && LocalTextModel.Threads <= 8 && LocalTextModel.Threads == Math.Clamp(Native.PhysicalCores(), 2, 8) && Native.PhysicalCores() <= Environment.ProcessorCount);
+                Check("the engine's threads follow the core rule for this PC", LocalTextModel.Threads >= 2 && LocalTextModel.Threads <= 8 && LocalTextModel.Threads == Native.EngineThreads(Native.CoreClasses()) && Native.CoreClasses().Count <= Environment.ProcessorCount);
             } finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        }
+        // The thread rule on fake topologies: the fastest class, slower classes added only while under four, 2-8.
+        Check("a Core Ultra 5 125U (2 P + 8 E + 2 LP-E cores) gets 8 threads, not its 2 performance cores alone", Native.EngineThreads([2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0]) == 8);
+        Check("6 P + 8 E cores get the 6 performance cores", Native.EngineThreads([1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]) == 6);
+        Check("2 P + 4 E cores get all 6, a plain 6-core PC gets 6, 16 plain cores get 8, one core gets 2", Native.EngineThreads([1, 1, 0, 0, 0, 0]) == 6 && Native.EngineThreads([0, 0, 0, 0, 0, 0]) == 6 && Native.EngineThreads(Enumerable.Repeat((byte)0, 16).ToList()) == 8 && Native.EngineThreads([0]) == 2);
+        Check("no core list falls back to the logical count, 2-8", Native.EngineThreads([]) == Math.Clamp(Environment.ProcessorCount, 2, 8));
+
+        // 32-bit Windows: no text model section, and closing Settings must not throw.
+        {
+            string root = Path.Combine(Path.GetTempPath(), "pflow-32bit-fictional-" + Guid.NewGuid().ToString("N"));
+            try {
+                var model = new LocalTextModel(root) { Supported = false };
+                using var hook = new KeyboardHook(_ => { }) { Enabled = false };
+                var settings = new SettingsWindow(new StateStore(root), new Whisper(root), model, hook, () => { }, () => false) { ShowActivated = false };
+                settings.Show(); settings.UpdateLayout(); Drain();
+                bool noControl = !Descendants<DownloadControl>(settings).Any(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Text model download") && Descendants<DownloadControl>(settings).Count() == 1;
+                bool reason = Descendants<TextBlock>(settings).Any(t => t.Text == LocalTextModel.UnsupportedReason);
+                settings.Close(); Drain();
+                Check("with the local model unsupported Settings shows the reason, only the Whisper download, and closes without an error", noControl && reason && !settings.IsVisible && !model.FilesPresent);
+            } finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        }
+
+        // The model file is hashed once: at the download, then at app start (Prewarm), never again while it is unchanged. Stale partial downloads are swept.
+        {
+            string root = Path.Combine(Path.GetTempPath(), "pflow-hash-fictional-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            var bytes = new byte[3 * 1024 * 1024]; new Random(7).NextBytes(bytes);
+            string sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes));
+            using var server = new HttpListener(); int port = Random.Shared.Next(20000, 60000); server.Prefixes.Add($"http://127.0.0.1:{port}/"); server.Start();
+            var serving = Task.Run(async () => { var context = await server.GetContextAsync(); context.Response.ContentLength64 = bytes.Length; await context.Response.OutputStream.WriteAsync(bytes); context.Response.Close(); });
+            try {
+                var fictional = new TextModelFile("Fictional", "fictional-model.gguf", $"http://127.0.0.1:{port}/fictional-model.gguf", sha, bytes.Length, 15, .3, 20);
+                var model = new LocalTextModel(root, root) { Model = fictional, Source = fictional.Url };
+                File.WriteAllText(Path.Combine(root, "fictional-model.gguf." + Guid.NewGuid() + ".download"), "stale"); File.WriteAllText(Path.Combine(root, "other.download"), "x"); File.WriteAllText(Path.Combine(root, "fictional-model.gguf.notaguid.download"), "x");
+                Check("the sweep removes only our own stale partial download", model.SweepPartials() == 1 && Directory.GetFiles(root).Length == 2 && File.Exists(Path.Combine(root, "other.download")));
+                var reported = new List<double>();
+                model.Download(new Progress<double>(reported.Add), CancellationToken.None).GetAwaiter().GetResult(); Drain();
+                Check("the download verified the file once and the model is in use", model.Hashes == 1 && model.CurrentInstalled && File.Exists(Path.Combine(root, "fictional-model.gguf")) && !Directory.GetFiles(root, "*.download").Any(f => f.Contains("fictional-model.gguf.") && !f.EndsWith("notaguid.download")));
+                File.WriteAllText(Path.Combine(root, "llama-completion.exe"), "fictional engine"); Directory.CreateDirectory(Path.Combine(root, "text-engine")); File.Move(Path.Combine(root, "llama-completion.exe"), Path.Combine(root, "text-engine", "llama-completion.exe"));
+                model.Prewarm().GetAwaiter().GetResult();
+                Check("prewarm after the download does not hash the same bytes again", model.FilesPresent && model.Hashes == 1);
+                Thread.Sleep(20); File.WriteAllBytes(Path.Combine(root, "fictional-model.gguf"), bytes);
+                model.Prewarm().GetAwaiter().GetResult();
+                Check("a rewritten file is hashed once more at prewarm, and then not again", model.Hashes == 2 && Run(() => model.Prewarm().GetAwaiter().GetResult()) && model.Hashes == 2);
+            } finally { server.Stop(); try { serving.Wait(2000); } catch (Exception) { } if (Directory.Exists(root)) Directory.Delete(root, true); }
         }
     }
     static bool Run(Action action) { action(); Drain(); return true; }

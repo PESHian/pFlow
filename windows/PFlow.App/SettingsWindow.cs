@@ -35,7 +35,7 @@ internal sealed partial class SettingsWindow : Window
         home = Scroll(General()); ShowHome(); ApplyTheme(); SourceInitialized += (_, _) => ApplyTheme();
         processingTime.Text = ProcessingTimes.Read(store.DirectoryPath);
         var timingRefresh = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(1), System.Windows.Threading.DispatcherPriority.Background, (_, _) => { if (IsVisible && !busy()) processingTime.Text = ProcessingTimes.Read(store.DirectoryPath); }, Dispatcher);
-        Closed += (_, _) => { textDownload.Cancel(); whisperDownload.Cancel(); timingRefresh.Stop(); };
+        Closed += (_, _) => { textDownload?.Cancel(); whisperDownload?.Cancel(); timingRefresh.Stop(); };
     }
     static StackPanel Panel() => new() { Margin = new Thickness(20) };
     static TextBlock Text(string value) => new() { Text = value, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 5), LineHeight = 19 };
@@ -206,7 +206,7 @@ internal sealed partial class SettingsWindow : Window
         Check(p, "Group long narrations into paragraphs", store.Preferences.Paragraphs, x => store.Preferences.Paragraphs = x);
         Check(p, "Clean up dictation (English)", store.Preferences.Cleanup, x => store.Preferences.Cleanup = x);
         p = Section(root, "Local intelligence");
-        if (LocalTextModel.IsSupported) {
+        if (textModel.Supported) {
         Check(p, "Use the local text model for reports and optional AI cleanup", store.Preferences.UseLocalAI, x => store.Preferences.UseLocalAI = x);
         Check(p, "AI cleanup (slower, English)", store.Preferences.UseAICleanup, x => store.Preferences.UseAICleanup = x);
         p.Children.Add(Text("English cleanup removes filler words immediately. Other languages keep their recognized words. AI cleanup is optional and English only: the local text model adds sentences, commas and capitals and keeps every word and number as spoken; it can take about as long as the recording. When it cannot finish, your words are kept as recognized and the processing line below says so. Reports use your sentences."));

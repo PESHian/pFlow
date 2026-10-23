@@ -68,11 +68,15 @@ public static class TextFidelity
             while (a < original.Length && original[a] == word) { a++; sourceRun++; }
             while (b < edited.Length && edited[b] == word) { b++; editedRun++; }
             if (editedRun > sourceRun || (exact && editedRun != sourceRun)) return false;
+            // A spoken clock time: "6 30" may come back as "6:30" (one ":" between an hour up to 24
+            // and a two-digit minute up to 59). "1,000", "3.5" and any other symbol stay rejected.
+            if (b < edited.Length && edited[b] == ":" && a < original.Length && ClockTime(word, original[a]) && b + 1 < edited.Length && edited[b + 1] == original[a]) b++;
         }
         if (a != original.Length || b != edited.Length) return false;
         if (Regex.Matches(source, @"\n\s*\n").Count > 0 && Regex.Matches(result, @"\n\s*\n").Count != Regex.Matches(source, @"\n\s*\n").Count) return false;
         return true;
     }
+    static bool ClockTime(string hour, string minute) => hour.Length is 1 or 2 && hour.All(char.IsDigit) && int.Parse(hour) <= 24 && minute.Length == 2 && minute.All(char.IsDigit) && int.Parse(minute) <= 59;
     public static List<string> Sentences(string source) => Regex.Split(source.Trim(), @"(?<=[.!?])[ \t\r\n]+(?=[\p{Lu}\p{N}])").Where(x => x.Length > 0).ToList();
     public static List<List<string>> Batches(IEnumerable<string> sentences, int limit = 3500)
     {

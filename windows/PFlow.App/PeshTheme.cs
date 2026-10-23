@@ -16,13 +16,29 @@ internal static class PeshTheme
     }
     static Color Parse(string value) => (Color)ColorConverter.ConvertFromString("#" + value);
     static SolidColorBrush Brush(string value) => new(Parse(value));
-    static string AccentInk(string value)
+    static string AccentInk(string value) => Luminance(Parse(value)) > .179 ? "000000" : "FFFFFF";
+    public static double Luminance(Color color)
     {
-        var color = Parse(value);
         double Channel(byte channel) { double c = channel / 255.0; return c <= .04045 ? c / 12.92 : Math.Pow((c + .055) / 1.055, 2.4); }
-        double luminance = .2126 * Channel(color.R) + .7152 * Channel(color.G) + .0722 * Channel(color.B);
-        return luminance > .179 ? "000000" : "FFFFFF";
+        return .2126 * Channel(color.R) + .7152 * Channel(color.G) + .0722 * Channel(color.B);
     }
+    /// The least luminance a colour may have on the black capsule: 3:1 against black.
+    public const double MinimumLuminanceOnBlack = .10;
+    /// A colour too dark for the black capsule (a custom accent like 101010) is lifted toward
+    /// white until it reaches MinimumLuminanceOnBlack; any other colour comes back unchanged.
+    public static Color OnBlack(Color color)
+    {
+        if (Luminance(color) >= MinimumLuminanceOnBlack) return color;
+        double low = 0, high = 1;
+        for (int i = 0; i < 20; i++) { double t = (low + high) / 2; if (Luminance(Blend(color, t)) >= MinimumLuminanceOnBlack) high = t; else low = t; }
+        return Blend(color, high);
+    }
+    static Color Blend(Color color, double t) => Color.FromRgb((byte)Math.Round(color.R + (255 - color.R) * t), (byte)Math.Round(color.G + (255 - color.G) * t), (byte)Math.Round(color.B + (255 - color.B) * t));
+    public static Brush OnBlack(Brush brush) => brush switch {
+        SolidColorBrush solid => new SolidColorBrush(OnBlack(solid.Color)),
+        LinearGradientBrush gradient => new LinearGradientBrush(new GradientStopCollection(gradient.GradientStops.Select(stop => new GradientStop(OnBlack(stop.Color), stop.Offset))), gradient.StartPoint, gradient.EndPoint),
+        _ => brush,
+    };
     public static bool Light(Preferences preferences) => preferences.Theme == "light" || (preferences.Theme == "system" && Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 0) is int mode && mode == 1);
     public static void Apply(Window window, Preferences preferences)
     {

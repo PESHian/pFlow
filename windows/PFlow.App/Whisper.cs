@@ -31,6 +31,8 @@ internal sealed class Whisper : IAsyncDisposable
     public string Executable => System.IO.Path.Combine(assets, "engine", SpeechEngine.Choose(
         RuntimeInformation.ProcessArchitecture == Architecture.X64, Native.Avx2Ready, name => File.Exists(System.IO.Path.Combine(assets, "engine", name))));
     public bool ModelPresent => File.Exists(ModelPath);
+    /// Removes partial downloads of the speech model left in pFlow's folder by an earlier run.
+    public int SweepPartials() => PartialDownloads.Sweep(root, System.IO.Path.GetFileName(DownloadPath));
     public bool FilesPresent => File.Exists(ModelPath) && File.Exists(Executable);
     /// For Settings: "x64, fast speech engine (AVX2)" and the like (one rule: SpeechEngine.Describe).
     public string EngineDescription => SpeechEngine.Describe(RuntimeInformation.ProcessArchitecture.ToString(), System.IO.Path.GetFileName(Executable), LiveModelReady);
@@ -44,7 +46,7 @@ internal sealed class Whisper : IAsyncDisposable
     }
     public async Task Download(IProgress<double> progress, CancellationToken cancel)
     {
-        await modelLock.WaitAsync(cancel); string temp = DownloadPath + "." + Guid.NewGuid() + ".download";
+        await modelLock.WaitAsync(cancel); string temp = PartialDownloads.TempPath(root, System.IO.Path.GetFileName(DownloadPath));
         try {
             using var client = new HttpClient { Timeout = TimeSpan.FromHours(1) };
             using var response = await client.GetAsync(ModelUrl, HttpCompletionOption.ResponseHeadersRead, cancel); response.EnsureSuccessStatusCode();

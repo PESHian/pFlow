@@ -36,24 +36,30 @@ internal sealed class LocalTextModel
     (string Path, long Length, DateTime Written)? verified;
     /// Where the download comes from; the native checks point it at a local server.
     internal string Source { get; init; } = Current.Url;
+    /// The file this instance runs and verifies: the pinned one; the native checks use a small fictional one.
+    internal TextModelFile Model { get; init; } = Current;
+    /// 64-bit only; the native checks build Settings for the 32-bit case with this off.
+    public bool Supported { get; init; } = IsSupported;
+    /// How many times this process hashed a model file (the checks prove it is once, never inside a take).
+    internal int Hashes { get; private set; }
     string PathFor(TextModelFile file) => Path.Combine(root, file.FileName);
     string ShippedPathFor(TextModelFile file) => Path.Combine(assets, "models", file.FileName);
     /// The model runs from the download when there is one, else from the package's models folder.
-    public TextModelFile? InUse => File.Exists(PathFor(Current)) || File.Exists(ShippedPathFor(Current)) ? Current : null;
-    public bool CurrentInstalled => InUse == Current;
-    public string ModelPath => File.Exists(PathFor(Current)) ? PathFor(Current) : ShippedPathFor(Current);
-    public TimeSpan Budget(int words) => Current.Budget(words);
+    public TextModelFile? InUse => File.Exists(PathFor(Model)) || File.Exists(ShippedPathFor(Model)) ? Model : null;
+    public bool CurrentInstalled => InUse == Model;
+    public string ModelPath => File.Exists(PathFor(Model)) ? PathFor(Model) : ShippedPathFor(Model);
+    public TimeSpan Budget(int words) => Model.Budget(words);
     /// The Settings line that says which model is in use.
-    public string Status => InUse == Current ? $"Text model in use: {Current.Label} ({FileSize.Describe(Current.Size)}). Processing stays on this PC."
+    public string Status => InUse == Model ? $"Text model in use: {Model.Label} ({FileSize.Describe(Model.Size)}). Processing stays on this PC."
         : "Local AI is unavailable until its model is installed. Plain dictation still works.";
     string Executable => Path.Combine(assets, "text-engine", "llama-completion.exe");
     public static bool IsSupported => Environment.Is64BitProcess;
-    /// Threads for the text engine: one per physical core, between 2 and 8. On the 6-core test VM
-    /// six threads were 0-25% faster than four; a hybrid PC's slowest cores would hold the rest
-    /// back past eight.
-    internal static int Threads { get; } = Math.Clamp(Native.PhysicalCores(), 2, 8);
+    /// Threads for the text engine: Native.EngineThreads over the cores Windows reports (the fast
+    /// cores of a hybrid PC, with slower ones added only until there are four; 2-8). On the 6-core
+    /// test VM six threads were 0-25% faster than four.
+    internal static int Threads { get; } = Native.EngineThreads(Native.CoreClasses());
     public const string UnsupportedReason = "AI cleanup and report formatting need 64-bit Windows. Dictation, basic cleanup, and full narrative templates are available on 32-bit Windows.";
-    public bool FilesPresent => IsSupported && File.Exists(ModelPath) && File.Exists(Executable);
+    public bool FilesPresent => Supported && File.Exists(ModelPath) && File.Exists(Executable);
     internal string? LastIssue { get; private set; }
     /// What the last Cleanup did with the words, for the processing line in Settings.
     internal CleanupOutcome LastOutcome { get; private set; }
@@ -87,14 +93,25 @@ internal sealed class LocalTextModel
         var info = new FileInfo(path);
         if (info.Length != file.Size) throw new InvalidDataException("The text model has the wrong size. Dictation is still available.");
         if (verified == (path, info.Length, info.LastWriteTimeUtc)) return;
+        Hashes++;
         await using var stream = File.OpenRead(path); var sha = await SHA256.HashDataAsync(stream, cancel);
         if (!Convert.ToHexString(sha).Equals(file.Sha, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The text model checksum did not match. Dictation is still available.");
         verified = (path, info.Length, info.LastWriteTimeUtc);
     }
+    /// Hashes the model once, at app start, so no take pays for it. A take that starts during
+    /// the hash waits for it (the gate), which is the one case the cut-off still includes it.
+    public async Task Prewarm()
+    {
+        if (!FilesPresent) return;
+        await gate.WaitAsync();
+        try { await Verify(ModelPath, Model, CancellationToken.None); } finally { gate.Release(); }
+    }
+    /// Removes partial downloads of this model left in pFlow's folder by an earlier run.
+    public int SweepPartials() => PartialDownloads.Sweep(root, Model.FileName);
     public async Task Download(IProgress<double> progress, CancellationToken cancel)
     {
-        if (!IsSupported) throw new NotSupportedException(UnsupportedReason);
-        await gate.WaitAsync(cancel); string target = PathFor(Current), temp = target + "." + Guid.NewGuid() + ".download";
+        if (!Supported) throw new NotSupportedException(UnsupportedReason);
+        await gate.WaitAsync(cancel); string target = PathFor(Model), temp = PartialDownloads.TempPath(root, Model.FileName);
         try {
             using var client = new HttpClient { Timeout = TimeSpan.FromHours(2) };
             using var response = await client.GetAsync(Source, HttpCompletionOption.ResponseHeadersRead, cancel); response.EnsureSuccessStatusCode();
@@ -102,20 +119,21 @@ internal sealed class LocalTextModel
             await using (var file = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
                 var bytes = new byte[1024 * 1024]; long total = 0; int count;
                 while ((count = await source.ReadAsync(bytes, cancel)) > 0) {
-                    total += count; if (total > Size) throw new InvalidDataException("The text model download is larger than expected.");
-                    await file.WriteAsync(bytes.AsMemory(0, count), cancel); progress.Report((double)total / Size);
+                    total += count; if (total > Model.Size) throw new InvalidDataException("The text model download is larger than expected.");
+                    await file.WriteAsync(bytes.AsMemory(0, count), cancel); progress.Report((double)total / Model.Size);
                 }
             }
-            await Verify(temp, Current, cancel); File.Move(temp, target, true); verified = null;
+            // The moved file is the bytes just hashed: remember it as verified so the next take does not hash it again.
+            await Verify(temp, Model, cancel); File.Move(temp, target, true); var moved = new FileInfo(target); verified = (target, moved.Length, moved.LastWriteTimeUtc);
         } finally { if (File.Exists(temp)) File.Delete(temp); gate.Release(); }
     }
     async Task<JsonDocument> Generate(string system, string input, object schema, string directory, CancellationToken cancel)
     {
-        if (!IsSupported) throw new NotSupportedException(UnsupportedReason);
+        if (!Supported) throw new NotSupportedException(UnsupportedReason);
         await gate.WaitAsync(cancel);
         string prefix = Path.Combine(directory, "text-" + Guid.NewGuid());
         try {
-            await Verify(ModelPath, Current, cancel);
+            await Verify(ModelPath, Model, cancel);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancel); timeout.CancelAfter(TimeSpan.FromMinutes(3));
             string prompt = "<|im_start|>system\n" + system + "<|im_end|>\n<|im_start|>user\n" + Sanitize(input) + "\n/no_think<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
             await File.WriteAllTextAsync(prefix + ".prompt", prompt, timeout.Token);

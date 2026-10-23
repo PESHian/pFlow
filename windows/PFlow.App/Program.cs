@@ -59,6 +59,8 @@ internal sealed partial class Program : Application
             InsertionLog.Path = Path.Combine(directory, "insertion.log");
             textModel = new LocalTextModel(directory);
             _ = Task.Run(async () => { try { await whisper.Prewarm(); } catch { /* Recording retries and reports a load error when needed. */ } });
+            try { whisper.SweepPartials(); textModel.SweepPartials(); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+            _ = Task.Run(async () => { try { await textModel.Prewarm(); } catch { /* The next take verifies the file and reports it. */ } });
             // Only our abandoned private recording folders are removed. History/settings remain.
             foreach (var stale in Directory.EnumerateDirectories(directory, "recording-*")) Directory.Delete(stale, true);
             capsule = new Capsule(store); capsule.OpenSettings += OpenSettings; capsule.Cancel += Cancel; capsule.ToggleRecording += ToggleRecording; capsule.OpenHistory += OpenHistory;
