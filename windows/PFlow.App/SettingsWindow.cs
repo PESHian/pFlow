@@ -237,17 +237,20 @@ internal sealed partial class SettingsWindow : Window
         var modelNote = Text(whisper.ModelStatus); modelNote.FontSize = 12; modelNote.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted");
         var tiles = new Dictionary<string, RadioButton>(); var rows = new Dictionary<string, StackPanel>(); var titles = new Dictionary<string, TextBlock>();
         void Looks() { foreach (var model in SpeechModels.All) SpeechTileLook(tiles[model.Id], tiles[model.Id].IsChecked == true, whisper.Installed(model)); modelNote.Text = whisper.ModelStatus; }
+        bool settling = false; // a tap on a not-downloaded tile is undone here; the undo's own events change nothing
         foreach (var model in SpeechModels.All) {
             var option = Option(model.Id, model.Title, "SpeechModel", whisper.Chosen.Id == model.Id, "AppearanceChoice", () => { });
             option.Content = new TextBlock { Text = model.Title, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, FontSize = 12 };
             option.Margin = new Thickness(5, 0, 5, 0); option.MinHeight = 52;
             option.Checked += (_, _) => {
+                if (settling) return;
                 if (whisper.Installed(model)) { store.Preferences.SpeechModel = model.Id; store.SavePreferences(); Looks(); return; }
-                // Not downloaded: the choice stays, the row with its Download button comes into view and lights up.
-                option.IsChecked = false; tiles[whisper.Chosen.Id].IsChecked = true; Looks();
+                // Not downloaded: the choice stays (the model in use keeps its outline), the row with its Download button comes into view and lights up.
+                settling = true;
+                try { option.IsChecked = false; if (whisper.Installed(whisper.InUse)) tiles[whisper.InUse.Id].IsChecked = true; Looks(); } finally { settling = false; }
                 rows[model.Id].BringIntoView(); HighlightRow(titles[model.Id]);
             };
-            option.Unchecked += (_, _) => Looks();
+            option.Unchecked += (_, _) => { if (!settling) Looks(); };
             modelChoices.Children.Add(option); tiles[model.Id] = option;
         }
         p.Children.Add(modelChoices); p.Children.Add(modelNote);
@@ -283,7 +286,6 @@ internal sealed partial class SettingsWindow : Window
         var text = (TextBlock)tile.Content;
         text.SetResourceReference(TextBlock.ForegroundProperty, installed ? "PeshText" : "PeshMuted");
         text.FontWeight = chosen ? FontWeights.SemiBold : FontWeights.Normal; text.Opacity = installed ? 1 : 0.7;
-        if (!installed && tile.IsChecked == true) tile.IsChecked = false;
     }
     /// The row's title in the accent for a moment, so the eye lands on its Download button.
     static void HighlightRow(TextBlock title)
