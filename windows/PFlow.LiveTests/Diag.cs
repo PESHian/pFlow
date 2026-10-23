@@ -323,6 +323,8 @@ internal static partial class Program
                         Native.Send(new Native.Input { Type = 0, Data = new() { Mouse = new() { Flags = 2 } } }, new Native.Input { Type = 0, Data = new() { Mouse = new() { Flags = 4 } } });
                         await Task.Delay(300); SetPhysicalCursorPos(previous.X, previous.Y);
                         Native.Send(Native.Key(0x11), Native.Key(0x23, extended: true), Native.Key(0x23, true, true), Native.Key(0x11, true)); await Task.Delay(300);
+                        // The click and Ctrl+End have to be over (no key or button down) before typing may start.
+                        for (int i = 0; i < 40 && Enumerable.Range(0x08, 0xF7).Any(key => Native.GetAsyncKeyState(key) < 0); i++) await Task.Delay(50);
                         InsertionTarget target = InsertionTarget.Capture();
                         for (int i = 0; i < 20 && !target.CanInsert || i < 20 && target.Placeholder; i++) { await Task.Delay(250); target = InsertionTarget.Capture(); }
                         Console.WriteLine($"GUARD {take}: captured {target.Kind} placeholder={target.Placeholder}");
@@ -332,6 +334,7 @@ internal static partial class Program
                         string before = Shown();
                         slot.Reconcile(take, "harbor lights"); slot.Reconcile(take, "harbor lights glow");
                         await Task.Delay(200);
+                        if (Flat(Shown()) == Flat(before)) Console.WriteLine($"GUARD {take}: nothing typed; last guard: {Diagnostics.Recorder.Report([]).Split('\n').LastOrDefault(l => l.Contains("typing.guard") || l.Contains("typing.stop"))?.Trim()}");
                         Check($"{take}: the first settled words are typed", Flat(Shown()) == Flat(before + " harbor lights") || Flat(Shown()) == Flat(before + "harbor lights"));
                         return (slot, Shown());
                     }
