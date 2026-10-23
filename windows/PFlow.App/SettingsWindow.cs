@@ -13,7 +13,7 @@ internal sealed partial class SettingsWindow : Window
     readonly Func<bool> busy;
     readonly Action? checkUpdates;
     Action? cancelKeySelection;
-    DownloadControl textDownload = null!, whisperDownload = null!;
+    DownloadControl textDownload = null!;
     /// One download control per speech model that is not bundled, canceled with the window.
     readonly List<DownloadControl> speechDownloads = [];
     readonly TextBlock modelStatus = Text("");
@@ -37,7 +37,7 @@ internal sealed partial class SettingsWindow : Window
         home = Scroll(General()); ShowHome(); ApplyTheme(); SourceInitialized += (_, _) => ApplyTheme();
         processingTime.Text = ProcessingTimes.Read(store.DirectoryPath);
         var timingRefresh = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(1), System.Windows.Threading.DispatcherPriority.Background, (_, _) => { if (IsVisible && !busy()) processingTime.Text = ProcessingTimes.Read(store.DirectoryPath); }, Dispatcher);
-        Closed += (_, _) => { textDownload?.Cancel(); whisperDownload?.Cancel(); foreach (var download in speechDownloads) download.Cancel(); timingRefresh.Stop(); };
+        Closed += (_, _) => { textDownload?.Cancel(); foreach (var download in speechDownloads) download.Cancel(); timingRefresh.Stop(); };
     }
     static StackPanel Panel() => new() { Margin = new Thickness(20) };
     static TextBlock Text(string value) => new() { Text = value, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 5), LineHeight = 19 };
@@ -228,31 +228,37 @@ internal sealed partial class SettingsWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(language, "Speech language");
         language.SelectionChanged += (_, _) => { if (language.SelectedValue is string value) { store.Preferences.Language = value; store.SavePreferences(); } };
         p.Children.Add(language);
-        // The speech model for the finished text: tiles like Live text, every model visible; a tile can be
-        // chosen once its file is here. Each model that is a download has its row with its own control.
+        // The speech model for the finished text: tiles like Live text, every model visible. The chosen
+        // tile has the accent outline and bright text; a downloaded one plain text; one not yet downloaded
+        // dimmed text and no outline, and tapping it goes to its Download row instead of choosing it.
+        // Each model that is a download has its row with its own control; the bundled one only says so.
         p.Children.Add(Text("Speech model"));
         var modelChoices = new System.Windows.Controls.Primitives.UniformGrid { Columns = 3, Margin = new Thickness(-5, 0, -5, 8) };
         var modelNote = Text(whisper.ModelStatus); modelNote.FontSize = 12; modelNote.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted");
-        var tiles = new Dictionary<string, RadioButton>();
+        var tiles = new Dictionary<string, RadioButton>(); var rows = new Dictionary<string, StackPanel>(); var titles = new Dictionary<string, TextBlock>();
+        void Looks() { foreach (var model in SpeechModels.All) SpeechTileLook(tiles[model.Id], tiles[model.Id].IsChecked == true, whisper.Installed(model)); modelNote.Text = whisper.ModelStatus; }
         foreach (var model in SpeechModels.All) {
-            var option = Option(model.Id, model.Title, "SpeechModel", whisper.Chosen.Id == model.Id, "AppearanceChoice", () => {
-                store.Preferences.SpeechModel = model.Id; store.SavePreferences(); modelNote.Text = whisper.ModelStatus;
-            });
-            option.Content = new TextBlock { Text = model.Title, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, FontSize = 12, FontWeight = FontWeights.SemiBold };
-            option.Margin = new Thickness(5, 0, 5, 0); option.MinHeight = 52; option.IsEnabled = whisper.Installed(model);
+            var option = Option(model.Id, model.Title, "SpeechModel", whisper.Chosen.Id == model.Id, "AppearanceChoice", () => { });
+            option.Content = new TextBlock { Text = model.Title, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, FontSize = 12 };
+            option.Margin = new Thickness(5, 0, 5, 0); option.MinHeight = 52;
+            option.Checked += (_, _) => {
+                if (whisper.Installed(model)) { store.Preferences.SpeechModel = model.Id; store.SavePreferences(); Looks(); return; }
+                // Not downloaded: the choice stays, the row with its Download button comes into view and lights up.
+                option.IsChecked = false; tiles[whisper.Chosen.Id].IsChecked = true; Looks();
+                rows[model.Id].BringIntoView(); HighlightRow(titles[model.Id]);
+            };
+            option.Unchecked += (_, _) => Looks();
             modelChoices.Children.Add(option); tiles[model.Id] = option;
         }
         p.Children.Add(modelChoices); p.Children.Add(modelNote);
         foreach (var model in SpeechModels.All) {
-            var row = new StackPanel { Margin = new Thickness(0, 8, 0, 0) }; System.Windows.Automation.AutomationProperties.SetName(row, model.Title + " row");
-            var title = Text(model.Title + " · " + FileSize.Describe(model.Bytes)); title.FontWeight = FontWeights.SemiBold; title.Margin = new Thickness(0, 0, 0, 1); row.Children.Add(title);
-            var note = Text(model.Note); note.FontSize = 12; note.Margin = new Thickness(0); note.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); row.Children.Add(note);
-            var tile = tiles[model.Id];
-            void Done() { tile.IsEnabled = whisper.Installed(model); modelNote.Text = whisper.ModelStatus; }
-            if (model.Bundled) { whisperDownload = new DownloadControl("Whisper model", model.Bytes, () => whisper.ModelPresent, whisper.Download, Blocked, Done); row.Children.Add(whisperDownload); }
-            else { var download = new DownloadControl(model.Title, model.Bytes, () => whisper.Installed(model), (progress, cancel) => whisper.Download(model, progress, cancel), Blocked, Done); speechDownloads.Add(download); row.Children.Add(download); }
+            var row = new StackPanel { Margin = new Thickness(0, 8, 0, 0) }; System.Windows.Automation.AutomationProperties.SetName(row, model.Title + " row"); rows[model.Id] = row;
+            var title = Text(model.Bundled ? model.Title : model.Title + " · " + FileSize.Describe(model.Bytes)); title.FontWeight = FontWeights.SemiBold; title.Margin = new Thickness(0, 0, 0, 1); row.Children.Add(title); titles[model.Id] = title;
+            var note = Text(model.Bundled ? "Included · " + FileSize.Describe(model.Bytes) : model.Note); note.FontSize = 12; note.Margin = new Thickness(0); note.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); row.Children.Add(note);
+            if (!model.Bundled) { var download = new DownloadControl(model.Title, model.Bytes, () => whisper.Installed(model), (progress, cancel) => whisper.Download(model, progress, cancel), Blocked, Looks); speechDownloads.Add(download); row.Children.Add(download); }
             p.Children.Add(row);
         }
+        Looks();
         p.Children.Add(processingTime);
         p.Children.Add(Text($"Microphone devices: {WaveRecorder.waveInGetNumDevs()}. Windows microphone access must allow desktop apps."));
         p = Section(root, "General");
@@ -270,6 +276,22 @@ internal sealed partial class SettingsWindow : Window
         if (enabled) key.SetValue("pFlow by Pesh", "\"" + Environment.ProcessPath + "\""); else key.DeleteValue("pFlow by Pesh", false);
     }
     string? Blocked() => busy() ? "Finish or cancel dictation first." : null;
+    /// One rule for a speech model tile: chosen = the accent outline (the style's IsChecked) and bright
+    /// text; downloaded but not chosen = plain text; not downloaded = dimmed text, never outlined.
+    internal static void SpeechTileLook(RadioButton tile, bool chosen, bool installed)
+    {
+        var text = (TextBlock)tile.Content;
+        text.SetResourceReference(TextBlock.ForegroundProperty, installed ? "PeshText" : "PeshMuted");
+        text.FontWeight = chosen ? FontWeights.SemiBold : FontWeights.Normal; text.Opacity = installed ? 1 : 0.7;
+        if (!installed && tile.IsChecked == true) tile.IsChecked = false;
+    }
+    /// The row's title in the accent for a moment, so the eye lands on its Download button.
+    static void HighlightRow(TextBlock title)
+    {
+        title.SetResourceReference(TextBlock.ForegroundProperty, "PeshAccent");
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+        timer.Tick += (_, _) => { timer.Stop(); title.SetResourceReference(TextBlock.ForegroundProperty, "PeshText"); }; timer.Start();
+    }
     UIElement Dictionary()
     {
         var p = Panel(); p.Children.Add(Text("Learned terms bias Whisper. Exact replacements change only whole words or phrases and never cascade."));

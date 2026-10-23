@@ -42,7 +42,6 @@ internal sealed class Whisper : IAsyncDisposable
     /// The AVX2 build on x64 processors that have it, else the baseline build (one rule: SpeechEngine.Choose).
     public string Executable => System.IO.Path.Combine(assets, "engine", SpeechEngine.Choose(
         RuntimeInformation.ProcessArchitecture == Architecture.X64, Native.Avx2Ready, name => File.Exists(System.IO.Path.Combine(assets, "engine", name))));
-    public bool ModelPresent => Installed(SpeechModels.Small);
     /// Removes partial downloads of any speech model left in pFlow's folder by an earlier run.
     public int SweepPartials() => SpeechModels.All.Sum(model => PartialDownloads.Sweep(root, model.FileName));
     public bool FilesPresent => Installed(InUse) && File.Exists(Executable);
@@ -56,8 +55,6 @@ internal sealed class Whisper : IAsyncDisposable
         var digest = await SHA256.HashDataAsync(stream, cancel);
         if (!Convert.ToHexString(digest).Equals(model.Sha, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"The {model.Title} model checksum did not match. Download it again in Settings.");
     }
-    /// The bundled model again (a package whose copy is missing or damaged).
-    public Task Download(IProgress<double> progress, CancellationToken cancel) => Download(SpeechModels.Small, progress, cancel);
     /// One pinned file, size-bounded, hashed before it is moved into place; the same for every model.
     public async Task Download(SpeechModel model, IProgress<double> progress, CancellationToken cancel)
     {

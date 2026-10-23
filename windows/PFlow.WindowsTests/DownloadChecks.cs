@@ -62,16 +62,16 @@ internal static partial class Program
                     string tag = $"{theme} {width:F0}: ";
                     var controls = Descendants<DownloadControl>(settings).ToList();
                     var textControl = controls.Single(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Text model download");
-                    var speechControl = controls.Single(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Whisper model download");
+                    var speechControl = controls.Single(c => System.Windows.Automation.AutomationProperties.GetName(c) == SpeechModels.Turbo.Title + " download");
                     var textCard = CardAround(textControl); var speechCard = CardAround(speechControl);
                     Check(tag + "the text model control is in the Report templates card, the Whisper one in Speech recognition, each bar under its own button",
                         textCard != speechCard && Descendants<CheckBox>(textCard).Any(c => (string)c.Content == "Use the local text model for report templates") && Descendants<ComboBox>(speechCard).Any(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Speech language")
                         && Descendants<ProgressBar>(textControl).Count() == 1 && Descendants<ProgressBar>(speechControl).Count() == 1 && !Descendants<ProgressBar>(textCard).Except(Descendants<ProgressBar>(textControl)).Any());
                     Check(tag + "before any download the text card shows one Download button, the speech card one per model, and no Cancel", Descendants<Button>(textCard).Count(b => b.IsVisible && b.Content is string s && s.StartsWith("Download")) == 1
-                        && Descendants<Button>(speechCard).Count(b => b.IsVisible && b.Content is string s && s.StartsWith("Download")) == SpeechModels.All.Count && !Descendants<Button>(settings).Any(b => b.IsVisible && b.Content as string == "Cancel")
+                        && Descendants<Button>(speechCard).Count(b => b.IsVisible && b.Content is string s && s.StartsWith("Download")) == SpeechModels.All.Count(m => !m.Bundled) && !Descendants<Button>(settings).Any(b => b.IsVisible && b.Content as string == "Cancel")
                         && !Descendants<Button>(settings).Any(b => b.IsVisible && b.Content as string == "Cancel download"));
                     Check(tag + "the Settings line says no model is in use yet and the button carries the model's size", Descendants<TextBlock>(textCard).Any(t => t.IsVisible && t.Text == "Local AI is unavailable until its model is installed. Plain dictation still works.")
-                        && Descendants<Button>(textCard).Any(b => b.IsVisible && b.Content as string == $"Download ({FileSize.Describe(LocalTextModel.Current.Size)})") && Descendants<Button>(speechCard).Any(b => b.IsVisible && b.Content as string == "Download (488 MB)"));
+                        && Descendants<Button>(textCard).Any(b => b.IsVisible && b.Content as string == $"Download ({FileSize.Describe(LocalTextModel.Current.Size)})") && Descendants<Button>(speechCard).Any(b => b.IsVisible && b.Content as string == $"Download ({FileSize.Describe(SpeechModels.Turbo.Bytes)})") && !Descendants<Button>(speechCard).Any(b => b.IsVisible && b.Content as string == "Download (488 MB)"));
                     textControl.Show(DownloadState.Downloading, 120_000_000); speechControl.Show(DownloadState.Downloading, 61_000_000); settings.UpdateLayout(); Drain();
                     var bar = Descendants<ProgressBar>(textControl).Single(); var button = Descendants<Button>(textControl).Single(b => b.IsVisible);
                     var barAt = bar.TranslatePoint(new Point(0, 0), settings); var lineAt = textControl.Children.OfType<TextBlock>().Single(t => t.IsVisible).TranslatePoint(new Point(0, 0), settings);
@@ -131,7 +131,7 @@ internal static partial class Program
                 var settings = new SettingsWindow(new StateStore(root), new Whisper(root), model, hook, () => { }, () => false) { ShowActivated = false };
                 settings.Show(); settings.UpdateLayout(); Drain();
                 // No text model control; the speech models keep one control each.
-                bool noControl = !Descendants<DownloadControl>(settings).Any(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Text model download") && Descendants<DownloadControl>(settings).Count() == SpeechModels.All.Count;
+                bool noControl = !Descendants<DownloadControl>(settings).Any(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Text model download") && Descendants<DownloadControl>(settings).Count() == SpeechModels.All.Count(m => !m.Bundled);
                 bool reason = Descendants<TextBlock>(settings).Any(t => t.Text == LocalTextModel.UnsupportedReason);
                 settings.Close(); Drain();
                 Check("with the local model unsupported Settings shows the reason, only the speech model downloads, and closes without an error", noControl && reason && !settings.IsVisible && !model.FilesPresent);

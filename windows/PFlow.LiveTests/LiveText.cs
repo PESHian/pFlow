@@ -123,6 +123,8 @@ internal static partial class Program
         var capsule = new Capsule(store); var preview = new LivePreview(store);
         try {
             var warm = Stopwatch.StartNew(); await whisper.Prewarm(); Console.WriteLine($"LIVE verified worker warm in {warm.ElapsedMilliseconds}ms");
+            Console.WriteLine("LIVE engine: " + whisper.EngineDescription);
+            Check("the package's live-words model loads, so Settings never says it is missing", whisper.LiveModelReady && !whisper.EngineDescription.Contains("missing"));
             var pipeline = new DictationPipeline(store, whisper, new LocalTextModel(directory, PackageAssets));
             var reports = new List<TakeReport>();
             foreach (var (name, audio, mode, continuous, tail) in new[] {
