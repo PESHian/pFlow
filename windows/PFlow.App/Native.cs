@@ -38,6 +38,20 @@ internal static class Native
     [DllImport("user32.dll")] internal static extern IntPtr SetClipboardData(uint format, IntPtr data);
     [DllImport("user32.dll")] internal static extern uint GetClipboardSequenceNumber();
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern uint RegisterClipboardFormat(string name);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetLogicalProcessorInformationEx(int relationship, IntPtr buffer, ref uint length);
+    /// Physical processor cores (a core's second hyperthread is not counted); the logical count when Windows will not say.
+    internal static int PhysicalCores()
+    {
+        uint length = 0; GetLogicalProcessorInformationEx(0, IntPtr.Zero, ref length);
+        if (length == 0) return Environment.ProcessorCount;
+        var buffer = Marshal.AllocHGlobal((int)length);
+        try {
+            if (!GetLogicalProcessorInformationEx(0, buffer, ref length)) return Environment.ProcessorCount;
+            int cores = 0; long offset = 0;
+            while (offset + 8 <= length) { cores++; int size = Marshal.ReadInt32(buffer, (int)offset + 4); if (size <= 0) break; offset += size; }
+            return cores > 0 ? cores : Environment.ProcessorCount;
+        } finally { Marshal.FreeHGlobal(buffer); }
+    }
     [DllImport("kernel32.dll")] internal static extern UIntPtr GlobalSize(IntPtr data);
     [DllImport("kernel32.dll")] internal static extern IntPtr GlobalAlloc(uint flags, UIntPtr size);
     [DllImport("kernel32.dll")] internal static extern IntPtr GlobalLock(IntPtr data);

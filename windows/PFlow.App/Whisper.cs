@@ -30,6 +30,7 @@ internal sealed class Whisper : IAsyncDisposable
     /// The AVX2 build on x64 processors that have it, else the baseline build (one rule: SpeechEngine.Choose).
     public string Executable => System.IO.Path.Combine(assets, "engine", SpeechEngine.Choose(
         RuntimeInformation.ProcessArchitecture == Architecture.X64, Native.Avx2Ready, name => File.Exists(System.IO.Path.Combine(assets, "engine", name))));
+    public bool ModelPresent => File.Exists(ModelPath);
     public bool FilesPresent => File.Exists(ModelPath) && File.Exists(Executable);
     /// For Settings: "x64, fast speech engine (AVX2)" and the like (one rule: SpeechEngine.Describe).
     public string EngineDescription => SpeechEngine.Describe(RuntimeInformation.ProcessArchitecture.ToString(), System.IO.Path.GetFileName(Executable), LiveModelReady);

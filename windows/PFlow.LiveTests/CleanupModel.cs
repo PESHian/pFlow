@@ -6,7 +6,7 @@ using System.Text.Json;
 
 internal static partial class Program
 {
-    /// --cleanup-model [files=a.wav,b.wav]: the real pipeline with the real 2.5 GB text model
+    /// --cleanup-model [files=a.wav,b.wav]: the real pipeline with the real 1.1 GB text model
     /// (hard-linked into the harness package assets, never in the repo) on fictional takes:
     /// the raw recognition, the model's own text, the outcome, the time, the final text; then
     /// the same take under a 1 ms budget so the person is told plainly and the processing line
@@ -25,12 +25,12 @@ internal static partial class Program
                 string raw = await whisper.Transcribe(Path.Combine(root, audio), "en", [], CancellationToken.None);
                 var clock = Stopwatch.StartNew();
                 var prepared = await pipeline.Shape(raw, directory, (_, detail) => stages.Add(detail), CancellationToken.None);
-                Console.WriteLine($"CLEANUP {audio}: words={TextProcessing.WordCount(raw)} cleanupMs={timing.GetValueOrDefault("cleanupMs"):F0} budgetMs={DictationPipeline.BudgetFor(TextProcessing.WordCount(raw)).TotalMilliseconds:F0} outcome={(CleanupOutcome)(int)timing.GetValueOrDefault("cleanupOutcome")} issue={prepared.CleanupIssue ?? "none"} elapsed={clock.ElapsedMilliseconds}");
+                Console.WriteLine($"CLEANUP {audio}: words={TextProcessing.WordCount(raw)} cleanupMs={timing.GetValueOrDefault("cleanupMs"):F0} budgetMs={model.Budget(TextProcessing.WordCount(raw)).TotalMilliseconds:F0} outcome={(CleanupOutcome)(int)timing.GetValueOrDefault("cleanupOutcome")} issue={prepared.CleanupIssue ?? "none"} elapsed={clock.ElapsedMilliseconds}");
                 Console.WriteLine($"CLEANUP {audio} raw: {raw}");
                 Console.WriteLine($"CLEANUP {audio} model: {model.LastModelText}");
                 Console.WriteLine($"CLEANUP {audio} final: {prepared.Text}");
                 Check(audio + ": the model ran and its edit was used", stages.Contains("Cleaning up") && model.LastOutcome == CleanupOutcome.Applied && !prepared.CleanupIncomplete && prepared.CleanupIssue == null);
-                Check(audio + ": cleanup time is recorded as its own number within the budget", timing.TryGetValue("cleanupMs", out double ms) && ms > 0 && ms < DictationPipeline.BudgetFor(TextProcessing.WordCount(raw)).TotalMilliseconds && timing["cleanupOutcome"] == (double)CleanupOutcome.Applied);
+                Check(audio + ": cleanup time is recorded as its own number within the budget", timing.TryGetValue("cleanupMs", out double ms) && ms > 0 && ms < model.Budget(TextProcessing.WordCount(raw)).TotalMilliseconds && timing["cleanupOutcome"] == (double)CleanupOutcome.Applied);
                 Check(audio + ": every word and number is as recognized", TextFidelity.CleanupIsFaithful(raw, prepared.Text));
                 Check(audio + ": the final text has sentences and starts with a capital", prepared.Text.Count(c => c == '.') >= 2 && char.IsUpper(prepared.Text[0]) && prepared.Text.TrimEnd().EndsWith('.'));
                 Check(audio + ": no double spaces in the recognition or the final text", !raw.Contains("  ") && !prepared.Text.Contains("  "));
@@ -55,6 +55,17 @@ internal static partial class Program
             Check("unpunctuated recognition comes out with sentences, a capital start, the comma in far, far away and the number intact",
                 flatTiming["cleanupOutcome"] == (double)CleanupOutcome.Applied && shaped.CleanupIssue == null && char.IsUpper(shaped.Text[0]) && shaped.Text.Count(c => c == '.') >= 3
                 && shaped.Text.Contains("far, far away") && shaped.Text.Contains("4040 BC") && TextFidelity.CleanupIsFaithful(flat, shaped.Text) && !shaped.Text.Contains("  "));
+            // A long flat take (286 fictional words, the owner's "15-20 sentence story" case): cleaned within the
+            // model's own cut-off, every word and number kept, sentences and capitals added. The time is the number the owner asked for.
+            const string story = "so last tuesday my cousin nora and i drove out to the old quarry road to look for the lost dog that the neighbors had been talking about for three days we packed two sandwiches a thermos of coffee and a bag of the cheap dog treats from the corner shop which cost us about 4 dollars and 50 cents the road was muddy from the storm and nora's little blue car slid twice before we even reached the gate um we parked by the broken fence and started calling the dog's name which was biscuit and honestly i didn't think we'd find anything after maybe forty minutes we heard barking from behind the water tower and there he was tangled up in some old wire fencing he wasn't hurt just scared and very very hungry so we fed him the whole bag of treats and half of my sandwich on the way back we stopped at the diner on route 9 and the waitress said the owner had been in that morning asking everyone about him we called the number on the flyer and a man named walter answered and he started crying right there on the phone he said biscuit had jumped out of the truck window on friday near mile marker 12 and he'd been driving up and down the road ever since we met him in the diner parking lot at about 6 30 and biscuit just about knocked him over walter tried to give us 100 dollars but nora wouldn't take it so he bought us pie instead which was uh fine with me anyway that's why we were late to your party and why the car smells like wet dog";
+            var storyTiming = new Dictionary<string, double>();
+            var storyPipeline = new DictationPipeline(store, whisper, model) { Timing = (name, ms) => storyTiming[name] = ms };
+            var longTake = await storyPipeline.Shape(story, directory, (_, _) => { }, CancellationToken.None);
+            Console.WriteLine($"CLEANUP story: words={TextProcessing.WordCount(story)} cleanupMs={storyTiming.GetValueOrDefault("cleanupMs"):F0} budgetMs={model.Budget(TextProcessing.WordCount(story)).TotalMilliseconds:F0} outcome={(CleanupOutcome)(int)storyTiming.GetValueOrDefault("cleanupOutcome")} issue={longTake.CleanupIssue ?? "none"} model={model.InUse?.Label} threads={LocalTextModel.Threads}");
+            Console.WriteLine($"CLEANUP story final: {longTake.Text}");
+            Check("a 286-word flat story is cleaned within its cut-off with every word and number kept, at least ten sentences, names and the first word capitalized",
+                storyTiming["cleanupOutcome"] == (double)CleanupOutcome.Applied && longTake.CleanupIssue == null && storyTiming["cleanupMs"] < model.Budget(TextProcessing.WordCount(story)).TotalMilliseconds
+                && TextFidelity.CleanupIsFaithful(story, longTake.Text) && longTake.Text.Count(c => c == '.') >= 10 && longTake.Text.StartsWith("So last Tuesday my cousin Nora and I ") && longTake.Text.Contains("Walter") && longTake.Text.Contains("route 9") && longTake.Text.Contains("mile marker 12") && !longTake.Text.Contains("  "));
             // A cut-off take delivered: the result names the issue once for the balloon and History keeps it with the status.
             var cutPipeline = new DictationPipeline(store, whisper, model) { CleanupBudget = TimeSpan.FromMilliseconds(1) };
             var cutPrepared = await cutPipeline.Shape(flat, directory, (_, _) => { }, CancellationToken.None);

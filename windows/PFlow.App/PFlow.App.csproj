@@ -3,7 +3,7 @@
     <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF><UseWindowsForms>true</UseWindowsForms><EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ImplicitUsings>disable</ImplicitUsings><Nullable>enable</Nullable><AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <AssemblyName>pFlow</AssemblyName><Product>pFlow</Product><Company>Pesh</Company><Version>0.1.23</Version><ApplicationIcon>Assets/Pesh.ico</ApplicationIcon><ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>pFlow</AssemblyName><Product>pFlow</Product><Company>Pesh</Company><Version>0.1.24</Version><ApplicationIcon>Assets/Pesh.ico</ApplicationIcon><ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../PFlow.Core/PFlow.Core.csproj" />

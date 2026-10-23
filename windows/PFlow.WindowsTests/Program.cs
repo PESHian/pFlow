@@ -74,10 +74,10 @@ internal static partial class Program
             Check("isolated desktop", ObjectName(GetThreadDesktop(GetCurrentThreadId())) == "fixture");
             if (args.Contains("--insertion-only")) { NativeInsertion(); NativeLiveTyping(); Console.WriteLine($"{passed} native insertion/caret checks passed."); return 0; }
             if (args.Contains("--learn-keys-only")) { _ = Application.Current ?? new PFlow.Windows.Program { ShutdownMode = ShutdownMode.OnExplicitShutdown }; NativeHotkeys(); NativeKeyCapture(); Console.WriteLine($"{passed} native learned-key checks passed."); return 0; }
-            if (args.Contains("--controls-only")) { NativeControls(); NativeHistory(); Console.WriteLine($"{passed} native settings controls checks passed."); return 0; }
+            if (args.Contains("--controls-only")) { NativeControls(); NativeHistory(); NativeDownloads(); NativeCapsule(); Console.WriteLine($"{passed} native settings controls checks passed."); return 0; }
             NativeUpdates();
             if (args.Contains("--updates-only")) { Console.WriteLine($"{passed} native update checks passed."); return 0; }
-            NativeHotkeys(); NativeKeyCapture(); NativeControls(); NativeHistory(); NativeInsertion(); NativeLiveTyping();
+            NativeHotkeys(); NativeKeyCapture(); NativeControls(); NativeHistory(); NativeDownloads(); NativeCapsule(); NativeInsertion(); NativeLiveTyping();
             Check("INPUT size matches Windows ABI", Marshal.SizeOf<Native.Input>() == (IntPtr.Size == 8 ? 40 : 28));
             Check("INPUT union alignment matches Windows ABI", Marshal.OffsetOf<Native.Input>(nameof(Native.Input.Data)).ToInt32() == (IntPtr.Size == 8 ? 8 : 4));
             Check("keyboard structure matches Windows ABI", Marshal.SizeOf<Native.KeyboardInput>() == (IntPtr.Size == 8 ? 24 : 16));

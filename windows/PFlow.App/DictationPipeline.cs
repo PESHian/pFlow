@@ -12,13 +12,8 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         var clock = Stopwatch.StartNew();
         try { return await action(); } finally { Timing?.Invoke(name, clock.Elapsed.TotalMilliseconds); }
     }
-    /// A fixed wait for AI cleanup (the live checks); otherwise BudgetFor the take's words.
+    /// A fixed wait for AI cleanup (the live checks); otherwise the model's own Budget for the take's words.
     internal TimeSpan? CleanupBudget { get; init; }
-    /// How long AI cleanup may take. The 4B model reads its instructions first (about 8 s on the
-    /// ARM64 test VM whatever the take; 13 words took 10 s, 60 words 11.4 s), then roughly 0.1 s
-    /// a word, so the wait is a fixed part plus the take's words, between 20 s and 90 s. This is
-    /// the cut-off, not the usual wait.
-    internal static TimeSpan BudgetFor(int words) => TimeSpan.FromSeconds(Math.Clamp(15 + 0.3 * words, 20, 90));
     internal const string CopyFailed = "Inserted, but it could not be copied to the clipboard. Copy it from History.";
     /// `Prompt` carries the words for pFlow's "couldn't type this" card, with the
     /// reason line, whenever the words did not go into the app (one rule: InsertionPrompt.Offer).
@@ -59,7 +54,7 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         if (aiCleanup) {
             state(Phase.Processing, "Cleaning up");
             using var cleanup = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-            cleanup.CancelAfter(CleanupBudget ?? BudgetFor(TextProcessing.WordCount(text)));
+            cleanup.CancelAfter(CleanupBudget ?? textModel.Budget(TextProcessing.WordCount(text)));
             var outcome = CleanupOutcome.TimedOut;
             try { text = await Measure("cleanupMs", () => textModel.Cleanup(text, folder, cleanup.Token)); outcome = textModel.LastOutcome; cleanupIssue = textModel.LastIssue; }
             catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { cleanupSkipped = true; cleanupIssue = LocalTextModel.TimedOutIssue; }

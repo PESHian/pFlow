@@ -13,12 +13,13 @@ internal sealed partial class SettingsWindow : Window
     readonly Func<bool> busy;
     readonly Action? checkUpdates;
     Action? cancelKeySelection;
-    CancellationTokenSource? download;
+    DownloadControl textDownload = null!, whisperDownload = null!;
+    readonly TextBlock modelStatus = Text(""), oldModelLine = Text("");
+    readonly StackPanel oldModelRow = new();
     readonly TextBlock processingTime = Text("Processing time appears here after your next dictation.");
     readonly ContentControl page = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
     UIElement home = null!;
     readonly Dictionary<string, UIElement> navigationPages = [];
-    readonly TextBlock notice = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 1) };
     public SettingsWindow(StateStore store, Whisper whisper, LocalTextModel textModel, KeyboardHook keyboard, Action appearance, Func<bool> busy, Action? checkUpdates = null)
     {
         this.store = store; this.whisper = whisper; this.keyboard = keyboard; this.appearance = appearance; this.busy = busy;
@@ -35,7 +36,7 @@ internal sealed partial class SettingsWindow : Window
         home = Scroll(General()); ShowHome(); ApplyTheme(); SourceInitialized += (_, _) => ApplyTheme();
         processingTime.Text = ProcessingTimes.Read(store.DirectoryPath);
         var timingRefresh = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(1), System.Windows.Threading.DispatcherPriority.Background, (_, _) => { if (IsVisible && !busy()) processingTime.Text = ProcessingTimes.Read(store.DirectoryPath); }, Dispatcher);
-        Closed += (_, _) => { download?.Cancel(); timingRefresh.Stop(); };
+        Closed += (_, _) => { textDownload.Cancel(); whisperDownload.Cancel(); timingRefresh.Stop(); };
     }
     static StackPanel Panel() => new() { Margin = new Thickness(20) };
     static TextBlock Text(string value) => new() { Text = value, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 5), LineHeight = 19 };
@@ -210,8 +211,10 @@ internal sealed partial class SettingsWindow : Window
         Check(p, "Use the local text model for reports and optional AI cleanup", store.Preferences.UseLocalAI, x => store.Preferences.UseLocalAI = x);
         Check(p, "AI cleanup (slower, English)", store.Preferences.UseAICleanup, x => store.Preferences.UseAICleanup = x);
         p.Children.Add(Text("English cleanup removes filler words immediately. Other languages keep their recognized words. AI cleanup is optional and English only: the local text model adds sentences, commas and capitals and keeps every word and number as spoken; it can take about as long as the recording. When it cannot finish, your words are kept as recognized and the processing line below says so. Reports use your sentences."));
-        p.Children.Add(Text(textModel.FilesPresent ? "Local text model installed. Processing stays on this PC." : "Local AI is unavailable until its model is installed. Plain dictation still works."));
-        p.Children.Add(Button("Download or repair text model (2.5 GB)", DownloadTextModel));
+        modelStatus.Text = textModel.Status; p.Children.Add(modelStatus);
+        textDownload = new DownloadControl("Text model", LocalTextModel.Current.Size, () => textModel.CurrentInstalled, textModel.Download, Blocked, RefreshModelStatus); p.Children.Add(textDownload);
+        oldModelLine.Text = $"The older {LocalTextModel.Previous.Label} model ({FileSize.Describe(LocalTextModel.Previous.Size)}) is still on this PC. pFlow never removes it on its own.";
+        oldModelRow.Children.Add(oldModelLine); oldModelRow.Children.Add(Button($"Remove old model ({FileSize.Describe(LocalTextModel.Previous.Size)})", RemoveOldModel)); p.Children.Add(oldModelRow); RefreshModelStatus();
         } else p.Children.Add(Text(LocalTextModel.UnsupportedReason));
         p = Section(root, "Speech recognition");
         p.Children.Add(Text("Language"));
@@ -223,8 +226,7 @@ internal sealed partial class SettingsWindow : Window
         p.Children.Add(language);
         p.Children.Add(processingTime);
         p.Children.Add(Text($"Microphone devices: {WaveRecorder.waveInGetNumDevs()}. Windows microphone access must allow desktop apps."));
-        p.Children.Add(Button("Download or repair Whisper model (488 MB)", Download));
-        p.Children.Add(Button("Cancel download", () => download?.Cancel())); p.Children.Add(notice);
+        whisperDownload = new DownloadControl("Whisper model", Whisper.ModelBytes, () => whisper.ModelPresent, whisper.Download, Blocked); p.Children.Add(whisperDownload);
         p = Section(root, "General");
         using (var run = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run"))
             Check(p, "Launch pFlow when I sign in", run?.GetValue("pFlow by Pesh") != null, SetStartup);
@@ -239,23 +241,18 @@ internal sealed partial class SettingsWindow : Window
         using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
         if (enabled) key.SetValue("pFlow by Pesh", "\"" + Environment.ProcessPath + "\""); else key.DeleteValue("pFlow by Pesh", false);
     }
-    async void Download()
+    string? Blocked() => busy() ? "Finish or cancel dictation first." : null;
+    void RefreshModelStatus()
     {
-        if (download != null || busy()) { notice.Text = "Finish or cancel dictation first."; return; }
-        download = new CancellationTokenSource();
-        try { await whisper.Download(new Progress<double>(v => notice.Text = $"Downloading model: {v:P0}"), download.Token); notice.Text = "Whisper model checksum verified. Ready for offline dictation."; }
-        catch (OperationCanceledException) { notice.Text = "Download canceled."; }
-        catch (Exception e) { notice.Text = e.Message; }
-        finally { download.Dispose(); download = null; }
+        modelStatus.Text = textModel.Status;
+        oldModelRow.Visibility = textModel.PreviousOnDisk ? Visibility.Visible : Visibility.Collapsed;
     }
-    async void DownloadTextModel()
+    /// The previous 2.5 GB model goes only when the person presses the button.
+    void RemoveOldModel()
     {
-        if (download != null || busy()) { notice.Text = "Finish or cancel dictation first."; return; }
-        download = new CancellationTokenSource();
-        try { await textModel.Download(new Progress<double>(v => notice.Text = $"Downloading text model: {v:P0}"), download.Token); notice.Text = "Text model checksum verified. Local AI is ready."; }
-        catch (OperationCanceledException) { notice.Text = "Download canceled."; }
-        catch (Exception e) { notice.Text = e.Message; }
-        finally { download.Dispose(); download = null; }
+        if (Blocked() is { } why) { oldModelLine.Text = why; return; }
+        try { textModel.RemovePrevious(); } catch (Exception error) { oldModelLine.Text = error.Message; return; }
+        RefreshModelStatus();
     }
     UIElement Dictionary()
     {

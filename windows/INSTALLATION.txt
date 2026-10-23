@@ -2,14 +2,14 @@ pFlow by Pesh: Windows and Mac installation
 
 WINDOWS: x64 (Intel/AMD), ARM64, or x86 (32-bit)
 
-Use pFlow-Setup-0.1.23-testing.exe. One file installs the right build (x64,
+Use pFlow-Setup-0.1.24-testing.exe. One file installs the right build (x64,
 ARM64 or x86) for your Windows user account. No administrator password, no
 .NET installation and no architecture choice is needed.
 Windows 11 and Windows 10 version 1607 or later are required. Older Windows
 cannot run the included .NET 10 runtime. Microsoft's supported Windows 10
 editions are LTSC/Enterprise; Windows 10/older hardware is not fully tested here.
 
-1. Download pFlow-Setup-0.1.23-testing.exe from https://github.com/PESHian/pFlow/releases
+1. Download pFlow-Setup-0.1.24-testing.exe from https://github.com/PESHian/pFlow/releases
 2. Double-click it. This test build is not signed, so Windows may show
    "Windows protected your PC": click "More info", then "Run anyway".
 3. If pFlow is already running, Setup asks to close it, then asks whether you
@@ -31,7 +31,7 @@ editions are LTSC/Enterprise; Windows 10/older hardware is not fully tested here
    unless you choose it as your activation key.
 
 Whisper, its verified speech model, and the .NET runtime are included. Recording
-and transcription work offline. A separate optional 2.5 GB text model can be
+and transcription work offline. A separate optional 1.1 GB text model can be
 downloaded in pFlow Settings on 64-bit Windows for AI cleanup and report sections.
 That optional AI feature is unavailable on 32-bit Windows; dictation, basic
 cleanup, dictionary, and full-narrative templates remain available.
