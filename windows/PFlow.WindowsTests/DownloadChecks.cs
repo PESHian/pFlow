@@ -40,7 +40,7 @@ internal static partial class Program
             blocked = "Finish or cancel dictation first."; Press("Download (1.1 GB)");
             Check("while dictating the button stays and the line says why", Buttons().SequenceEqual(["Download (1.1 GB)"]) && Line() == "Finish or cancel dictation first." && pending == null);
             blocked = null; Press("Download (1.1 GB)"); report!.Report(120_000_000.0 / text); Drain();
-            Check("during: the bar, 'Downloading… 120 MB of 1.1 GB' and one Cancel; the Download button is gone", Buttons().SequenceEqual(["Cancel"]) && Bar() && Line() == "Downloading… 120 MB of 1.1 GB" && control.State == DownloadState.Downloading);
+            Check($"during: the bar, 'Downloading… 120 MB of 1.1 GB' and one Cancel; the Download button is gone (buttons {string.Join("/", Buttons())}, bar {Bar()}, line '{Line()}', state {control.State})", Buttons().SequenceEqual(["Cancel"]) && Bar() && Line() == "Downloading… 120 MB of 1.1 GB" && control.State == DownloadState.Downloading);
             Press("Cancel"); Drain();
             Check("cancel returns to the Download state with nothing else to press", Buttons().SequenceEqual(["Download (1.1 GB)"]) && !Bar() && Line() == "Download canceled." && control.State == DownloadState.Ready);
             Press("Download (1.1 GB)"); pending!.SetException(new IOException("The server said no.")); Drain();

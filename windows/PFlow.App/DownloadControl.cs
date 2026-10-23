@@ -61,7 +61,7 @@ internal sealed class DownloadControl : StackPanel
         if (blocked() is { } why) { Show(State, note: why); return; }
         running = new CancellationTokenSource(); Show(DownloadState.Downloading);
         try {
-            await fetch(new Progress<double>(fraction => { if (State == DownloadState.Downloading) Show(DownloadState.Downloading, (long)(Math.Clamp(fraction, 0, 1) * total)); }), running.Token);
+            await fetch(new DispatcherProgress(this, fraction => { if (State == DownloadState.Downloading) Show(DownloadState.Downloading, (long)(Math.Clamp(fraction, 0, 1) * total)); }), running.Token);
             Show(installed() ? DownloadState.Installed : DownloadState.Failed, note: "The file is not where pFlow expected it.");
         }
         catch (OperationCanceledException) { Show(DownloadState.Ready, note: "Download canceled."); }
@@ -69,4 +69,9 @@ internal sealed class DownloadControl : StackPanel
         finally { running.Dispose(); running = null; done?.Invoke(); }
     }
     public void Cancel() => running?.Cancel();
+    /// Progress reported from the download thread, applied on this control's own thread.
+    sealed class DispatcherProgress(DownloadControl control, Action<double> apply) : IProgress<double>
+    {
+        public void Report(double value) => control.Dispatcher.BeginInvoke(apply, value);
+    }
 }
