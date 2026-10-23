@@ -10,7 +10,7 @@ These are testing builds. macOS and Windows may show an unsigned or unnotarized 
 
 | Platform | Download | Requirements |
 | --- | --- | --- |
-| Mac | pFlow-Mac-0.3.5-testing.dmg | Apple Silicon, macOS 27 or later |
+| Mac | pFlow-Mac-0.3.13.dmg | Apple Silicon, macOS 27 or later |
 | Windows | pFlow-Windows-Universal-0.1.15-testing.zip | Windows x64 (Intel/AMD), ARM64, or x86; Windows 10 1607+ / Windows 11 |
 
 ### Mac
@@ -34,6 +34,8 @@ Quit pFlow before updating. Turn Mac dictation off before testing Windows record
 ## Updates
 
 Choose **Check for updates** in the tray/menu bar or Settings, then **Install and restart**. pFlow checks a signed release list and verifies the download before replacing the app. Settings, history, and models stay on your device. Checks run only when requested. If your app has no Check for updates button, install a current build once using the steps above. Windows 0.1.11 and Mac 0.3.5 or later include the updater. Published GitHub binary releases become available in the app; source commits alone do not.
+
+**Mac permission after an update.** Mac builds are not yet signed with an Apple Developer ID, so macOS treats each new build as a new app. After installing a new build, press **Grant** next to Accessibility when pFlow asks and turn pFlow on. pFlow asks on the spot; nothing else to remove or re-add.
 
 **One-time Mac step.** Mac 0.3.5 and the 0.3.6 test downloads run under the old internal name Yap, which is why macOS can show Yap in its permission lists. They cannot install the first build named pFlow themselves; they report that the update could not finish and keep your app. Install that build once by hand: quit pFlow, open the new disk image, drag **pFlow by Pesh** into the same Applications folder, and choose **Replace**. Settings, history, dictionary, templates, and models stay. macOS may ask for Accessibility and Automation again. If **System Settings → Privacy & Security → Accessibility** or **Automation** still lists Yap, select Yap, click **−**, then open pFlow and allow it again. Later updates work from the app.
 
