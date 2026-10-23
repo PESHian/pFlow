@@ -208,13 +208,13 @@ static void transcribe_file(whisper_context * ctx, int threads, const Job & job)
     if (bytes.empty() || !read_audio_data(bytes.data(), bytes.size(), samples, stereo, false) || samples.empty()) {
         put(3); put(std::string("The recording could not be read.")); fflush(stdout); return;
     }
-    // The finished text is decoded with the Mac app's search (whisper-cli's defaults in whisper.cpp
-    // 1.9.5): beam search 5, best of 5, temperature fallback. The audio context stays trimmed for
-    // short takes (PFLOW_FINAL_AUDIO_CTX) and the learned terms still go in as the prompt (the Mac
-    // sends none). W025 measured greedy, beam, and beam with the Mac's full context on the fictional
-    // speed fixtures; the numbers are in the ledger.
-    auto params = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
-    params.n_threads = threads;
+    // Greedy, best of 1, as 0.1.24 shipped. The Mac app decodes with beam search 5 / best of 5 and
+    // the full audio context; W025 measured both on the fictional speed fixtures (ledger): the same
+    // word error rate (1.95% greedy, 2.03% beam), beam 1.4-1.6x the time per take, the full context
+    // 2.5x on a 7 s take, so speed wins and the larger speech models are the accuracy choice. The
+    // learned terms go in as the prompt (the Mac sends none).
+    auto params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    params.n_threads = threads; params.greedy.best_of = 1;
     params.no_context = true; // Never carry another dictation's tokens into this one.
     params.language = language.c_str(); params.detect_language = false;
     params.print_special = params.print_progress = params.print_realtime = params.print_timestamps = false;
