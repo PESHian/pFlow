@@ -5,10 +5,10 @@ using System.IO;
 
 internal static partial class Program
 {
-    /// The tray icon: the frame matches the taskbar's DPI (16/20/24/32/40/48 px at 100-300%), each
-    /// variant is a solid silhouette at 16 px (not a shrunken mark), and the light/dark choice follows
-    /// the taskbar. PFLOW_SHOTS=<folder> writes tray-{dark,light}-{100,150,200}.png: the icon at its
-    /// real size on a taskbar-coloured strip next to a 3x blow-up, to look at.
+    /// The tray icon: the frame matches the taskbar's DPI (16/20/24/32/40/48 px at 100-300%), the
+    /// talking-pig mark fills it (opaque box at least 80% of the width at 16 and 24 px, waves included),
+    /// and the light/dark choice follows the taskbar. PFLOW_SHOTS=<folder> writes
+    /// tray-{dark,light}-{100,150,200}.png beside Windows' own volume and network icons.
     static void NativeTray()
     {
         _ = System.Windows.Application.Current ?? new System.Windows.Application { ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown }; // pack:// URIs need the application
@@ -19,25 +19,48 @@ internal static partial class Program
             using var icon = TrayIcon.Load(dpi, light);
             Check($"{(light ? "light" : "dark")} taskbar at {dpi} dpi loads the {TrayIcon.SizeFor(dpi)} px frame", icon.Width == TrayIcon.SizeFor(dpi) && icon.Height == TrayIcon.SizeFor(dpi));
         }
-        foreach (bool light in new[] { false, true }) {
-            using var icon = TrayIcon.Load(96, light); using var bitmap = icon.ToBitmap();
-            int opaque = 0, bright = 0;
-            for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) { var p = bitmap.GetPixel(x, y); if (p.A > 128) { opaque++; if (p.GetBrightness() > 0.6) bright++; } }
-            // A solid head fills most of the 16 px box; the light head is mostly bright, the dark one mostly not.
-            Check($"the 16 px {(light ? "dark" : "light")} head is a solid silhouette ({opaque} of 256 px opaque, {bright} bright)", opaque >= 110 && (light ? bright < opaque / 3 : bright > opaque * 2 / 3));
+        foreach (bool light in new[] { false, true }) foreach (int dpi in new[] { 96, 144 }) {
+            using var icon = TrayIcon.Load(dpi, light); using var bitmap = icon.ToBitmap();
+            int size = bitmap.Width, left = size, right = -1, waves = 0;
+            for (int y = 0; y < size; y++) for (int x = 0; x < size; x++) {
+                var p = bitmap.GetPixel(x, y);
+                if (p.A <= 128) continue;
+                left = Math.Min(left, x); right = Math.Max(right, x);
+                // The sound waves: lilac pixels in the right quarter.
+                if (x >= size * 3 / 4 && p.B > 200 && p.R > 140 && p.G < p.B) waves++;
+            }
+            int covered = right - left + 1;
+            Check($"{(light ? "light" : "dark")} taskbar, {size} px: the mark's opaque box covers {covered} of {size} px across (at least 80%), with its sound waves ({waves} px)",
+                covered * 100 >= size * 80 && waves >= 2);
         }
+        // The app, Start and Installed-apps icon is the original mark again, every frame (as first published).
+        using (var original = System.Windows.Application.GetResourceStream(new Uri("pack://application:,,,/pFlow;component/Assets/Pesh.ico")).Stream)
+            Check("Pesh.ico is the original talking-pig icon, byte for byte", Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(original)) == "ADD7F361CB15AA8AC2007D179AF97B828C8D79C6B06B5493A37BA1BB6BB6D5DA");
         int taskbar = TrayIcon.TaskbarDpi();
         using (var current = TrayIcon.Current())
             Check($"the icon in use matches this taskbar's DPI ({taskbar})", taskbar >= 96 && taskbar <= 384 && current.Width == TrayIcon.SizeFor(taskbar));
         Check("the taskbar theme is read without error", TrayIcon.LightTaskbar() is bool);
+        // PFLOW_SHOTS: the tray icon at 100/150/200% on a light and a dark taskbar, between the volume and
+        // network icons as Windows 11 draws them (Segoe Fluent Icons), at real size and blown up 3x.
         if (Environment.GetEnvironmentVariable("PFLOW_SHOTS") is { } shots) foreach (int scale in new[] { 100, 150, 200 }) foreach (bool light in new[] { false, true }) {
-            int dpi = 96 * scale / 100; using var icon = TrayIcon.Load(dpi, light); using var bitmap = icon.ToBitmap();
-            int bar = 48 * scale / 100; using var strip = new Bitmap(bar * 6 + icon.Width * 3 + 40, Math.Max(bar, icon.Height * 3 + 8));
+            int dpi = 96 * scale / 100; using var icon = TrayIcon.Load(dpi, light); using var mark = icon.ToBitmap(); int size = icon.Width;
+            var ink = light ? Color.Black : Color.White; var bar = light ? Color.FromArgb(0xF3, 0xF3, 0xF3) : Color.FromArgb(0x20, 0x20, 0x20);
+            int slot = size * 2, height = 48 * scale / 100;
+            using var real = new Bitmap(slot * 3, height);
+            using (var g = Graphics.FromImage(real)) {
+                g.Clear(bar); g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                using var font = new Font("Segoe Fluent Icons", size * 0.75f, GraphicsUnit.Point);
+                using var brush = new SolidBrush(ink);
+                var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+                g.DrawString("\uE767", font, brush, new RectangleF(0, 0, slot, height), format);
+                g.DrawImage(mark, slot + (slot - size) / 2, (height - size) / 2, size, size);
+                g.DrawString("\uE701", font, brush, new RectangleF(slot * 2, 0, slot, height), format);
+            }
+            using var strip = new Bitmap(real.Width * 4 + 24, real.Height * 3 + 8);
             using (var g = Graphics.FromImage(strip)) {
-                g.Clear(light ? Color.FromArgb(0xF3, 0xF3, 0xF3) : Color.FromArgb(0x20, 0x20, 0x20));
-                g.DrawImage(bitmap, 16, (strip.Height - icon.Height) / 2, icon.Width, icon.Height);
+                g.Clear(bar); g.DrawImage(real, 4, 4, real.Width, real.Height);
                 g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor; g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
-                g.DrawImage(bitmap, 16 + icon.Width + 24, 4, icon.Width * 3, icon.Height * 3);
+                g.DrawImage(real, real.Width + 16, 4, real.Width * 3, real.Height * 3);
             }
             strip.Save(Path.Combine(shots, $"tray-{(light ? "light" : "dark")}-{scale}.png"), ImageFormat.Png);
         }

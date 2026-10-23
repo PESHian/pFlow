@@ -4,10 +4,12 @@ using Microsoft.Win32;
 
 namespace PFlow.Windows;
 
-/// The tray icon: the Pesh head alone as a solid silhouette (Assets/TrayOnDark.ico, a light head
-/// for the dark taskbar; Assets/TrayOnLight.ico, a dark head for the light taskbar), in the frame
-/// the taskbar's DPI asks for. The earlier icon was the whole 264 px mark handed to Windows to
-/// shrink, so the tray showed a 9 px head beside faint sound waves.
+/// The tray icon: the Pesh talking-pig mark (head and sound waves, as in Assets/Pesh.ico) with its
+/// transparent margins cropped so head and waves fill the frame the taskbar's DPI asks for (16-48 px;
+/// at 16-24 px the waves are two clean arcs, scripts/tray-icons.py). Assets/TrayOnDark.ico and
+/// TrayOnLight.ico are the taskbar-theme choice and carry the same mark. The 0.1.24 icon was the whole
+/// 256 px mark handed to Windows to shrink (a 9 px head); 0.1.25-0.1.26 used a plain head without the
+/// waves, which the owner did not want.
 internal static class TrayIcon
 {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindow(string className, string? windowName);
