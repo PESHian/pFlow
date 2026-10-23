@@ -210,6 +210,20 @@ extension LiveInlineOwnership.Stop {
         }
     }
 
+    /// The one plain line on the Copy card when the finished text could not
+    /// go in after live typing: the real reason, never a generic one.
+    var cardReason: String {
+        switch self {
+        case .permission: return "Accessibility is off, so the finished text was not put in."
+        case .app: return "You switched apps, so the finished text was not put in."
+        case .focus: return "You moved to another field, so the finished text was not put in."
+        case .secure: return "That is a password field, so the finished text was not put in."
+        case .text: return "The text in the field changed, so the finished text was not put in."
+        case .caret: return "The cursor moved, so the finished text was not put in."
+        case .unsupported, .uncertain: return "pFlow could not check this field, so the finished text was not put in."
+        }
+    }
+
     /// Shown in the preview when typing stops partway through a take. Short
     /// enough for one line on the narrowest preview.
     var stoppedNote: String {

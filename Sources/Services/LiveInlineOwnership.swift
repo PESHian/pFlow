@@ -107,6 +107,9 @@ struct LiveInlineOwnership {
     private(set) var stopped: Stop?
     /// A write call succeeded this take, so the destination may hold pFlow's text.
     private(set) var touched = false
+    /// Write calls made this take, accepted or refused. While it is zero
+    /// nothing of pFlow's can be in the field, whatever the field reads back.
+    private(set) var writes = 0
     private var typedWords = ""
     private var previous: String?
     private var pending: (owned: String, words: String, caret: NSRange)?
@@ -180,6 +183,7 @@ struct LiveInlineOwnership {
         if owned.utf16.elementsEqual(originalSelected.utf16), caret == original { return .none }
         let start = original.location
         pending = (originalSelected, "", original)
+        writes += 1
         return .write(Write(range: NSRange(location: start, length: owned.utf16.count),
                             text: originalSelected, select: original))
     }
@@ -216,10 +220,15 @@ struct LiveInlineOwnership {
             && state.value?.utf16.elementsEqual((before + owned + after).utf16) == true
     }
 
-    /// A take that never had a successful write can still be touched if the
-    /// field no longer matches its snapshot; called once before the final
-    /// decision, after the field had time to settle.
+    /// A take whose writes were all refused can still be touched if the field
+    /// no longer matches its snapshot (a refused Accessibility call can land
+    /// late); called once before the final decision, after the field had
+    /// time to settle. A take with no write call at all is never touched:
+    /// nothing of pFlow's could have landed, so an unreadable or changed
+    /// field (Electron after its tree went away, the person's own edit) must
+    /// not keep the finished text out of the app.
     mutating func noteFieldChanged(_ state: LiveFieldState) {
+        guard writes > 0 else { return }
         if !unchanged(state) { touched = true }
     }
 
@@ -253,6 +262,7 @@ struct LiveInlineOwnership {
         let start = original.location
         let range = NSRange(location: start + units, length: owned.utf16.count - units)
         pending = (target, words, NSRange(location: start + target.utf16.count, length: 0))
+        writes += 1
         return .write(Write(range: range, text: replacement, select: nil))
     }
 }

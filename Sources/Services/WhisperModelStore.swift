@@ -26,6 +26,8 @@ final class WhisperModelStore {
     }
     private(set) var isReady = false
     private(set) var isDownloading = false
+    /// Bytes on disk so far while downloading, for the progress line.
+    private(set) var receivedBytes: Int64 = 0
     private(set) var errorMessage: String?
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private let destination: URL
@@ -60,14 +62,14 @@ final class WhisperModelStore {
         guard !isDownloading, !isReady else { return }
         errorMessage = nil
         isDownloading = true
+        receivedBytes = 0
         task = Task {
-            defer { isDownloading = false; task = nil }
+            defer { isDownloading = false; task = nil; receivedBytes = 0 }
             do {
-                let (temporary, response) = try await URLSession.shared.download(from: Self.downloadURL)
+                let temporary = FileManager.default.temporaryDirectory
+                    .appending(path: "pflow-whisper-\(UUID().uuidString).part")
                 defer { try? FileManager.default.removeItem(at: temporary) }
-                guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-                    throw WhisperError.downloadFailed
-                }
+                try await Self.fetch(Self.downloadURL, to: temporary) { [weak self] bytes in self?.receivedBytes = bytes }
                 let validation = Task.detached(priority: .utility) { try Self.validate(temporary) }
                 try await withTaskCancellationHandler {
                     try await validation.value
@@ -91,4 +93,39 @@ final class WhisperModelStore {
     }
 
     func cancelDownload() { task?.cancel() }
+
+    /// Streams `url` to `file`, reporting the byte count as it grows (about
+    /// every 4 MB), so Settings can show "Downloading… 120 MB of 488 MB".
+    nonisolated static func fetch(_ url: URL, to file: URL, session: URLSession = .shared,
+                                  progress: @escaping @MainActor (Int64) -> Void) async throws {
+        let (bytes, response) = try await session.bytes(from: url)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw WhisperError.downloadFailed }
+        guard FileManager.default.createFile(atPath: file.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
+            throw WhisperError.downloadFailed
+        }
+        let handle = try FileHandle(forWritingTo: file)
+        defer { try? handle.close() }
+        var buffer = Data()
+        buffer.reserveCapacity(1 << 20)
+        var count: Int64 = 0
+        var reported: Int64 = 0
+        for try await byte in bytes {
+            buffer.append(byte)
+            if buffer.count >= 1 << 20 {
+                try Task.checkCancellation()
+                try handle.write(contentsOf: buffer)
+                count += Int64(buffer.count)
+                buffer.removeAll(keepingCapacity: true)
+                if count - reported >= 4 << 20 {
+                    reported = count
+                    await progress(count)
+                }
+            }
+        }
+        if !buffer.isEmpty {
+            try handle.write(contentsOf: buffer)
+            count += Int64(buffer.count)
+        }
+        await progress(count)
+    }
 }

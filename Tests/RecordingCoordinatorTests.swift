@@ -92,6 +92,9 @@ final class FakeHUD: HUDControlling {
     var hidden = 0
     var hideDelays: [Double] = []
     var offers: [String] = []
+    /// The reason line on the card, as set; nil clears it.
+    var reasons: [String?] = []
+    var accessibilityOffers: [Bool] = []
     /// What the panel shows now: the card (true) or the capsule (false).
     var livePreview = false
     var onConfirm: (() -> Void)?
@@ -109,6 +112,8 @@ final class FakeHUD: HUDControlling {
         self.onCancel = onCancel
     }
     func offerCopy(_ text: String) { offers.append(text) }
+    func setReason(_ reason: String?) { reasons.append(reason) }
+    func setNeedsAccessibility(_ on: Bool) { accessibilityOffers.append(on) }
 }
 
 final class FakeSounds: SoundPlaying {
@@ -347,15 +352,17 @@ struct RecordingCoordinatorTests {
 
     @Test func clipboardOffBlockedInsertionSavesHistoryWithoutClaimingCopied() async {
         let injector = FakeInjector()
-        injector.outcome = .savedToHistory
+        injector.outcome = .savedToHistory(.clipboard)
         let history = FakeHistory()
         let hud = FakeHUD()
         let coordinator = makeCoordinator(injector: injector, history: history, hud: hud)
         await coordinator.toggle()
         await coordinator.finish()
         #expect(history.saved == ["hello world"])
-        #expect(coordinator.lastOutcome == .savedToHistory)
+        #expect(coordinator.lastOutcome == .savedToHistory(.clipboard))
         #expect(hud.phases.last == .savedToHistory)
+        #expect(hud.reasons.last == InsertionBlock.clipboard.reason, "the card names the real reason")
+        #expect(hud.accessibilityOffers.isEmpty, "no Grant button when Accessibility is not the problem")
         #expect(hud.offers == ["hello world"] && hud.livePreview, "the words that did not go in are offered with Copy")
         #expect(!hud.phases.contains(.copied))
         #expect(coordinator.state == .idle)

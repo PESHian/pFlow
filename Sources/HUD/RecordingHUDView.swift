@@ -2,7 +2,6 @@ import SwiftUI
 
 struct RecordingHUDView: View {
     @Bindable var model: HUDModel
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         if model.livePreview {
@@ -12,29 +11,36 @@ struct RecordingHUDView: View {
         }
     }
 
-    // Live text Off: the waveform capsule, unchanged.
+    /// The recording capsule, the same control in every phase and for every
+    /// Live text choice: solid black (no material, no glass, no blur, so
+    /// Reduce Transparency changes nothing), a hairline outline in the
+    /// person's colour palette, the waveform or a short status inside. One
+    /// size for the whole take.
+    static let capsuleSize = CGSize(width: 96, height: 26)
+    static let capsuleOutlineOpacity = 0.65
+
+    /// The Copy card shows all of the text up to this many lines, then scrolls.
+    static let wholeTextLines = 10
+
+    /// The height `text` needs at `size` in `width`, capped at `wholeTextLines`.
+    static func wholeTextHeight(_ text: String, width: CGFloat, size: CGFloat) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: size)
+        let line = ceil(font.ascender - font.descender + font.leading)
+        let needed = (text as NSString).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font]).height
+        return min(ceil(needed) + 2, line * CGFloat(wholeTextLines))
+    }
+
     private var compact: some View {
         status
         .foregroundStyle(.white.opacity(0.9))
-        .frame(width: 120, height: 32)
-        .contentShape(Rectangle())
+        .padding(.horizontal, Theme.s2)
+        .frame(width: Self.capsuleSize.width, height: Self.capsuleSize.height)
+        .contentShape(Capsule())
         .background {
-            if isRecordingPhase {
-                if reduceTransparency {
-                    Capsule().fill(Color(white: 0.08))
-                        .overlay(Capsule().strokeBorder(.white.opacity(0.25), lineWidth: 0.65))
-                } else {
-                    Capsule().fill(.clear)
-                        .glassEffect(.regular, in: Capsule())
-                        .overlay(Capsule().strokeBorder(Theme.gradient.opacity(0.4), lineWidth: 0.65))
-                        .allowsHitTesting(false)
-                }
-            } else {
-                RoundedRectangle(cornerRadius: 11)
-                    .fill(.ultraThinMaterial)
-                    .overlay(RoundedRectangle(cornerRadius: 11)
-                        .strokeBorder(Theme.gradient.opacity(0.45), lineWidth: 0.75))
-            }
+            Capsule().fill(Color.black)
+                .overlay(Capsule().strokeBorder(model.palette.gradient.opacity(Self.capsuleOutlineOpacity), lineWidth: 1))
         }
         .preferredColorScheme(.dark)
         .accessibilityLabel(title)
@@ -44,42 +50,44 @@ struct RecordingHUDView: View {
         Group {
             if isRecordingPhase {
                 RecordingWaveform(levels: Array(model.levels.suffix(25)),
-                                  style: AppearanceSettings.shared.waveformStyle)
+                                  style: model.waveformStyle, compact: true, palette: model.palette)
             } else if model.phase == .pasteUnconfirmed {
-                Label("Check paste", systemImage: "info.circle")
-                    .font(.system(size: 12, weight: .medium))
+                capsuleLabel("Check paste", "info.circle")
                     .help("The app could not verify the paste. Check your text before pasting again.")
             } else if model.phase == .copied {
-                Label("Press ⌘V", systemImage: "doc.on.clipboard")
-                    .font(.system(size: 12, weight: .medium))
+                capsuleLabel("Press ⌘V", "doc.on.clipboard")
             } else if model.phase == .savedToHistory {
-                Label("Saved in History", systemImage: "clock.arrow.circlepath")
-                    .font(.system(size: 11, weight: .medium))
+                capsuleLabel("In History", "clock.arrow.circlepath")
+                    .help(title)
             } else if model.phase == .failed {
-                Label("Dictation failed", systemImage: "exclamationmark.triangle")
-                    .font(.system(size: 12, weight: .medium))
+                capsuleLabel("Failed", "exclamationmark.triangle")
                     .foregroundStyle(.orange)
+                    .help(title)
             } else if model.phase == .liveTextKept || model.phase == .liveTextKeptTyped {
-                Label(model.phase == .liveTextKeptTyped ? "Typed words stay" : "Kept in History",
-                      systemImage: "clock.arrow.circlepath")
-                    .font(.system(size: 11, weight: .medium))
+                capsuleLabel(model.phase == .liveTextKeptTyped ? "Words stay" : "In History",
+                             "clock.arrow.circlepath")
                     .help(title)
             } else if model.phase == .passwordField {
-                Label("Password field", systemImage: "lock")
-                    .font(.system(size: 11, weight: .medium))
+                capsuleLabel("Password", "lock")
                     .help(title)
             } else if model.phase == .typingStopped {
-                Label("Finished text not put in", systemImage: "exclamationmark.circle")
-                    .font(.system(size: 11, weight: .medium))
+                capsuleLabel("Not put in", "exclamationmark.circle")
                     .help(title)
             } else if model.phase == .typedTextLeft {
-                Label("Typed words kept", systemImage: "info.circle")
-                    .font(.system(size: 11, weight: .medium))
+                capsuleLabel("Words stay", "info.circle")
                     .help(title)
             } else {
                 ProgressView().controlSize(.small).tint(Theme.accent)
             }
         }
+    }
+
+    /// One short status that fits the capsule on one line.
+    private func capsuleLabel(_ text: String, _ systemImage: String) -> some View {
+        Label(text, systemImage: systemImage)
+            .font(.system(size: 10.5, weight: .medium))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
     }
 
     static let shadowInsets = EdgeInsets()
@@ -144,11 +152,30 @@ private struct LivePreviewCard<Status: View>: View {
             Rectangle().fill(Theme.hairline).frame(height: 1)
                 .padding(.horizontal, Theme.s4)
                 .padding(.vertical, Theme.s2)
-            transcript
-                .padding(.horizontal, Theme.s4)
-                .padding(.bottom, Theme.s3)
+            if let reason = model.reason {
+                Text(reason)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Theme.s4)
+                    .padding(.bottom, Theme.s2)
+                    .accessibilityIdentifier("reason")
+            }
+            if model.needsAccessibility {
+                accessibilityRow
+                    .padding(.horizontal, Theme.s4)
+                    .padding(.bottom, Theme.s2)
+            }
             if model.copyOffer != nil {
+                wholeText
+                    .padding(.horizontal, Theme.s4)
+                    .padding(.bottom, Theme.s3)
                 copyRow
+                    .padding(.horizontal, Theme.s4)
+                    .padding(.bottom, Theme.s3)
+            } else {
+                transcript
                     .padding(.horizontal, Theme.s4)
                     .padding(.bottom, Theme.s3)
             }
@@ -183,7 +210,7 @@ private struct LivePreviewCard<Status: View>: View {
                     .help(model.liveNote == nil ? title : "pFlow still finishes your words when you stop.")
                 Spacer(minLength: Theme.s2)
                 RecordingWaveform(levels: Array(model.levels.suffix(25)),
-                                  style: AppearanceSettings.shared.waveformStyle, compact: true)
+                                  style: model.waveformStyle, compact: true, palette: model.palette)
             } else if isProcessingPhase {
                 ProgressView().controlSize(.small).tint(Theme.accent)
                 Text(title).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
@@ -200,7 +227,7 @@ private struct LivePreviewCard<Status: View>: View {
     /// takes focus, so the app the person was in keeps it.
     private var copyRow: some View {
         HStack(spacing: Theme.s2) {
-            Text(title)
+            Text(model.reason == nil ? title : "Also saved in History.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -213,6 +240,35 @@ private struct LivePreviewCard<Status: View>: View {
             HUDButton(systemName: "xmark", tint: .secondary) { model.onClose?() }
                 .accessibilityLabel("Close")
         }
+    }
+
+    /// This build is not trusted for Accessibility: say so where the person
+    /// is looking, with the one-press Grant right there.
+    private var accessibilityRow: some View {
+        HStack(spacing: Theme.s2) {
+            Image(systemName: "accessibility")
+                .foregroundStyle(Theme.accent)
+            Text("pFlow needs Accessibility to type. Press Grant, then turn on pFlow.")
+                .font(.system(size: 11))
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: Theme.s2)
+            Button("Grant") { model.onGrantAccessibility?() }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.accent)
+                .controlSize(.small)
+                .accessibilityLabel("Grant Accessibility")
+        }
+        .accessibilityIdentifier("needsAccessibility")
+    }
+
+    /// Words that could not go in: all of them, scrollable and selectable,
+    /// from the top, so nothing is hidden behind the live-tail box. The box
+    /// is as tall as the text up to about ten lines; longer text scrolls.
+    private var wholeText: some View {
+        SelectableText(text: model.partial, size: textSize, scheme: model.colorScheme ?? systemScheme)
+            .frame(height: RecordingHUDView.wholeTextHeight(model.partial, width: model.previewMaxWidth - 2 * Theme.s4, size: textSize))
+            .accessibilityLabel("Finished text")
+            .accessibilityValue(model.partial)
     }
 
     private var caption: String {
@@ -277,6 +333,49 @@ private struct LivePreviewCard<Status: View>: View {
     private var textFont: Font { .system(size: textSize) }
 }
 
+/// All of a text, selectable and scrolling: an AppKit text view, because a
+/// SwiftUI ScrollView lays out nothing in an offscreen render and reports
+/// no size to the panel. Read-only; the system label colour for the scheme.
+struct SelectableText: NSViewRepresentable {
+    let text: String
+    let size: CGFloat
+    let scheme: ColorScheme
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSTextView.scrollableTextView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+        if let view = scroll.documentView as? NSTextView {
+            view.isEditable = false
+            view.isSelectable = true
+            view.drawsBackground = false
+            view.textContainerInset = .zero
+            view.textContainer?.lineFragmentPadding = 0
+            view.isVerticallyResizable = true
+            view.isHorizontallyResizable = false
+            view.autoresizingMask = [.width]
+        }
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        scroll.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
+        guard let view = scroll.documentView as? NSTextView else { return }
+        let changed = view.string != text
+        if changed { view.string = text }
+        view.font = NSFont.systemFont(ofSize: size)
+        view.textColor = .labelColor
+        view.textContainer?.containerSize = NSSize(width: scroll.contentSize.width, height: .greatestFiniteMagnitude)
+        view.frame.size.width = scroll.contentSize.width
+        view.layoutManager?.ensureLayout(for: view.textContainer!)
+        view.sizeToFit()
+        // New words read from the top; the person scrolls down for the rest.
+        if changed { scroll.contentView.scroll(to: .zero); scroll.reflectScrolledClipView(scroll.contentView) }
+    }
+}
+
 /// The recording indicator in the card header: a small dot in the recording
 /// colour that breathes while pFlow listens (still under Reduce Motion).
 private struct RecordingDot: View {
@@ -329,14 +428,16 @@ struct RecordingWaveform: View {
     /// The card header's small waveform: no outline or shadow, 84x16. The
     /// capsule keeps its chrome.
     var compact = false
+    /// The palette read when the take started; nil draws the app's current one.
+    var palette: ThemePalette?
 
     var body: some View {
         switch style {
         case .wave:
-            Waveform(levels: levels, compact: compact)
+            Waveform(levels: levels, compact: compact, gradient: palette?.gradient ?? Theme.gradient)
         case .lines:
             WaveformLines(levels: AudioLevel.waveformLevels(levels))
-                .fill(Theme.gradient)
+                .fill(palette?.gradient ?? Theme.gradient)
                 .frame(width: compact ? 84 : 100, height: compact ? 16 : 20)
                 .shadow(color: .black.opacity(compact ? 0 : 0.25), radius: 1.5, x: 0, y: 1)
         }
@@ -365,11 +466,12 @@ private struct WaveformLines: Shape {
 private struct Waveform: View {
     let levels: [Float]
     var compact = false
+    var gradient: LinearGradient = Theme.gradient
 
     var body: some View {
         let outline = WaveformOutline(levels: AudioLevel.waveformLevels(levels))
         outline
-            .fill(Theme.gradient)
+            .fill(gradient)
             .overlay(outline.stroke(.black.opacity(compact ? 0 : 0.5), lineWidth: 0.75))
             .frame(width: compact ? 84 : 100, height: compact ? 16 : 20)
             .shadow(color: .black.opacity(compact ? 0 : 0.25), radius: 1.5, x: 0, y: 1)

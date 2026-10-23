@@ -50,11 +50,15 @@ private final class Runner {
     func run() async -> [String: Any] {
         // Never prompts: the plain check only reads the existing grant.
         var report: [String: Any] = ["trusted": AXIsProcessTrusted()]
+        var providers: [String: Any] = [:]
+        // Whole takes run untrusted too: that is the case a build that lost
+        // its Accessibility grant must explain to the person.
+        if wants("take") { providers["take"] = await takes() }
         guard AXIsProcessTrusted() else {
-            note("not trusted; nothing run")
+            note("not trusted; only whole takes run")
+            report["providers"] = providers
             return report
         }
-        var providers: [String: Any] = [:]
         if wants("textedit") { providers["textedit"] = await textEdit() }
         if wants("safari") { providers["safari"] = await safari() }
         if wants("vscode") { providers["vscode"] = await electron(bundle: "com.microsoft.VSCode", name: "vscode") }
@@ -381,6 +385,92 @@ private final class Runner {
         return result
     }
 
+    // MARK: Whole takes (coordinator, injector and HUD, scripted words)
+
+    /// Scripted transcript updates in place of an engine: the Apple engine
+    /// revises a growing sentence; Whisper sends fewer, longer windows.
+    static let patterns: [(String, [String], String)] = [
+        ("apple-like", ["the harbor", "the harbor opens", "the harbor opens at dawn", "the harbor opens at dawn and the",
+                        "the harbor opens at dawn and the boats", "the harbor opens at dawn and the boats go out"],
+         "The harbor opens at dawn and the boats go out."),
+        ("whisper-like", ["the harbor opens at dawn", "the harbor opens at dawn and the boats go out"],
+         "The harbor opens at dawn and the boats go out."),
+    ]
+
+    /// One Type-mode or Off take through the real coordinator, injector and
+    /// HUD against a TextEdit document, for each scripted pattern. Reports
+    /// what the person sees at the end (card or capsule, reason line, Grant
+    /// offer, how many words the card holds) and what the document holds.
+    func takes() async -> [String: Any] {
+        var result: [String: Any] = ["trusted": AXIsProcessTrusted()]
+        let wasRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.TextEdit").isEmpty
+        let tag = String(UUID().uuidString.prefix(6))
+        let file = folder.appendingPathComponent("pflow-fictional-take-\(tag).txt")
+        try? "Dear Sam,\n\n".write(to: file, atomically: true, encoding: .utf8)
+        let launchArguments = wasRunning ? [] : ["-ApplePersistenceIgnoreState", "YES"]
+        guard let app = await open([file], bundle: "com.apple.TextEdit", arguments: launchArguments) else {
+            return ["error": "could not open TextEdit"]
+        }
+        let pid = app.processIdentifier
+        _ = await waitFor(10) { windowTitle(pid)?.contains("pflow-fictional-take-\(tag)") == true }
+        await pause(1)
+        var runs: [[String: Any]] = []
+        for mode in [LiveTextMode.typeInApp, .off] {
+            for (pattern, updates, final) in Self.patterns {
+                _ = await activate(app)
+                await pause(0.5)
+                let session = ScriptedSession(updates: updates, final: final)
+                let injector = TextInjector()
+                let hud = HUDController()
+                let history = MemoryHistory()
+                let coordinator = RecordingCoordinator(
+                    session: session, injector: injector, history: history, hud: hud, sounds: SilentSounds(),
+                    cleaner: NoCleanup(), cleanupEnabled: { false }, vocabulary: { [] }, deviceName: { nil },
+                    liveTextMode: { mode })
+                var missing = 0
+                coordinator.accessibilityMissing = { missing += 1 }
+                var record: [String: Any] = ["mode": mode.rawValue, "pattern": pattern]
+                record["frontmostIsTextEdit"] = frontmost() == pid
+                coordinator.begin()
+                await pause(0.3)
+                record["startedAsCard"] = hud.model.livePreview
+                record["startNote"] = hud.model.liveNote ?? NSNull()
+                record["grantOfferedAtStart"] = hud.model.needsAccessibility
+                if mode.showsPreview {
+                    for update in updates {
+                        session.emit(update)
+                        await pause(0.25)
+                    }
+                }
+                record["wordsShownLive"] = hud.model.partial
+                await coordinator.finish()
+                record["outcome"] = coordinator.lastOutcome.map { "\($0)" } ?? "none"
+                record["endsAsCard"] = hud.model.livePreview
+                record["endPhase"] = "\(hud.model.phase)"
+                record["reason"] = hud.model.reason ?? NSNull()
+                record["grantOffered"] = hud.model.needsAccessibility
+                record["cardWords"] = hud.model.copyOffer.map { $0.split(separator: " ").count } ?? 0
+                record["cardShowsAll"] = hud.model.copyOffer.map { hud.model.partial == $0 } ?? false
+                record["accessibilityMissingCalls"] = missing
+                record["historySaved"] = history.saved
+                record["documentReadable"] = focused(pid).flatMap { value($0) } != nil
+                record["document"] = focused(pid).flatMap { value($0) } ?? NSNull()
+                note("take \(mode.rawValue)/\(pattern): outcome \(record["outcome"] ?? "") card \(hud.model.livePreview) reason \(hud.model.reason ?? "-") grant \(hud.model.needsAccessibility)")
+                hud.hide(after: 0)
+                runs.append(record)
+                await pause(0.5)
+            }
+        }
+        result["runs"] = runs
+        if !wasRunning {
+            // Only the instance this harness launched; a dirty document would
+            // otherwise keep a Save sheet open on the person's screen.
+            app.forceTerminate()
+        }
+        result["quit"] = app.isTerminated
+        return result
+    }
+
     // MARK: Safari
 
     func safari() async -> [String: Any] {
@@ -480,5 +570,49 @@ private final class Runner {
         result["quit"] = app.isTerminated
         return result
     }
+}
+
+/// Transcript updates on a script, in place of an engine.
+@MainActor
+private final class ScriptedSession: DictationSessioning {
+    var onLevel: ((Float) -> Void)?
+    var onTranscript: ((TranscriptUpdate) -> Void)?
+    var onLiveStopped: (() -> Void)?
+    private let final: String
+    private var take = ""
+    private var sequence = 0
+
+    init(updates: [String], final: String) { self.final = final }
+
+    func start(take: String, live: Bool) async throws { self.take = take; sequence = 0 }
+    func emit(_ text: String) {
+        onTranscript?(TranscriptUpdate(session: take, sequence: sequence, text: text, isFinal: false))
+        sequence += 1
+    }
+    func stop() async throws -> TranscriptUpdate {
+        defer { sequence += 1 }
+        return TranscriptUpdate(session: take, sequence: sequence, text: final, isFinal: true)
+    }
+    func cancel() async {}
+    func setCapturePaused(_ paused: Bool) throws {}
+}
+
+@MainActor
+private final class MemoryHistory: HistoryStoring {
+    var saved: [String] = []
+    func save(text: String, duration: Double?, device: String?, spokenWordCount: Int?, applicationName: String?, applicationBundleID: String?) {
+        saved.append(text)
+    }
+}
+
+private struct SilentSounds: SoundPlaying {
+    func playStart() {}
+    func playStop() {}
+}
+
+@MainActor
+private final class NoCleanup: TranscriptCleaning {
+    var isAvailable: Bool { false }
+    func process(_ text: String, cleanup: Bool, vocabulary: [String]) async -> String { text }
 }
 #endif

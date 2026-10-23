@@ -21,6 +21,9 @@ final class HUDModel {
     static let previewWidth: CGFloat = 380
     /// The app's Appearance choice for the preview; nil follows the system.
     var colorScheme: ColorScheme?
+    /// The app's waveform choice and colour palette, read when the take starts.
+    var waveformStyle: WaveformStyle = .wave
+    var palette: ThemePalette = .pesh
     var device: String?
 
     var onConfirm: (() -> Void)?
@@ -31,4 +34,10 @@ final class HUDModel {
     var copied = false
     var onCopy: (() -> Void)?
     var onClose: (() -> Void)?
+    /// Why the words did not go in, in one plain line on the card; nil when they did.
+    var reason: String?
+    /// This build is not trusted for Accessibility: the card says so and
+    /// offers the one-press Grant.
+    var needsAccessibility = false
+    var onGrantAccessibility: (() -> Void)?
 }

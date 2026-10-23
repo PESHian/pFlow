@@ -41,6 +41,12 @@ final class RecordingCoordinator {
     // and looks for the field again until it is there or time runs out.
     private var awaitingTyping = false
     private var typingRetryTask: Task<Void, Never>?
+    /// This build was not trusted for Accessibility when the take started:
+    /// no live typing and no paste can happen, so the card says so.
+    private var takeAccessibilityOff = false
+    /// Called once per take that found Accessibility off, after the take, so
+    /// the app can open the setup page the first time it happens.
+    var accessibilityMissing: (() -> Void)?
     private let typingRetryEvery: Duration
     private let typingRetryDeadline: TimeInterval
 
@@ -92,10 +98,21 @@ final class RecordingCoordinator {
                 liveNote = stop.previewNote
             }
         }
+        // Checked fresh every take, never cached: a grant made since the
+        // last take counts now. Off, the words show on the card with the
+        // reason and the Grant button; the final text ends on the Copy card.
+        takeAccessibilityOff = !injector.accessibilityGranted
+        if takeAccessibilityOff {
+            NSLog("pFlow: Accessibility is off for this build; words cannot be typed or pasted this take")
+        }
+        let accessibilityCard = takeAccessibilityOff && takeLiveTextMode.showsPreview
+        if accessibilityCard { liveNote = Self.needsAccessibilityNote }
         pauseCapture(false)
         sounds.playStart()
-        hud.show(device: recordingDevice, livePreview: takeLiveTextMode.showsCard(typingLive: typingLive || awaitingTyping))
+        hud.show(device: recordingDevice,
+                 livePreview: takeLiveTextMode.showsCard(typingLive: typingLive || awaitingTyping) || accessibilityCard)
         hud.setPhase(.listening)
+        if takeAccessibilityOff { hud.setNeedsAccessibility(true) }
         if let liveNote { hud.setLiveNote(liveNote) }
         startTask = Task { [weak self] in
             guard let self else { return }
@@ -112,6 +129,8 @@ final class RecordingCoordinator {
             }
         }
     }
+
+    static let needsAccessibilityNote = "pFlow needs Accessibility to type"
 
     func finish() async {
         guard state == .recording else { return }
@@ -401,8 +420,8 @@ final class RecordingCoordinator {
                 switch injector.finalizeLive(session: take, text: text) {
                 case .applied: outcome = .pasted
                 case .notTyped: outcome = await injector.deliver(text, formatted: formattedText)
-                case .kept:
-                    outcome = .savedToHistory
+                case .kept(let stop):
+                    outcome = .savedToHistory(.typingStopped(stop))
                     typingStopped = true
                 }
             } else {
@@ -418,7 +437,7 @@ final class RecordingCoordinator {
                          spokenWordCount: spokenWordCount, applicationName: applicationName,
                          applicationBundleID: applicationBundleID)
 
-            if typingStopped {
+            if typingStopped, case .savedToHistory(let block) = outcome {
                 // Words pFlow typed stay; the finished text could not go in
                 // safely. The card keeps it with Copy until closed or the next take.
                 // Always the card (the capsule has no words and no Copy), and
@@ -426,8 +445,11 @@ final class RecordingCoordinator {
                 hud.setLivePreview(true)
                 hud.setPartial(text)
                 hud.setPhase(.typingStopped)
+                hud.setReason(block.reason)
+                if block == .typingStopped(.permission) { hud.setNeedsAccessibility(true) }
                 hud.offerCopy(text)
                 state = .idle
+                noteAccessibilityIfMissing()
                 return
             }
             switch outcome {
@@ -435,22 +457,32 @@ final class RecordingCoordinator {
                 hud.hide(after: 0)
             case .unconfirmed:
                 hud.hide(after: 0)
-            case .savedToHistory:
-                // The words did not go in: the card keeps them with Copy, so
-                // the person never has to dig them out of History.
+            case .savedToHistory(let block):
+                // The words did not go in: the card keeps them with Copy and
+                // names the reason, so the person never has to dig them out
+                // of History or guess what went wrong.
                 hud.setLivePreview(true)
                 hud.setPartial(text)
                 hud.setPhase(.savedToHistory)
+                hud.setReason(block.reason)
+                if block == .accessibilityOff { hud.setNeedsAccessibility(true) }
                 hud.offerCopy(text)
             case .leftOnClipboard, .blockedBySecureInput:
                 hud.setPhase(.copied)
                 hud.hide(after: 3)
             }
+            noteAccessibilityIfMissing()
         } catch {
             NSLog("pFlow: failed to finish recording: \(error.localizedDescription)")
             keepRecoverableText(after: error, duration: duration)
         }
         state = .idle
+    }
+
+    private func noteAccessibilityIfMissing() {
+        guard takeAccessibilityOff else { return }
+        takeAccessibilityOff = false
+        accessibilityMissing?()
     }
 
     /// Recognition failed after words were already recognized. Keep those

@@ -42,10 +42,17 @@ protocol HUDControlling: AnyObject {
     /// Keeps the card up with the finished words and a Copy button, because
     /// pFlow could not put them in. Nothing touches the clipboard until Copy.
     func offerCopy(_ text: String)
+    /// The one plain line naming why the words did not go in. Cleared by `show`.
+    func setReason(_ reason: String?)
+    /// Says this build is not trusted for Accessibility and offers Grant on
+    /// the card, for the whole take. Cleared by `show`.
+    func setNeedsAccessibility(_ on: Bool)
 }
 
 extension HUDControlling {
     func show(device: String?) { show(device: device, livePreview: false) }
     func setLiveNote(_ note: String?) {}
     func setLivePreview(_ on: Bool) {}
+    func setReason(_ reason: String?) {}
+    func setNeedsAccessibility(_ on: Bool) {}
 }

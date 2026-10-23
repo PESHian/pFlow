@@ -31,13 +31,13 @@ struct ClipboardSettingsTests {
         let change = board.changeCount
         let injector = TextInjector(pasteboard: board)
         injector.copyToClipboard = { false }
-        #expect(await injector.deliver("dictated fix") == .savedToHistory)
+        #expect(await injector.deliver("dictated fix").savedToHistory)
         #expect(board.changeCount == change)
         #expect(board.data(forType: .png) == png)
         #expect(board.string(forType: .string) == "copied screenshot")
         board.clearContents(); board.setString("newer copy", forType: .string)
         let newerChange = board.changeCount
-        #expect(await injector.deliver("another fix") == .savedToHistory)
+        #expect(await injector.deliver("another fix").savedToHistory)
         #expect(board.changeCount == newerChange)
         #expect(board.string(forType: .string) == "newer copy")
     }
@@ -106,5 +106,13 @@ struct ClipboardSettingsTests {
         let text = String(repeating: "Officer Lee: café, VPN, 👩🏽‍💻.\nEvidence: 1404.\n", count: 2000)
         _ = await injector.deliver(text)
         #expect(board.string(forType: .string) == text)
+    }
+}
+
+extension InjectionOutcome {
+    /// The words stayed in History only, whatever the reason named on the card.
+    var savedToHistory: Bool {
+        if case .savedToHistory = self { return true }
+        return false
     }
 }

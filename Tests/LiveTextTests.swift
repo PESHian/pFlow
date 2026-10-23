@@ -318,7 +318,7 @@ struct LiveTextTests {
         let hud = HUDController()
         hud.show(device: nil, livePreview: false)
         let panel = try #require(hud.panelForTesting)
-        #expect(panel.frame.size == NSSize(width: 120, height: 32))
+        #expect(panel.frame.size == NSSize(width: RecordingHUDView.capsuleSize.width, height: RecordingHUDView.capsuleSize.height))
         hud.hide(after: 0)
 
         hud.show(device: nil, livePreview: true)
@@ -331,7 +331,7 @@ struct LiveTextTests {
         #expect(NSApp.keyWindow !== panel)
         #expect(panel.collectionBehavior.contains(.fullScreenAuxiliary))
         #expect(panel.isVisible)
-        #expect(panel.frame.width > 120 && panel.frame.height > 32)
+        #expect(panel.frame.width > RecordingHUDView.capsuleSize.width && panel.frame.height > RecordingHUDView.capsuleSize.height)
         let screen = try #require(panel.screen)
         #expect(screen.visibleFrame.contains(panel.frame))
         #expect(hud.model.partial.hasSuffix("kite60"))
@@ -345,10 +345,48 @@ struct LiveTextTests {
         hud.show(device: nil, livePreview: false)
         #expect(hud.model.partial.isEmpty)
         #expect(!hud.model.livePreview)
-        #expect(panel.frame.size == NSSize(width: 120, height: 32))
+        #expect(panel.frame.size == NSSize(width: RecordingHUDView.capsuleSize.width, height: RecordingHUDView.capsuleSize.height))
         hud.setPartial("must not appear when Off")
         #expect(hud.model.partial.isEmpty)
         hud.hide(after: 0)
+    }
+
+    /// Words that could not go in are offered whole: the card holds all of
+    /// them (the live tail is for live words only), the text scrolls instead
+    /// of growing past about ten lines, and Copy puts all of it on the clipboard.
+    @Test func copyCardShowsAllOfTheTextAndCopiesAllOfIt() throws {
+        let board = NSPasteboard(name: .init("pflow.copycard.tests.\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        let words = (1...600).map { "word\($0)" }.joined(separator: " ")
+        let hud = HUDController(pasteboard: board)
+        hud.show(device: nil, livePreview: false)
+        hud.setLivePreview(true)
+        hud.setPartial(words)
+        #expect(hud.model.partial.hasPrefix("…"), "live words show as a tail")
+        hud.setReason("Accessibility is off, so pFlow could not put the text in.")
+        hud.offerCopy(words)
+        #expect(hud.model.partial == words, "the card holds every word once they are offered")
+        hud.model.onCopy?()
+        #expect(board.string(forType: .string) == words, "Copy puts the whole text on the clipboard")
+        #expect(hud.model.copied)
+
+        let view = NSHostingView(rootView: RecordingHUDView(model: hud.model))
+        view.frame = NSRect(origin: .zero, size: view.fittingSize)
+        let window = NSWindow(contentRect: view.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.contentView = view
+        defer { window.contentView = nil }
+        view.layoutSubtreeIfNeeded()
+        func all(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + all($0) } }
+        let scroll = try #require(all(view).compactMap { $0 as? NSScrollView }.first, "the whole text scrolls")
+        let text = try #require(scroll.documentView as? NSTextView)
+        #expect(text.string == words && text.isSelectable && !text.isEditable, "all of the words, selectable")
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let line = ceil(font.ascender - font.descender + font.leading)
+        #expect(text.frame.height > scroll.contentView.bounds.height + line, "600 words are taller than the box, so it scrolls: \(text.frame.height) in \(scroll.contentView.bounds.height)")
+        #expect(scroll.frame.height <= line * CGFloat(RecordingHUDView.wholeTextLines) + 1, "the box holds about ten lines: \(scroll.frame.height)")
+        #expect(view.fittingSize.height < line * CGFloat(RecordingHUDView.wholeTextLines) + 160, "the card never grows past the box plus its rows: \(view.fittingSize.height)")
+        hud.hide(after: 0)
+        #expect(hud.model.reason == nil && hud.model.copyOffer == nil)
     }
 
     @Test func cardKeepsOneSizeWhileWordsGrowAndShowsTheNoteInItsHeader() throws {

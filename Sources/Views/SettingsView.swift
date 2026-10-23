@@ -34,6 +34,7 @@ struct SettingsView: View {
             engine: $app.transcriptionEngine,
             idle: app.coordinator.state == .idle,
             whisper: whisper.isReady ? .ready : whisper.isDownloading ? .downloading : .missing,
+            whisperReceivedBytes: whisper.receivedBytes,
             whisperError: whisper.errorMessage,
             downloadWhisper: { whisper.download() },
             cancelWhisperDownload: { whisper.cancelDownload() },
@@ -69,6 +70,8 @@ struct SettingsPageModel {
     var engine: Binding<TranscriptionEngine>
     var idle = true
     var whisper: WhisperState = .missing
+    /// Bytes downloaded so far, for the progress line while `.downloading`.
+    var whisperReceivedBytes: Int64 = 0
     var whisperError: String?
     var downloadWhisper: () -> Void = {}
     var cancelWhisperDownload: () -> Void = {}
@@ -87,6 +90,49 @@ struct SettingsPageModel {
     var permissionsMissing = false
     var reviewPermissions: () -> Void = {}
     var checkForUpdates: () -> Void = {}
+}
+
+/// The one rule for every download control in Settings: what the Speech
+/// recognition card shows for the Whisper model in each state. Before the
+/// download, one "Download (488 MB)" button; while it runs, the bar and the
+/// plain byte count directly under it and one "Cancel"; once it is here, a
+/// "Downloaded" line and no button. Nothing is shown that cannot be acted on
+/// right now: the person may be tired or in a hurry.
+struct DownloadControls: Equatable {
+    enum Button: Equatable {
+        case download, cancel
+        var title: String {
+            switch self {
+            case .download: return "Download (\(DownloadControls.size))"
+            case .cancel: return "Cancel"
+            }
+        }
+    }
+
+    let line: String
+    let button: Button?
+    /// The progress bar is drawn above the line.
+    let bar: Bool
+    let done: Bool
+
+    static let total = WhisperModelStore.expectedBytes
+    static var size: String { megabytes(total) }
+
+    static func megabytes(_ bytes: Int64) -> String {
+        "\(Int((Double(bytes) / 1_000_000).rounded())) MB"
+    }
+
+    static func describe(_ state: SettingsPageModel.WhisperState, received: Int64) -> DownloadControls {
+        switch state {
+        case .missing:
+            return DownloadControls(line: "Whisper Small supports multiple languages. Download it once; recordings stay on this Mac.",
+                                    button: .download, bar: false, done: false)
+        case .downloading:
+            return DownloadControls(line: "Downloading… \(megabytes(received)) of \(size)", button: .cancel, bar: true, done: false)
+        case .ready:
+            return DownloadControls(line: "Downloaded · \(size) · works offline", button: nil, bar: false, done: true)
+        }
+    }
 }
 
 /// The Settings page content, in order. Each section must fit the window at
@@ -278,21 +324,26 @@ struct SettingsContent: View {
                     Text("Both run on this Mac. Apple Intelligence handles cleanup with either engine.")
                         .peshText(12).foregroundStyle(.secondary)
                     if model.engine.wrappedValue == .whisper {
-                        switch model.whisper {
-                        case .ready:
-                            Label("Whisper is ready · works offline", systemImage: "checkmark.circle")
-                                .peshText(12).foregroundStyle(.secondary)
-                        case .downloading:
-                            HStack {
-                                ProgressView().controlSize(.small)
-                                Text("Downloading and checking the model…").peshText(12)
-                                Spacer()
-                                Button("Cancel", action: model.cancelWhisperDownload)
+                        // One state, one set of controls: nothing is shown
+                        // that cannot be acted on right now (no Cancel unless
+                        // a download is running, no Download once it is here).
+                        let controls = DownloadControls.describe(model.whisper, received: model.whisperReceivedBytes)
+                        if controls.bar {
+                            ProgressView(value: Double(min(model.whisperReceivedBytes, DownloadControls.total)),
+                                         total: Double(DownloadControls.total))
+                                .progressViewStyle(.linear)
+                                .tint(Theme.accent)
+                        }
+                        HStack {
+                            if controls.done {
+                                Label(controls.line, systemImage: "checkmark.circle").peshText(12).foregroundStyle(.secondary)
+                            } else {
+                                Text(controls.line).peshText(12).foregroundStyle(controls.bar ? .primary : .secondary)
                             }
-                        case .missing:
-                            Text("Whisper Small supports multiple languages. Download it once (488 MB); recordings stay on this Mac.")
-                                .peshText(12).foregroundStyle(.secondary)
-                            Button("Download Whisper model", action: model.downloadWhisper)
+                            Spacer()
+                            if let button = controls.button {
+                                Button(button.title, action: button == .cancel ? model.cancelWhisperDownload : model.downloadWhisper)
+                            }
                         }
                         if let message = model.whisperError {
                             Text(message).peshText(12).foregroundStyle(.red)

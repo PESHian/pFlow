@@ -83,6 +83,66 @@ struct SettingsLooksTests {
         }
     }
 
+    private func sectionHeights(_ state: SettingsPageModel.WhisperState, received: Int64 = 0) -> [String: CGFloat] {
+        var model = SettingsLayoutTests.fixture(engine: .whisper)
+        model.whisper = state
+        model.whisperReceivedBytes = received
+        model.whisperError = nil
+        var heights: [String: CGFloat] = [:]
+        for section in SettingsContent(model: model).sections {
+            let view = NSHostingView(rootView: section.view.frame(width: MainWindowView.minimumSize.width - 2 * Theme.s5))
+            heights[section.name] = view.fittingSize.height
+        }
+        return heights
+    }
+
+    /// One state, one set of controls, in the same card as the engine choice:
+    /// before the download one "Download (488 MB)" button; while it runs the
+    /// byte count directly under it and one "Cancel"; once it is here a
+    /// "Downloaded" line and no button at all. Nothing is shown that cannot
+    /// be acted on right now. The progress lives in the Speech recognition
+    /// card: that section alone changes height between the states.
+    @Test func whisperDownloadShowsOnlyTheControlsThatMakeSenseNow() throws {
+        let missing = DownloadControls.describe(.missing, received: 0)
+        #expect(missing.button == .download && missing.button?.title == "Download (488 MB)")
+        #expect(!missing.bar && !missing.done && !missing.line.contains("Downloading"))
+
+        let downloading = DownloadControls.describe(.downloading, received: 120_000_000)
+        #expect(downloading.button == .cancel && downloading.button?.title == "Cancel")
+        #expect(downloading.line == "Downloading… 120 MB of 488 MB" && downloading.bar)
+
+        let ready = DownloadControls.describe(.ready, received: 0)
+        #expect(ready.button == nil, "nothing to press once the model is here")
+        #expect(ready.line == "Downloaded · 488 MB · works offline" && ready.done && !ready.bar)
+
+        let before = sectionHeights(.missing), during = sectionHeights(.downloading, received: 120_000_000), after = sectionHeights(.ready)
+        #expect(during["Speech recognition"]! > before["Speech recognition"]! + 4, "the bar appears inside the Speech recognition card")
+        #expect(after["Speech recognition"]! < during["Speech recognition"]!, "the bar and Cancel go away once downloaded")
+        for name in before.keys where name != "Speech recognition" {
+            #expect(before[name] == during[name] && during[name] == after[name], "\(name) must not change with the download")
+        }
+
+        if let shots = Self.shots {
+            let folder = URL(fileURLWithPath: shots)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            for (state, name, received) in [(SettingsPageModel.WhisperState.missing, "before", Int64(0)),
+                                            (.downloading, "downloading", Int64(120_000_000)), (.ready, "after", Int64(0))] {
+                var model = SettingsLayoutTests.fixture(engine: .whisper)
+                model.whisper = state
+                model.whisperReceivedBytes = received
+                model.whisperError = nil
+                let section = SettingsContent(model: model).sections.first { $0.name == "Speech recognition" }!
+                for (look, appearance) in Self.looks where !look.contains("contrast") {
+                    for width in [MainWindowView.minimumSize.width, 760] {
+                        let rep = try render(section.view.padding(Theme.s5).background(PeshBackdrop()), width: width, look: appearance)
+                        try rep.representation(using: .png, properties: [:])?
+                            .write(to: folder.appending(path: "download-\(name)-\(Int(width))-\(look).png"))
+                    }
+                }
+            }
+        }
+    }
+
     /// The Live text control is built in one place, under its own heading,
     /// right after Shortcut, and nowhere else.
     @Test func settingsHasLiveTextExactlyOnce() throws {

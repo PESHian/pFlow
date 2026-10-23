@@ -5,6 +5,17 @@ final class HUDController: HUDControlling {
     let model = HUDModel()
     private var panel: HUDPanel?
     private var hideTask: Task<Void, Never>?
+    /// Where Copy writes; tests pass a private pasteboard.
+    private let pasteboard: NSPasteboard
+
+    init(pasteboard: NSPasteboard = .general) {
+        self.pasteboard = pasteboard
+    }
+
+    /// The one-press Accessibility Grant, run from the card's button.
+    func setGrantAccessibility(_ action: @escaping () -> Void) {
+        model.onGrantAccessibility = action
+    }
 
     // Fast attack so speech registers immediately, slower release so bars glide back instead of snapping to zero between words.
     private var smoothedLevel: Float = 0
@@ -21,7 +32,6 @@ final class HUDController: HUDControlling {
         model.copied = false
         model.onCopy = { [weak self] in
             guard let self, let words = model.copyOffer else { return }
-            let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
             pasteboard.setString(words, forType: .string)
             model.copied = true
@@ -47,8 +57,12 @@ final class HUDController: HUDControlling {
         model.liveNote = nil
         model.copyOffer = nil
         model.copied = false
+        model.reason = nil
+        model.needsAccessibility = false
         model.livePreview = livePreview
         model.colorScheme = AppearanceSettings.shared.mode.colorScheme
+        model.waveformStyle = AppearanceSettings.shared.waveformStyle
+        model.palette = AppearanceSettings.shared.palette
         model.level = 0
         model.levels = Array(repeating: 0, count: HUDModel.waveformSampleCount)
         model.phase = .listening
@@ -95,6 +109,14 @@ final class HUDController: HUDControlling {
         model.liveNote = note
     }
 
+    func setReason(_ reason: String?) {
+        model.reason = reason
+    }
+
+    func setNeedsAccessibility(_ on: Bool) {
+        model.needsAccessibility = on
+    }
+
     func setLivePreview(_ on: Bool) {
         guard model.livePreview != on else { return }
         model.livePreview = on
@@ -123,6 +145,8 @@ final class HUDController: HUDControlling {
         model.copyOffer = nil
         model.copied = false
         model.liveNote = nil
+        model.reason = nil
+        model.needsAccessibility = false
     }
 
     var panelForTesting: HUDPanel? { panel }

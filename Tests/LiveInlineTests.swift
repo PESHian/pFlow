@@ -112,6 +112,8 @@ final class LiveFakeInjector: TextInjecting {
     var fieldReadyAfterRetries: Int?
     /// What `retryLive` finds instead of the field, once it looks.
     var retryStop: LiveInlineOwnership.Stop?
+    /// Models a build that lost its Accessibility grant: no typing, no paste.
+    var accessibilityGranted = true
     private(set) var retries = 0
     private var live: LiveInlineSlot = { var slot = LiveInlineSlot(); slot.settle = {}; return slot }()
 
@@ -119,6 +121,7 @@ final class LiveFakeInjector: TextInjecting {
 
     func captureTarget() {}
     func deliver(_ text: String) async -> InjectionOutcome {
+        guard accessibilityGranted else { return .savedToHistory(.accessibilityOff) }
         delivered.append(text)
         return .pasted
     }
@@ -394,7 +397,122 @@ struct LiveInlineTests {
         #expect(history.saved == ["thanks for the map and the compass"])
         #expect(hud.phases.last == .typingStopped)
         #expect(hud.offers == ["thanks for the map and the compass"], "the card keeps the finished text with Copy")
+        #expect(hud.reasons.last == "The cursor moved, so the finished text was not put in.", "the card names the real reason")
         #expect(hud.hideDelays.last != 4, "the card stays until closed or the next take")
+    }
+
+    /// Typing began but no update produced a write (the recognizer never
+    /// settled two updates on the same words), and at the end the field
+    /// cannot be read (an Electron field whose tree went away). Nothing of
+    /// pFlow's can be in it, so the finished text goes in the normal way,
+    /// exactly as the old Preview mode did; the paste path has its own checks.
+    @Test func aTakeThatNeverWroteStillInsertsTheFinishedTextWhenTheFieldReadsBackUnreadable() async {
+        let field = SimulatedTextField("Chat: ")
+        let session = FakeSession()
+        let history = FakeHistory()
+        let hud = FakeHUD()
+        session.textToReturn = "meet at the lighthouse at noon"
+        let (coordinator, injector) = typingCoordinator(field, session: session, history: history, hud: hud)
+        coordinator.begin()
+        await Task.yield()
+        session.emit("meet at")
+        #expect(field.replaced.isEmpty, "one update settles nothing yet")
+        session.onStop = { field.current.value = nil }
+        await coordinator.finish()
+        #expect(field.replaced.isEmpty, "never wrote")
+        #expect(injector.delivered == ["meet at the lighthouse at noon"], "the final goes in like Preview mode")
+        #expect(hud.phases.last != .typingStopped && hud.offers.isEmpty, "no Copy card for words that could not have landed")
+        #expect(history.saved == ["meet at the lighthouse at noon"])
+    }
+
+    /// The same unreadable field after a write the app refused keeps the safe
+    /// default: a refused Accessibility call can still land, and an unreadable
+    /// field cannot prove it did not, so nothing is pasted on top; the card
+    /// keeps the words with Copy.
+    @Test func aRefusedWriteWithAnUnreadableFieldKeepsTheCardAndPastesNothing() async {
+        let field = SimulatedTextField("Chat: ")
+        field.onReplace = { _, _, _ in false }
+        let session = FakeSession()
+        let hud = FakeHUD()
+        session.textToReturn = "meet at the lighthouse at noon"
+        let (coordinator, injector) = typingCoordinator(field, session: session, hud: hud)
+        coordinator.begin()
+        await Task.yield()
+        session.emit("meet at")
+        session.emit("meet at the lighthouse")
+        #expect(field.replaced.count == 1, "one refused write")
+        session.onStop = { field.current.value = nil }
+        await coordinator.finish()
+        #expect(injector.delivered.isEmpty, "nothing pasted on top of a field that cannot be read")
+        #expect(hud.phases.last == .typingStopped && hud.offers == ["meet at the lighthouse at noon"])
+        #expect(hud.reasons.last == "pFlow could not check this field, so the finished text was not put in.")
+    }
+
+    /// A build that lost its Accessibility grant (every test build is signed
+    /// per build) can neither type nor paste. Type mode says so on the card
+    /// from the first word, with the one-press Grant, and the finished text
+    /// ends on the Copy card naming Accessibility as the reason, never a
+    /// generic "saved in History". The next take checks again; nothing is cached.
+    @Test func accessibilityOffShowsTheCardWithGrantFromTheStartAndNamesItAtTheEnd() async {
+        let field = SimulatedTextField("Notes: ")
+        field.current.trusted = false
+        let session = FakeSession()
+        let history = FakeHistory()
+        let hud = FakeHUD()
+        session.textToReturn = "the harbor opens at dawn"
+        let (coordinator, injector) = typingCoordinator(field, session: session, history: history, hud: hud)
+        injector.accessibilityGranted = false
+        var missing = 0
+        coordinator.accessibilityMissing = { missing += 1 }
+        coordinator.begin()
+        await Task.yield()
+        #expect(hud.previews == [true], "the card, not the capsule: the words cannot go in the app")
+        #expect(hud.notes.last == "pFlow needs Accessibility to type")
+        #expect(hud.accessibilityOffers == [true], "the Grant button is on the card for the whole take")
+        session.emit("the harbor")
+        session.emit("the harbor opens")
+        #expect(field.replaced.isEmpty && hud.partials.last == "the harbor opens")
+        await coordinator.finish()
+        #expect(injector.delivered.isEmpty)
+        #expect(hud.phases.last == .savedToHistory && hud.offers == ["the harbor opens at dawn"])
+        #expect(hud.reasons.last == "Accessibility is off, so pFlow could not put the text in.")
+        #expect(hud.accessibilityOffers.last == true)
+        #expect(missing == 1, "the app is told once per take so it can open the setup page")
+        #expect(history.saved == ["the harbor opens at dawn"])
+
+        // The grant arrives between takes: the next take types, no relaunch.
+        injector.accessibilityGranted = true
+        field.current.trusted = true
+        coordinator.begin()
+        await Task.yield()
+        #expect(hud.previews == [true, false], "trusted again: the capsule, typing in the app")
+        #expect(hud.accessibilityOffers.last == true, "no new Grant offer this take")
+        session.emit("see you")
+        session.emit("see you soon")
+        #expect(field.value == "Notes: see you")
+        await coordinator.finish()
+        #expect(missing == 1)
+    }
+
+    /// Live text Off with Accessibility off: the capsule as always while
+    /// recording, then the Copy card names Accessibility and offers Grant.
+    @Test func accessibilityOffWithLiveTextOffNamesItOnTheCopyCard() async {
+        let session = FakeSession()
+        let hud = FakeHUD()
+        let injector = LiveFakeInjector(field: nil)
+        injector.accessibilityGranted = false
+        session.textToReturn = "the harbor opens at dawn"
+        let coordinator = RecordingCoordinator(
+            session: session, injector: injector, history: FakeHistory(), hud: hud, sounds: FakeSounds(),
+            cleaner: FakeCleaner(), cleanupEnabled: { false }, vocabulary: { [] }, deviceName: { nil },
+            liveTextMode: { .off })
+        coordinator.begin()
+        await Task.yield()
+        #expect(hud.previews == [false])
+        await coordinator.finish()
+        #expect(hud.phases.last == .savedToHistory && hud.livePreview)
+        #expect(hud.reasons.last == InsertionBlock.accessibilityOff.reason)
+        #expect(hud.accessibilityOffers.last == true)
     }
 
     /// An app that refuses every write call (returns an error, field

@@ -95,6 +95,8 @@ final class AppState {
     private let escapeMonitor = EscapeMonitor()
     private let injector = TextInjector()
     private let hud = HUDController()
+    /// The setup page is opened by itself once per launch for a missing Accessibility grant.
+    private var accessibilityWarned = false
     private let sounds = SystemSoundPlayer()
     let cleanup = TranscriptCleanupService()
     private let deviceObserver = DefaultInputObserver()
@@ -173,6 +175,19 @@ final class AppState {
         // Accessibility takes effect live — no restart needed. Observing simply
         // keeps the UI honest the moment the user grants it.
         permissions.startObserving()
+
+        // A test build is signed per build, so a grant made for the previous
+        // one does not cover this one. The card carries the one-press Grant,
+        // and the setup page opens by itself the first time a take finds
+        // Accessibility off.
+        hud.setGrantAccessibility { [weak self] in
+            Task { await self?.permissions.grantAccessibility() }
+        }
+        coordinator.accessibilityMissing = { [weak self] in
+            guard let self, !accessibilityWarned else { return }
+            accessibilityWarned = true
+            openOnboarding()
+        }
 
         hotkeys.disable()
         modifierHotkeys.recordingIsBusy = { [weak self] in self?.coordinator.state != .idle }
