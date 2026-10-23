@@ -41,7 +41,9 @@ internal static partial class Program
             try {
                 settings.Show(); settings.UpdateLayout(); Drain();
                 if (Environment.GetEnvironmentVariable("PFLOW_SHOTS") is { } shots) {
-                    Descendants<TextBlock>(settings).First(t => t.Text == "Speech model").BringIntoView(); settings.UpdateLayout(); Drain();
+                    // The card from its "Speech model" label down: tiles, the line under them and the model rows.
+                    var page = Descendants<ScrollViewer>(settings).First(x => x.Content is StackPanel); var label = Descendants<TextBlock>(settings).First(t => t.Text == "Speech model");
+                    page.ScrollToVerticalOffset(page.VerticalOffset + label.TranslatePoint(new Point(0, 0), page).Y - 12); settings.UpdateLayout(); Drain();
                     Shoot(settings, Path.Combine(shots, $"speech-models-{theme}.png"), theme == "light");
                 }
                 var tiles = Descendants<RadioButton>(settings).Where(r => r.GroupName == "SpeechModel").ToList();
