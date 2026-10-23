@@ -328,8 +328,12 @@ internal static partial class Program
                 string before = Read(field!);
                 var (_, slot, refused) = Begin("edge");
                 slot.Reconcile("edge", "harbor lights"); slot.Reconcile("edge", "harbor lights glow");
-                Check($"Edge {label} uses the preview ({refused})", refused == LiveStop.Unsupported && Read(field!) == before);
-                matrix.Add($"Edge {label} (Chromium, file:// page): Preview fallback, page unchanged");
+                // 0.1.27: a readable Edge field takes live words as typed characters (LiveKeyField), and Cancel takes exactly them back out.
+                string typed = Read(field!);
+                var (cancel, stop) = slot.Cancel("edge"); await Task.Delay(300);
+                Check($"Edge {label} types the settled words live and takes them back out on cancel ({refused?.ToString() ?? "typing"}, {cancel})",
+                    refused == null && typed == before + "harbor lights" && cancel == LiveCancel.Removed && stop == null && Read(field!) == before);
+                matrix.Add($"Edge {label} (Chromium, file:// page): typed live with keys, read back, removed on cancel");
             }
             if (window.TryGetCurrentPattern(WindowPattern.Pattern, out var pattern)) ((WindowPattern)pattern).Close();
         } finally {
