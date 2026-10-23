@@ -422,6 +422,8 @@ internal static partial class Program
                             Check($"a composing input language at take start: no key typing ({why})", why.Contains("input method"));
                         }
                         PostMessage(page.Window, 0x0050, IntPtr.Zero, LoadKeyboardLayout("00000409", 0)); await Task.Delay(500);
+                        // The Japanese layout leaves the session's list again.
+                        UnloadKeyboardLayout(japanese);
                     }
                 } finally { LiveKeyField.BeforeSend = null; await ClosePage("edge", page); }
             }
@@ -431,6 +433,7 @@ internal static partial class Program
     static bool WholeWords(string part, string spoken) => part.Length == 0 || spoken.StartsWith(part, StringComparison.Ordinal) && (part.Length == spoken.Length || spoken[part.Length] == ' ');
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr LoadKeyboardLayout(string id, uint flags);
     [DllImport("user32.dll")] static extern IntPtr GetKeyboardLayout(uint thread);
+    [DllImport("user32.dll")] static extern bool UnloadKeyboardLayout(IntPtr layout);
 
     static async Task ReportButton()
     {
