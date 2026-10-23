@@ -1,0 +1,78 @@
+{
+ "description": "Typing at the caret stops live typing; cancel never removes the person's text.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "Shopping: ",
+   "selection": [
+    10,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "apples",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "apples and pears",
+   "expect": {
+    "action": "write",
+    "range": [
+     10,
+     0
+    ],
+    "text": "apples",
+    "confirm": "ok"
+   }
+  },
+  {
+   "op": "edit",
+   "range": [
+    16,
+    0
+   ],
+   "text": "!"
+  },
+  {
+   "op": "update",
+   "text": "apples and pears and",
+   "expect": {
+    "action": "stop",
+    "reason": "text"
+   }
+  },
+  {
+   "op": "final",
+   "text": "Apples and pears.",
+   "expect": {
+    "action": "stop",
+    "reason": "text"
+   }
+  },
+  {
+   "op": "cancel",
+   "expect": {
+    "action": "stop",
+    "reason": "text"
+   },
+   "field": {
+    "value": "Shopping: apples!",
+    "selection": [
+     17,
+     0
+    ]
+   }
+  }
+ ]
+}

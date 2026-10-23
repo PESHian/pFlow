@@ -1,0 +1,44 @@
+{
+  "description": "Chinese: each character is a unit and pieces join without spaces. A sliding window repeats one character, which is dropped.",
+  "language": "zh",
+  "windows": [
+    {
+      "startMs": 0,
+      "endMs": 6000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 6000,
+          "text": "灯塔守护者在清晨点亮了灯",
+          "noSpeechProbability": 0.05
+        }
+      ]
+    },
+    {
+      "startMs": 3000,
+      "endMs": 9000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 3000,
+          "text": "在清晨点亮了灯，",
+          "noSpeechProbability": 0.04
+        },
+        {
+          "fromMs": 3000,
+          "toMs": 6000,
+          "text": "然后去喂海鸥。",
+          "noSpeechProbability": 0.05
+        }
+      ]
+    }
+  ],
+  "expected": {
+    "afterEach": [
+      "灯塔守护者在清晨点亮了灯",
+      "灯塔守护者在清晨点亮了灯，然后去喂海鸥。"
+    ],
+    "text": "灯塔守护者在清晨点亮了灯，然后去喂海鸥。",
+    "committedEndMs": 6000
+  }
+}

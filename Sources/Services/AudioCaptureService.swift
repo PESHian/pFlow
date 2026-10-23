@@ -138,7 +138,7 @@ final class AudioCaptureService {
         } catch {
             // The new device would not start. Tear down rather than leave a
             // half-running graph that looks alive but records nothing.
-            NSLog("Yap: audio engine could not restart after a device change: \(error.localizedDescription)")
+            NSLog("pFlow: audio engine could not restart after a device change: \(error.localizedDescription)")
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
             isRunning = false

@@ -12,6 +12,7 @@ import xml.etree.ElementTree as ET
 parser = argparse.ArgumentParser()
 parser.add_argument('artifacts', type=Path)
 parser.add_argument('output', type=Path)
+parser.add_argument('--setup-stub', type=Path, help='published PFlow.Setup (win-x86, single file); makes pFlow-Setup-<version>-testing.exe')
 args = parser.parse_args()
 scripts = Path(__file__).resolve().parent
 version = ET.parse(scripts.parent / 'PFlow.App/PFlow.App.csproj').findtext('.//Version')
@@ -68,7 +69,10 @@ for architecture, machine in machines.items():
     source = args.artifacts / 'payloads' / ('win-' + architecture)
     dest = stage / 'payloads' / source.name
     shutil.copytree(source, dest)
-    for name in ('pFlow.exe', 'engine/whisper-cli.exe', 'engine/pflow-whisper.exe'):
+    required = ['pFlow.exe', 'engine/whisper-cli.exe', 'engine/pflow-whisper.exe']
+    if architecture == 'x64':
+        required.append('engine/pflow-whisper-avx2.exe')  # chosen at run time on processors with AVX2 (SpeechEngine.Choose)
+    for name in required:
         assert pe(dest / name)[0] == machine, name
     for name in ('install-windows.ps1', 'WindowsArchitecture.ps1'):
         shutil.copyfile(scripts / name, dest / name)
@@ -105,6 +109,10 @@ shutil.copytree(args.artifacts / 'shared', stage / 'shared')
 model = stage / 'shared/models/ggml-small.bin'
 assert model.stat().st_size == 487601967
 assert sha(model) == '1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b'
+# The small live-words model (PFlow.Core LiveSpeechModel): base, 5-bit, used only for live windows.
+live_model = stage / 'shared/models/ggml-base-q5_1.bin'
+assert live_model.stat().st_size == 59707625
+assert sha(live_model) == '422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898'
 for name in ('Install.cmd', 'install-universal.ps1', 'WindowsArchitecture.ps1'):
     shutil.copyfile(scripts / name, stage / name)
 shutil.copyfile(scripts.parent / 'INSTALLATION.txt', stage / 'INSTALLATION.txt')
@@ -116,7 +124,7 @@ for path in sorted(stage.rglob('*')):
     name = path.relative_to(stage).as_posix()
     assert not path.suffix.lower() in ('.pdb', '.wav', '.gguf', '.cs', '.cpp', '.sqlite', '.jsonl'), name
     assert path.name.lower() not in ('settings.json', 'history.json', 'last-processing-times.json'), name
-    if path != model:
+    if path not in (model, live_model):
         data = path.read_bytes()
         for raw in (data, data[::2], data[1::2]):
             assert not re.search(rb'(?:/home/(?!runner/)[^/\x00\r\n ]+|/Users/[^/\x00\r\n ]+|[a-z]:[\\/]Users[\\/](?!runneradmin[\\/])[^\\/\x00\r\n ]+)', raw, re.I), name
@@ -135,7 +143,24 @@ with zipfile.ZipFile(archive) as z:
         assert hashlib.sha256(z.read(entry['path'])).hexdigest() == entry['sha256'], entry['path']
 digest = sha(archive)
 archive.with_suffix('.zip.sha256').write_text(digest + '  ' + archive.name + '\n')
-print(json.dumps({'file': archive.name, 'bytes': archive.stat().st_size, 'sha256': digest,
-                  'architectures': list(machines), 'entries': len(entries) + 1,
-                  'unchanged_tested_assemblies': True, 'native_dependency_check': True,
-                  'full_crc_and_manifest': True, 'owner_paths_absent': True}))
+result = {'file': archive.name, 'bytes': archive.stat().st_size, 'sha256': digest,
+          'architectures': list(machines), 'entries': len(entries) + 1,
+          'unchanged_tested_assemblies': True, 'native_dependency_check': True,
+          'full_crc_and_manifest': True, 'owner_paths_absent': True}
+if args.setup_stub:
+    # pFlow Setup.exe = the x86 setup program, the ZIP above unchanged, then the 16-byte trailer
+    # (PFlow.Core SetupPackage.Trailer: "PFLOWSET" + little-endian offset of the ZIP).
+    stub = args.setup_stub.read_bytes()
+    machine, _ = pe(args.setup_stub)
+    assert machine == 0x14c, 'the setup program must be x86 so it runs on every Windows'
+    assert stub[:2] == b'MZ' and len(stub) < 200 * 1024 * 1024
+    setup = args.output / f'pFlow-Setup-{version}-testing.exe'
+    with open(setup, 'xb') as out:
+        out.write(stub)
+        out.write(archive.read_bytes())
+        out.write(b'PFLOWSET' + struct.pack('<q', len(stub)))
+    assert setup.stat().st_size == len(stub) + archive.stat().st_size + 16
+    setup_digest = sha(setup)
+    setup.with_suffix('.exe.sha256').write_text(setup_digest + '  ' + setup.name + '\n')
+    result.update({'setup': setup.name, 'setup_bytes': setup.stat().st_size, 'setup_sha256': setup_digest, 'setup_stub_bytes': len(stub)})
+print(json.dumps(result))

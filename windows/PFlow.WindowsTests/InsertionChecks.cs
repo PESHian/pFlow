@@ -11,6 +11,19 @@ internal static partial class Program
 {
     static void NativeInsertion()
     {
+        // Unchecked typing into a Chromium pane goes in on one line: a box pFlow cannot see may send or submit on Enter.
+        Check("unchecked typing turns every run of line breaks into one space and never sends a line break",
+            InsertionTarget.OneLine("Fictional line one.\r\n\r\nSecond fictional line.") == "Fictional line one. Second fictional line."
+            && InsertionTarget.OneLine("one line") == "one line" && InsertionTarget.OneLine("a \r b\nc\n") == "a b c" && InsertionTarget.OneLine("\n") == ""
+            && !Native.UnicodeText(InsertionTarget.OneLine("x\ny")).Any(i => i.Data.Keyboard.Scan == '\r'));
+        // A failed read-back check: a non-empty field that still holds its old text is nothing landed (card); an
+        // empty, unreadable or changed field is only unconfirmed (quiet), since web boxes read back late.
+        Check("a failed check is nothing landed only when a non-empty field still reads as before",
+            InsertionTarget.Unmatched("Dear Sam, ", "Dear Sam, ") == InsertionTarget.NothingLanded
+            && InsertionTarget.Unmatched("Dear Sam, ", "Dear Sam, thanks") == InsertionTarget.Unconfirmed
+            && InsertionTarget.Unmatched("", "") == InsertionTarget.Unconfirmed
+            && InsertionTarget.Unmatched("Dear Sam, ", "") == InsertionTarget.Unconfirmed
+            && InsertionTarget.Unmatched("", "late words") == InsertionTarget.Unconfirmed);
         _ = Application.Current ?? new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         var editor = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.Wrap };
         AutomationProperties.SetAutomationId(editor, "FictionalInsertionField");
@@ -31,6 +44,8 @@ internal static partial class Program
                 });
                 var deadline = Stopwatch.StartNew();
                 while (!work.IsCompleted && deadline.Elapsed < TimeSpan.FromSeconds(10)) { Drain(); Thread.Sleep(1); }
+                Check("keystrokes are safe for a Win32 control, or for text with no line break elsewhere (chat apps send on Enter)",
+                    InsertionTarget.TypingSafe(true, "two\nlines") && InsertionTarget.TypingSafe(false, "one line") && !InsertionTarget.TypingSafe(false, "two\nlines") && !InsertionTarget.TypingSafe(false, "two\rlines"));
                 Check("native field operation completes", work.IsCompleted);
                 return work.GetAwaiter().GetResult();
             }

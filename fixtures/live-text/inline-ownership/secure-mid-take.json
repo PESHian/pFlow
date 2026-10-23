@@ -1,0 +1,60 @@
+{
+ "description": "A field that turns secure stops typing.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "",
+   "selection": [
+    0,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "Code",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Code word",
+   "expect": {
+    "action": "write",
+    "range": [
+     0,
+     0
+    ],
+    "text": "Code",
+    "confirm": "ok"
+   }
+  },
+  {
+   "op": "secure",
+   "secure": true
+  },
+  {
+   "op": "update",
+   "text": "Code word is",
+   "expect": {
+    "action": "stop",
+    "reason": "secure"
+   }
+  },
+  {
+   "op": "final",
+   "text": "Code word is ready.",
+   "expect": {
+    "action": "stop",
+    "reason": "secure"
+   }
+  }
+ ]
+}

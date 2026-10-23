@@ -1,0 +1,57 @@
+{
+  "description": "Updates from an earlier take never reach a new take.",
+  "events": [
+    {
+      "op": "begin",
+      "session": "take-a"
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 0,
+      "text": "Harbor",
+      "isFinal": false
+    },
+    {
+      "op": "begin",
+      "session": "take-b"
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 9,
+      "text": "Harbor bells",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-b",
+      "sequence": 0,
+      "text": "Meadow",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 10,
+      "text": "Harbor bells ring",
+      "isFinal": true
+    },
+    {
+      "op": "update",
+      "session": "take-b",
+      "sequence": 1,
+      "text": "Meadow foxes.",
+      "isFinal": true
+    }
+  ],
+  "expected": {
+    "shown": [
+      "Harbor",
+      "Meadow",
+      "Meadow foxes."
+    ],
+    "text": "Meadow foxes.",
+    "phase": "final"
+  }
+}

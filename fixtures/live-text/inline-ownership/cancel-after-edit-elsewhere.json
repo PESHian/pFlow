@@ -1,0 +1,66 @@
+{
+ "description": "An edit outside pFlow's span still means cancel leaves everything alone.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "Title\n",
+   "selection": [
+    6,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "Draft",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Draft notes",
+   "expect": {
+    "action": "write",
+    "range": [
+     6,
+     0
+    ],
+    "text": "Draft",
+    "confirm": "ok"
+   }
+  },
+  {
+   "op": "edit",
+   "range": [
+    0,
+    5
+   ],
+   "text": "Heading",
+   "caret": [
+    13,
+    0
+   ]
+  },
+  {
+   "op": "cancel",
+   "expect": {
+    "action": "stop",
+    "reason": "text"
+   },
+   "field": {
+    "value": "Heading\nDraft",
+    "selection": [
+     13,
+     0
+    ]
+   }
+  }
+ ]
+}

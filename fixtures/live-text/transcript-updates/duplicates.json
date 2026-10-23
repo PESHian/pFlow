@@ -1,0 +1,59 @@
+{
+  "description": "A repeated event, or a new event with unchanged text, shows nothing new.",
+  "events": [
+    {
+      "op": "begin",
+      "session": "take-a"
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 0,
+      "text": "Pelicans",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 0,
+      "text": "Pelicans",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 1,
+      "text": "Pelicans",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 2,
+      "text": "Pelicans glide",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 2,
+      "text": "Pelicans glide",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 3,
+      "text": "Pelicans glide",
+      "isFinal": true
+    }
+  ],
+  "expected": {
+    "shown": [
+      "Pelicans",
+      "Pelicans glide"
+    ],
+    "text": "Pelicans glide",
+    "phase": "final"
+  }
+}

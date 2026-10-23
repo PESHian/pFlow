@@ -22,14 +22,17 @@ internal sealed class Capsule : Window
     public event Action? OpenHistory;
     public Func<double>? AudioLevel;
     public IntPtr Handle => new WindowInteropHelper(this).Handle;
+    internal const double CapsuleWidth = 96, CapsuleHeight = 26, OutlineOpacity = .65;
+    internal Border Shell => shell;
+    internal WaveView Wave => wave;
     public Capsule(StateStore store)
     {
-        this.store = store; Width = 120; Height = 32; WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.NoResize;
+        this.store = store; Width = CapsuleWidth; Height = CapsuleHeight; WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.NoResize;
         AllowsTransparency = true; Background = Brushes.Transparent; ShowInTaskbar = false; ShowActivated = false; Topmost = true;
-        shell = new Border { CornerRadius = new CornerRadius(16), BorderThickness = new Thickness(1), Padding = new Thickness(0) };
+        shell = new Border { CornerRadius = new CornerRadius(CapsuleHeight / 2), BorderThickness = new Thickness(1), Padding = new Thickness(0), Background = Brushes.Black };
         wave = new WaveView { IsHitTestVisible = false };
         var template = new ControlTemplate(typeof(Button));
-        var surface = new FrameworkElementFactory(typeof(Border)); surface.SetValue(Border.BackgroundProperty, Brushes.Transparent); surface.SetValue(Border.PaddingProperty, new Thickness(9, 5, 9, 5));
+        var surface = new FrameworkElementFactory(typeof(Border)); surface.SetValue(Border.BackgroundProperty, Brushes.Transparent); surface.SetValue(Border.PaddingProperty, new Thickness(8, 4, 8, 4));
         surface.AppendChild(new FrameworkElementFactory(typeof(ContentPresenter))); template.VisualTree = surface;
         record = new Button { Content = wave, Focusable = false, IsTabStop = false, Template = template, Cursor = Cursors.Hand, HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
         record.Click += (_, _) => { if (canToggle && !dragging) ToggleRecording?.Invoke(); };
@@ -58,7 +61,7 @@ internal sealed class Capsule : Window
         var cancel = new MenuItem { Header = "Cancel recording" }; cancel.Click += (_, _) => Cancel?.Invoke(); menu.Items.Add(cancel); ContextMenu = menu;
         SourceInitialized += (_, _) => {
             Native.SetWindowLongPtr(Handle, -20, (IntPtr)(Native.GetWindowLongPtr(Handle, -20).ToInt64() | 0x08000000 | 0x80));
-            HwndSource.FromHwnd(Handle)?.AddHook((IntPtr hwnd, int msg, IntPtr wp, IntPtr lp, ref bool handled) => { if (msg == 0x21) { handled = true; return (IntPtr)3; } if ((msg == 0x2E0 || msg == 0x7E) && !dragReady && IsVisible) Dispatcher.BeginInvoke(new Action(() => Place())); return IntPtr.Zero; });
+            HwndSource.FromHwnd(Handle)?.AddHook((IntPtr hwnd, int msg, IntPtr wp, IntPtr lp, ref bool handled) => { if (msg is 0x21 or 0x24B) { handled = true; return (IntPtr)3; } if ((msg == 0x2E0 || msg == 0x7E) && !dragReady && IsVisible) Dispatcher.BeginInvoke(new Action(() => Place())); return IntPtr.Zero; });
         };
         Loaded += (_, _) => Place();
         IsVisibleChanged += (_, _) => SyncAnimation();
@@ -96,12 +99,14 @@ internal sealed class Capsule : Window
         long now = Stopwatch.GetTimestamp(); double seconds = Stopwatch.GetElapsedTime(lastFrame, now).TotalSeconds; lastFrame = now;
         wave.Advance(AudioLevel?.Invoke() ?? 0, store.Preferences.Waveform, seconds);
     }
+    /// Solid black in every theme (no acrylic, no blur), a 1 px outline in the accent at 65%, the
+    /// waveform in the palette's ink, both lifted when too dark for black (PeshTheme.OnBlack);
+    /// the same in every phase. Matches the Mac capsule (96 x 26 pt).
     public void ApplyTheme()
     {
-        bool light = store.Preferences.Theme == "light" || (store.Preferences.Theme == "system" && !SystemParameters.HighContrast && Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 0) is int mode && mode == 1);
-        shell.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(light ? "#F6F2F9" : "#08070D"));
-        shell.BorderBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#" + store.Preferences.Accent));
-        wave.Color = PeshTheme.Gradient(store.Preferences);
+        shell.Background = Brushes.Black;
+        shell.BorderBrush = new SolidColorBrush(PeshTheme.OnBlack((Color)ColorConverter.ConvertFromString("#" + store.Preferences.Accent))) { Opacity = OutlineOpacity };
+        wave.Color = PeshTheme.OnBlack(PeshTheme.Gradient(store.Preferences));
     }
     internal void Reveal() { Show(); Place(); Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() => Place())); SyncAnimation(); }
     void HideControl() { Hide(); SyncAnimation(); }

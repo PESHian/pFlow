@@ -14,6 +14,10 @@ internal static class Native
     [StructLayout(LayoutKind.Sequential)] internal struct PointerPoint { public int X, Y; }
     [StructLayout(LayoutKind.Sequential)] internal struct WindowBounds { public int Left, Top, Right, Bottom; }
     [DllImport("user32.dll")] internal static extern bool GetPhysicalCursorPos(out PointerPoint point);
+    /// The x64 AVX2 worker needs AVX2, FMA, BMI2 and F16C, with Windows saving their registers (.NET checks the OS for the first three).
+    internal static bool Avx2Ready => System.Runtime.Intrinsics.X86.Avx2.IsSupported && System.Runtime.Intrinsics.X86.Fma.IsSupported
+        && System.Runtime.Intrinsics.X86.Bmi2.IsSupported && F16C;
+    static bool F16C { get { if (!System.Runtime.Intrinsics.X86.X86Base.IsSupported) return false; var (_, _, ecx, _) = System.Runtime.Intrinsics.X86.X86Base.CpuId(1, 0); return (ecx & (1 << 29)) != 0; } }
     [DllImport("user32.dll")] internal static extern bool GetWindowRect(IntPtr window, out WindowBounds bounds);
     [DllImport("user32.dll")] internal static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
     internal delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
@@ -34,6 +38,32 @@ internal static class Native
     [DllImport("user32.dll")] internal static extern IntPtr SetClipboardData(uint format, IntPtr data);
     [DllImport("user32.dll")] internal static extern uint GetClipboardSequenceNumber();
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern uint RegisterClipboardFormat(string name);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool GetLogicalProcessorInformationEx(int relationship, IntPtr buffer, ref uint length);
+    /// One entry per physical core (a core's second hyperthread is not counted): its efficiency
+    /// class as Windows reports it, higher is faster (a hybrid PC's performance cores are the
+    /// highest class; a plain PC has one class). Empty when Windows will not say.
+    internal static IReadOnlyList<byte> CoreClasses()
+    {
+        uint length = 0; GetLogicalProcessorInformationEx(0, IntPtr.Zero, ref length);
+        if (length == 0) return [];
+        var buffer = Marshal.AllocHGlobal((int)length);
+        try {
+            if (!GetLogicalProcessorInformationEx(0, buffer, ref length)) return [];
+            var classes = new List<byte>(); long offset = 0;
+            while (offset + 10 <= length) { int size = Marshal.ReadInt32(buffer, (int)offset + 4); if (size <= 0) break; classes.Add(Marshal.ReadByte(buffer, (int)offset + 9)); offset += size; }
+            return classes;
+        } finally { Marshal.FreeHGlobal(buffer); }
+    }
+    /// Threads for the text engine: the fastest class of cores; slower classes are added, fastest
+    /// first, only while that is fewer than four (two performance cores alone would be slower than
+    /// today's four threads); between 2 and 8. Without a core list, the logical count.
+    internal static int EngineThreads(IReadOnlyList<byte> coreClasses)
+    {
+        if (coreClasses.Count == 0) return Math.Clamp(Environment.ProcessorCount, 2, 8);
+        int threads = 0;
+        foreach (var group in coreClasses.GroupBy(c => c).OrderByDescending(g => g.Key)) { if (threads >= 4) break; threads += group.Count(); }
+        return Math.Clamp(threads, 2, 8);
+    }
     [DllImport("kernel32.dll")] internal static extern UIntPtr GlobalSize(IntPtr data);
     [DllImport("kernel32.dll")] internal static extern IntPtr GlobalAlloc(uint flags, UIntPtr size);
     [DllImport("kernel32.dll")] internal static extern IntPtr GlobalLock(IntPtr data);
@@ -71,4 +101,5 @@ internal static class Native
         if (SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>()) != inputs.Length)
             throw new InvalidOperationException("Windows blocked keyboard input. Your text is in History.");
     }
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] internal static extern int GetClassName(IntPtr window, System.Text.StringBuilder name, int size);
 }

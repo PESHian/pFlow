@@ -1,7 +1,7 @@
 """Publish authenticated update metadata after GitHub binary releases.
 Uses only Python's standard library and OpenSSL. No downloaded code is run.
 """
-import argparse, base64, json, os, re, subprocess, tempfile
+import argparse, base64, hashlib, json, os, re, subprocess, tempfile
 from pathlib import Path
 from urllib.request import Request, urlopen
 ROOT=Path(__file__).resolve().parent.parent
@@ -13,7 +13,44 @@ def version(value):
     parts=tuple(map(int,value.split('.')))
     if any(x>2147483647 for x in parts):raise ValueError('Invalid release version')
     return parts
-def merge(release, previous):
+def validate_mac_receipt(receipt, asset, expected_team):
+    if not re.fullmatch(r'[A-Z0-9]{10}',expected_team):raise ValueError('Configure the approved Mac developer team before publishing Mac updates')
+    if any(receipt.get(k)!=v for k,v in dict(schema=1,platform='mac-arm64',file=asset['name'],bytes=asset['size'],sha256=asset['digest'][7:],teamID=expected_team).items()):
+        raise ValueError('Trusted Mac receipt does not match this release asset and team')
+    if asset['name']!=f"pFlow-Mac-{receipt.get('version')}-testing.dmg":raise ValueError('Trusted Mac receipt version mismatch')
+    if any(receipt.get(k) is not True for k in ['appStapled','dmgStapled','gatekeeper']):raise ValueError('Mac trust checks did not pass')
+    for key in ['appNotarization','dmgNotarization']:
+        result=receipt.get(key,{})
+        if result.get('status')!='Accepted' or not re.fullmatch(r'[a-fA-F0-9-]{36}',result.get('id','')):raise ValueError('Mac notarization was not accepted')
+    if not re.fullmatch(r'[a-f0-9]{40}',receipt.get('sourceCommit','')):raise ValueError('Missing Mac source commit')
+
+def mac_receipts(release, previous, expected_team):
+    receipts={}
+    for asset in release['assets']:
+        match=re.fullmatch(r'pFlow-Mac-(\d+\.\d+\.\d+)-testing\.dmg',asset['name'])
+        if not match:continue
+        old=previous.get('targets',{}).get('mac-arm64')
+        if old and version(old['version'])>=version(match[1]):continue
+        name=asset['name']+'.trusted.json'
+        matches=[a for a in release['assets'] if a['name']==name]
+        if len(matches)!=1:raise ValueError('New Mac downloads require an attested trusted-release receipt')
+        receipt_asset=matches[0]
+        url=f"https://github.com/{REPO}/releases/download/{release['tag_name']}/{name}"
+        if receipt_asset['browser_download_url']!=url or not 0<receipt_asset['size']<=16384:raise ValueError('Invalid Mac receipt asset')
+        with urlopen(Request(url,headers={'User-Agent':'pFlow-release'}),timeout=30) as response:
+            data=response.read(16385)
+        if len(data)!=receipt_asset['size'] or receipt_asset.get('digest')!='sha256:'+hashlib.sha256(data).hexdigest():raise ValueError('Mac receipt hash mismatch')
+        receipt=json.loads(data)
+        validate_mac_receipt(receipt,asset,expected_team)
+        with tempfile.TemporaryDirectory(prefix='pflow-receipt-') as tmp:
+            file=Path(tmp)/name;file.write_bytes(data)
+            command(['gh','attestation','verify',str(file),'--repo',REPO,
+                     '--signer-workflow',REPO+'/.github/workflows/mac-trusted-release.yml',
+                     '--source-ref','refs/heads/main','--source-digest',receipt['sourceCommit'],'--deny-self-hosted-runners'])
+        receipts[asset['name']]=receipt
+    return receipts
+
+def merge(release, previous, receipts=None, expected_team=''):
     if release.get('draft'):raise ValueError('Publish the binary release before its feed')
     tag=release['tag_name']
     if not re.fullmatch(r'[A-Za-z0-9._-]{1,100}',tag):raise ValueError('Invalid release tag')
@@ -35,6 +72,9 @@ def merge(release, previous):
         if old and old['version']==v:
             if old['sha256']!=candidate['sha256']:raise ValueError('Changed binary must use a new version')
             continue
+        if mac:
+            if name not in (receipts or {}):raise ValueError('New Mac downloads require an attested trusted-release receipt')
+            validate_mac_receipt(receipts[name],asset,expected_team)
         targets[platform]=candidate;found+=1
     if not targets:raise ValueError('No supported update assets')
     return dict(schema=1,targets=dict(sorted(targets.items()))),found
@@ -55,7 +95,9 @@ def main():
         command(['openssl','dgst','-sha256','-verify',str(ROOT/'updates/public-key.pem'),'-signature',str(sigfile)],previous_data)
     previous=json.loads(previous_data)
     if previous.get('schema')!=1:raise ValueError('Unsupported existing feed')
-    feed,found=merge(release,previous)
+    team=os.environ.get('PFLOW_DEVELOPER_TEAM','')
+    receipts=mac_receipts(release,previous,team)
+    feed,found=merge(release,previous,receipts,team)
     if not found:print('No newer update assets; existing feed kept.');return
     data=(json.dumps(feed,indent=2,sort_keys=True)+'\n').encode()
     public=command(['openssl','pkey','-in',str(a.key),'-pubout','-outform','DER'])

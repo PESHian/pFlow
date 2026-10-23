@@ -24,6 +24,11 @@ final class AppState {
         }
     }
 
+    /// Read at the start of each take; a change applies to the next one.
+    var liveTextMode: LiveTextMode {
+        didSet { liveTextMode.save() }
+    }
+
     var currentInputName: String?
     var soundsEnabled: Bool {
         didSet { UserDefaults.standard.set(soundsEnabled, forKey: "soundsEnabled") }
@@ -90,6 +95,8 @@ final class AppState {
     private let escapeMonitor = EscapeMonitor()
     private let injector = TextInjector()
     private let hud = HUDController()
+    /// The setup page is opened by itself once per launch for a missing Accessibility grant.
+    private var accessibilityWarned = false
     private let sounds = SystemSoundPlayer()
     let cleanup = TranscriptCleanupService()
     private let deviceObserver = DefaultInputObserver()
@@ -101,11 +108,12 @@ final class AppState {
         do {
             modelContainer = try ModelContainer(for: Transcript.self)
         } catch {
-            fatalError("Yap: failed to create model container: \(error)")
+            fatalError("pFlow: failed to create model container: \(error)")
         }
 
         soundsEnabled = (UserDefaults.standard.object(forKey: "soundsEnabled") as? Bool) ?? true
         transcriptionEngine = TranscriptionEngine.saved()
+        liveTextMode = LiveTextMode.saved()
         showInDock = (UserDefaults.standard.object(forKey: "showInDock") as? Bool) ?? false
         showInMenuBar = (UserDefaults.standard.object(forKey: "showInMenuBar") as? Bool) ?? true
         cleanupEnabled = (UserDefaults.standard.object(forKey: "cleanupEnabled") as? Bool) ?? true
@@ -145,7 +153,8 @@ final class AppState {
             formatter: templateFormatter,
             activeTemplate: { [weak self] in self?.templates.active },
             availableTemplates: { [weak self] in self?.templates.templates ?? [] },
-            selectTemplate: { [weak self] in self?.templates.activeID = $0.id }
+            selectTemplate: { [weak self] in self?.templates.activeID = $0.id },
+            liveTextMode: { [weak self] in self?.liveTextMode ?? .off }
         )
 
         dictation.contextualStrings = { [weak self] in self?.vocabulary.recognitionTerms ?? [] }
@@ -167,19 +176,27 @@ final class AppState {
         // keeps the UI honest the moment the user grants it.
         permissions.startObserving()
 
+        // A test build is signed per build, so a grant made for the previous
+        // one does not cover this one. The card carries the one-press Grant,
+        // and the setup page opens by itself the first time a take finds
+        // Accessibility off.
+        hud.setGrantAccessibility { [weak self] in
+            Task { await self?.permissions.grantAccessibility() }
+        }
+        coordinator.accessibilityMissing = { [weak self] in
+            guard let self, !accessibilityWarned else { return }
+            accessibilityWarned = true
+            openOnboarding()
+        }
+
         hotkeys.disable()
         modifierHotkeys.recordingIsBusy = { [weak self] in self?.coordinator.state != .idle }
         modifierHotkeys.onRightCommand = { [weak self] effect in
             guard let self else { return }
-            switch effect {
-            case .start:
-                NSLog("Yap: recording requested; microphone=\(self.permissions.microphone), speech=\(self.permissions.speech), accessibility=\(self.permissions.accessibility), automation=\(self.permissions.automation)")
-                self.coordinator.begin()
-            case .pause: self.coordinator.pauseCapture(true)
-            case .resume: self.coordinator.pauseCapture(false)
-            case .finish: Task { await self.coordinator.finish() }
-            case .cancel: Task { await self.coordinator.cancel() }
+            if effect == .start {
+                NSLog("pFlow: recording requested; microphone=\(self.permissions.microphone), speech=\(self.permissions.speech), accessibility=\(self.permissions.accessibility), automation=\(self.permissions.automation)")
             }
+            self.coordinator.handle(effect)
         }
         modifierHotkeys.trigger = .rightCommand
         modifierHotkeys.start()
@@ -284,7 +301,7 @@ final class AppState {
         mainPage = page
         WindowManager.shared.show(
             id: "main", title: "pFlow · by Pesh",
-            size: NSSize(width: 460, height: 740)
+            size: MainWindowView.defaultSize, minSize: MainWindowView.minimumSize
         ) {
             MainWindowView()
                 .environment(self)

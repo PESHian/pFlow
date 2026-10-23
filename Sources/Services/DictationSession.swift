@@ -3,25 +3,54 @@ import AVFoundation
 @MainActor
 protocol DictationSessioning: AnyObject {
     var onLevel: ((Float) -> Void)? { get set }
-    var onPartial: ((String) -> Void)? { get set }
-    func start() async throws
-    func stop() async throws -> String
+    /// Transcript revisions for the take started with `start(take:)`, on the
+    /// main thread. Bursts are coalesced, so not every revision arrives.
+    var onTranscript: ((TranscriptUpdate) -> Void)? { get set }
+    /// Live words stopped during the current take; the take still finishes.
+    var onLiveStopped: (() -> Void)? { get set }
+    /// `live` is the take's Live text choice. Off adds no live recognition work.
+    func start(take: String, live: Bool) async throws
+    /// Ends the take and returns its final update, numbered after every partial.
+    func stop() async throws -> TranscriptUpdate
     func cancel() async
     func setCapturePaused(_ paused: Bool) throws
 }
 
 extension DictationSessioning {
     func cancel() async { _ = try? await stop() }
+    var onLiveStopped: (() -> Void)? {
+        get { nil }
+        set {}
+    }
 }
+
+/// Where a take's audio comes from: the microphone in the app, a recording
+/// played in real time in timing runs.
+protocol AudioCapturing: AnyObject {
+    /// Called on the audio thread for each captured buffer.
+    var onBuffer: ((AVAudioPCMBuffer) -> Void)? { get set }
+    /// Called on the audio thread with a normalized 0...1 level.
+    var onLevel: ((Float) -> Void)? { get set }
+    func start() throws
+    func stop()
+    func pause()
+    func resume() throws
+}
+
+extension AudioCaptureService: AudioCapturing {}
 
 @MainActor
 final class DictationSession: DictationSessioning {
     var onLevel: ((Float) -> Void)?
-    var onPartial: ((String) -> Void)?
+    var onTranscript: ((TranscriptUpdate) -> Void)?
+    var onLiveStopped: (() -> Void)?
 
-    private let capture = AudioCaptureService()
+    private let capture: AudioCapturing
+    private let whisperModel: URL
+    private let appleEngine: () -> StreamingTranscriber
     private let relay = AudioBufferRelay()
     private var transcriber: StreamingTranscriber?
+    private var feed: LiveTranscriptFeed?
     private var locale: Locale
     private var capturePaused = false
 
@@ -43,19 +72,25 @@ final class DictationSession: DictationSessioning {
         case unsupported
     }
 
-    /// Resolved once — querying supported locales is slow enough to be felt on
-    /// the first keypress.
-    private static var cachedResolution: Resolution?
+    /// Resolved once per language — querying supported locales is slow enough
+    /// to be felt on the first keypress. Keyed by the language asked for, so a
+    /// resolution is never used for another language, whatever order a
+    /// launch prewarm and a language change finish in.
+    private static var resolutions: [String: Resolution] = [:]
 
-    init(locale: Locale = .current) {
+    init(locale: Locale = .current, capture: AudioCapturing = AudioCaptureService(),
+         whisperModel: URL = WhisperModelStore.modelURL,
+         appleEngine: @escaping () -> StreamingTranscriber = { TranscriptionService() }) {
         self.locale = locale
+        self.capture = capture
+        self.whisperModel = whisperModel
+        self.appleEngine = appleEngine
     }
 
-    /// Switch dictation language while idle. Clears the resolved cache so the
-    /// next recording re-resolves for the new locale.
+    /// Switch dictation language while idle. The next recording uses the new
+    /// language's own resolution.
     func setLocale(_ newLocale: Locale) {
         locale = newLocale
-        Self.cachedResolution = nil
     }
 
     static func resolve(for locale: Locale) async -> Resolution {
@@ -67,14 +102,17 @@ final class DictationSession: DictationSessioning {
 
     static func prewarm(locale: Locale = .current) async {
         let resolution = await resolve(for: locale)
-        cachedResolution = resolution
+        resolutions[locale.identifier] = resolution
         guard case .supported(let resolved) = resolution else { return }
         await TranscriptionService.prepareModel(for: resolved)
     }
 
-    func start() async throws {
+    func start(take: String, live: Bool) async throws {
+        feed?.close()
+        let feed = LiveTranscriptFeed(session: take) { [weak self] update in self?.onTranscript?(update) }
+        self.feed = feed
         let choice = selectedEngine()
-        if choice == .whisper, !WhisperModelStore.hasModel(at: WhisperModelStore.modelURL) {
+        if choice == .whisper, !WhisperModelStore.hasModel(at: whisperModel) {
             throw WhisperError.modelNeeded
         }
         // Open the microphone FIRST. Preparing the speech stack takes a moment,
@@ -93,11 +131,12 @@ final class DictationSession: DictationSessioning {
         let resolution: Resolution
         if choice == .whisper {
             resolution = .supported(locale)
-        } else if let cached = Self.cachedResolution {
+        } else if let cached = Self.resolutions[locale.identifier] {
             resolution = cached
         } else {
-            resolution = await Self.resolve(for: locale)
-            Self.cachedResolution = resolution
+            let asked = locale
+            resolution = await Self.resolve(for: asked)
+            Self.resolutions[asked.identifier] = resolution
         }
 
         guard case .supported(let engineLocale) = resolution else {
@@ -108,9 +147,15 @@ final class DictationSession: DictationSessioning {
             throw TranscriptionError.unsupportedLocale
         }
 
-        let engine: StreamingTranscriber = choice == .apple ? TranscriptionService() : WhisperTranscriber()
-        engine.onPartial = { [weak self] text in
-            Task { @MainActor in self?.onPartial?(text) }
+        let model = whisperModel
+        let engine: StreamingTranscriber = choice == .apple ? appleEngine()
+            : WhisperTranscriber(modelURL: model, liveWorker: live ? { WhisperLiveProcess(model: model) } : nil)
+        engine.onTranscript = { text in feed.post(text) }
+        engine.onLiveStopped = { [weak self] in
+            Task { @MainActor in
+                guard let self, self.feed === feed else { return }
+                self.onLiveStopped?()
+            }
         }
         transcriber = engine
 
@@ -126,17 +171,24 @@ final class DictationSession: DictationSessioning {
         relay.attach { buffer in engine.feed(buffer) }
     }
 
-    func stop() async throws -> String {
+    func stop() async throws -> TranscriptUpdate {
         capture.stop()
         relay.reset()
-        defer { transcriber = nil }
+        let feed = self.feed ?? LiveTranscriptFeed(session: "", deliver: { _ in })
+        defer {
+            transcriber = nil
+            feed.close()
+            self.feed = nil
+        }
         let text = try await transcriber?.finish() ?? ""
-        return text
+        return feed.finish(text)
     }
 
     func cancel() async {
         capture.stop()
         relay.reset()
+        feed?.close()
+        feed = nil
         await transcriber?.cancel()
         transcriber = nil
     }

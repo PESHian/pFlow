@@ -5,6 +5,9 @@ namespace PFlow.Core;
 public static class TextProcessing
 {
     public static bool SameText(string left, string right) => left.Replace("\r\n", "\n").Replace('\r', '\n') == right.Replace("\r\n", "\n").Replace('\r', '\n');
+    /// The same words in the same order, whatever the line breaks and spaces between them.
+    public static bool SameWords(string left, string right) => Words(left) == Words(right);
+    static string Words(string text) => string.Join(" ", Regex.Split(text.Trim(), @"\s+"));
     public static int WordCount(string text) => Regex.Matches(text, @"\S+").Count;
     public static string Replace(string text, IEnumerable<DictionaryEntry> entries)
     {
@@ -44,11 +47,14 @@ public static class TextProcessing
         return string.Concat(parts);
     }
     // Whisper text output wraps recognition segments; these are soft boundaries, not paragraphs.
+    // Each segment's text starts with a space, so the join collapses runs of spaces to one
+    // ("this  brown" was two segments); paragraph breaks and list lines stay as they are.
     public static string JoinRecognitionLines(string text)
     {
         text = text.Replace("\r\n", "\n");
         if (Regex.IsMatch(text, @"(?m)^[ \t]*(?:[-*•]|\d+[.)]|#{1,6}|```)[ \t]+")) return text;
-        return Regex.Replace(text, @"(?<!\n)\n(?!\n)", " ");
+        text = Regex.Replace(text, @"(?<!\n)\n(?!\n)", " ");
+        return Regex.Replace(Regex.Replace(text, @"[ \t]+", " "), @"[ \t]*\n[ \t]*", "\n");
     }
     // Conservative port of DictationParagraphs: change whitespace only, between complete sentences.
     public static string Paragraphs(string text)

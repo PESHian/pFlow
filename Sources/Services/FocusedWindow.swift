@@ -32,6 +32,28 @@ enum FocusedWindow {
         return NSScreen.screens.first { $0.frame.contains(center) }
     }
 
+    /// The text caret (or selection) of the focused text field, in AppKit
+    /// screen coordinates, or nil when the app does not report one. Asks for
+    /// no more than a tenth of a second so a stuck app cannot stall the HUD.
+    static func caretRect() -> NSRect? {
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.1)
+        guard let field = element(system, kAXFocusedUIElementAttribute) else { return nil }
+        AXUIElementSetMessagingTimeout(field, 0.1)
+        var range: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(field, kAXSelectedTextRangeAttribute as CFString, &range) == .success,
+              let range, CFGetTypeID(range) == AXValueGetTypeID() else { return nil }
+        var bounds: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(field, kAXBoundsForRangeParameterizedAttribute as CFString,
+                                                         range, &bounds) == .success,
+              let bounds, CFGetTypeID(bounds) == AXValueGetTypeID() else { return nil }
+        var rect = CGRect.zero
+        guard AXValueGetValue(bounds as! AXValue, .cgRect, &rect),
+              rect.origin.x.isFinite, rect.origin.y.isFinite,
+              let primaryHeight = primaryScreenHeight() else { return nil }
+        return NSRect(x: rect.minX, y: primaryHeight - rect.maxY, width: rect.width, height: rect.height)
+    }
+
     /// The primary display (the one with the menu bar) sits at AppKit origin
     /// (0, 0); its height is the flip reference for the global coordinate space.
     private static func primaryScreenHeight() -> CGFloat? {

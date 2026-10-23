@@ -104,7 +104,7 @@ struct BoldTemplateTests {
         let injector = TextInjector(pasteboard: board)
         injector.copyToClipboard = { false }
         let styled = report()
-        #expect(await injector.deliver(styled.string, formatted: styled) == .savedToHistory)
+        #expect(await injector.deliver(styled.string, formatted: styled).savedToHistory)
         #expect(board.data(forType: .png) == image)
         #expect(board.data(forType: .rtf) == nil)
     }

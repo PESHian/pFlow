@@ -35,12 +35,17 @@ internal static partial class Program
     static bool compactFixOnly;
     static bool waveformsOnly, waveCaptureOnly, payloadOnly, payloadSpacingOnly;
     static bool speechOnly, warmLatencyOnly, extendedLatencyOnly, insertionLatencyOnly, workerSafetyOnly, templateCatalogOnly;
-    static bool optionalAIOnly, statisticsOnly;
+    static bool cleanupModelOnly, optionalAIOnly, statisticsOnly, finalPriorityOnly, touchScrollOnly, touchCapsuleOnly, chromiumOnly, chromiumColdOnly;
     static void Check(string name, bool condition) { if (!condition) throw new Exception("FAIL: " + name); Console.WriteLine("PASS: " + name); passed++; }
     static string Normalize(string text) => text.Replace("\r\n", "\n").Replace('\r', '\n');
     [STAThread] static int Main(string[] args)
     {
+        if (args.Length == 3 && args[1] == "--inline-host") return InlineHost(args[2]);
+        // --touch-scroll: the VM has no touch digitizer, so the finger is a synthetic pointer device, which only WPF's
+        // WM_POINTER stack receives (set before any WPF type loads). The app itself keeps WPF's default touch stack.
+        if (args.Contains("--touch-scroll")) AppContext.SetSwitch("Switch.System.Windows.Input.Stylus.EnablePointerSupport", true);
         root = args[0]; using var report = new StreamWriter(Path.Combine(root, "live-results.log")) { AutoFlush = true }; Console.SetOut(report); Console.SetError(report);
+        InsertionLog.Written += line => Console.WriteLine("LOG " + line);
         statisticsOnly = args.Contains("--statistics-only");
         templateCatalogOnly = args.Contains("--template-catalog-only");
         edgeOnly = args.Contains("--edge-only");
@@ -57,9 +62,12 @@ internal static partial class Program
         compactOnly = args.Contains("--compact-only");
         compactFixOnly = args.Contains("--compact-fix-only");
         waveCaptureOnly = args.Contains("--wave-capture-only"); waveformsOnly = args.Contains("--waveforms-only") || waveCaptureOnly; payloadSpacingOnly = args.Contains("--payload-spacing-only"); payloadOnly = args.Contains("--payload-only") || payloadSpacingOnly;
-        optionalAIOnly = args.Contains("--optional-ai-only");
+        optionalAIOnly = args.Contains("--optional-ai-only"); cleanupModelOnly = args.Contains("--cleanup-model");
+        finalPriorityOnly = args.Contains("--final-priority"); touchScrollOnly = args.Contains("--touch-scroll"); touchCapsuleOnly = args.Contains("--touch-capsule"); chromiumOnly = args.Contains("--chromium-fields"); chromiumColdOnly = args.Contains("--chromium-cold");
+        SpeedArguments(args);
+        liveTextOnly = args.Contains("--live-text-only"); liveFocusOnly = args.Contains("--live-focus-only"); inlineOnly = args.Contains("--inline-only"); inlineElevatedOnly = args.Contains("--inline-elevated");
         workerSafetyOnly = args.Contains("--worker-safety-only"); extendedLatencyOnly = args.Contains("--extended-latency-only"); insertionLatencyOnly = args.Contains("--insertion-latency-only"); warmLatencyOnly = args.Contains("--warm-latency-only"); speechOnly = args.Contains("--speech-only") || optionalAIOnly;
-        if (statisticsOnly || templateCatalogOnly || appearanceOnly || appearanceRenderOnly || appearanceColorsOnly || fallbackOnly || settingsOnly || capsuleOnly || compactOnly || compactFixOnly || waveformsOnly || payloadOnly) _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        if (statisticsOnly || templateCatalogOnly || appearanceOnly || appearanceRenderOnly || appearanceColorsOnly || fallbackOnly || settingsOnly || capsuleOnly || compactOnly || compactFixOnly || waveformsOnly || payloadOnly || liveTextOnly || liveFocusOnly || inlineOnly || inlineElevatedOnly || speedOnly || speedInsertOnly || finalPriorityOnly || touchScrollOnly || touchCapsuleOnly || chromiumOnly || chromiumColdOnly) _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
         if (waveformsOnly) {
             var application = Application.Current;
@@ -149,6 +157,17 @@ internal static partial class Program
     }
     static async Task Run()
     {
+        if (speedOnly) { await Speed(); return; }
+        if (speedInsertOnly) { await SpeedInsert(); return; }
+        if (finalPriorityOnly) { await FinalPriority(); return; }
+        if (touchScrollOnly) { await TouchScroll(); return; }
+        if (touchCapsuleOnly) { await TouchCapsule(); return; }
+        if (chromiumOnly) { await ChromiumFields(); return; }
+        if (chromiumColdOnly) { await ChromiumCold(); return; }
+        if (liveTextOnly) { await LiveText(); return; }
+        if (liveFocusOnly) { await LiveFocus(); return; }
+        if (inlineOnly) { await Inline(); return; }
+        if (inlineElevatedOnly) { await InlineElevated(); return; }
         if (statisticsOnly) { await StatisticsPage(); return; }
         if (templateCatalogOnly) { await CustomTemplates(); return; }
         if (workerSafetyOnly) { await WorkerSafety(); return; }
@@ -156,6 +175,7 @@ internal static partial class Program
         if (insertionLatencyOnly) { await Processing(); return; }
         if (warmLatencyOnly) { await WarmLatency(); return; }
         if (speechOnly) { await SpeechLatency(); return; }
+        if (cleanupModelOnly) { await CleanupModel(); return; }
         if (waveformsOnly) { await WaveformFrames(); return; }
         if (payloadSpacingOnly) { SpacingProviderChecks(); return; }
         if (payloadOnly) { PayloadSpacing(); return; }
@@ -178,14 +198,21 @@ internal static partial class Program
         var start = new ProcessStartInfo("notepad.exe") { UseShellExecute = true }; start.ArgumentList.Add(file); Process.Start(start);
         var notepad = await WindowWith(name); var edit = await Editor(notepad); await Focus(notepad, edit); End(edit);
         var target = InsertionTarget.Capture(); string before = Read(edit);
+        // Which Notepad and which Windows this run drives, and the path the app took for it.
+        var notepadLog = new List<string>(); InsertionLog.Written += line => notepadLog.Add(line);
+        string notepadVersion = "unknown"; try { notepadVersion = Process.GetProcessById(notepad.Current.ProcessId).MainModule?.FileVersionInfo.ProductVersion ?? "unknown"; } catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+        Console.WriteLine($"NOTEPAD Windows {Environment.OSVersion.Version} ({RuntimeInformation.OSArchitecture}, test process {RuntimeInformation.ProcessArchitecture}); Notepad {notepadVersion}; field {target.Kind}");
         string transcript = File.ReadAllText(Path.Combine(root, "fictional-output.txt")).Trim();
         string result = await target.Insert(transcript, owner.Handle, false, CancellationToken.None);
         Check("Notepad offline speech fixture inserted", Normalize(Read(edit)) == Normalize(before + transcript));
         Check("Notepad insertion acknowledged", result == "Inserted");
+        Check("Windows 11 Notepad (RichEditD2DPT, a Win32 rich edit inside XAML) takes the whole-value path and confirms it; classic Notepad (Edit) the same",
+            (target.Kind.Contains("RichEditD2DPT") || target.Kind.Contains("/Edit/")) && target.Kind.EndsWith("/Win32") && notepadLog.Any(l => l.Contains("path=value")) && notepadLog.Any(l => l.Contains(": confirmed")));
         End(edit); target = InsertionTarget.Capture(); before = Read(edit);
         string narration = string.Concat(Enumerable.Repeat("Fictional 李 👮🏽‍♀️ 123.\n\nRelated sentence. ", 1000));
         result = await target.Insert(narration, owner.Handle, false, CancellationToken.None);
-        Check("Notepad long multiline Unicode inserted", Normalize(Read(edit)) == Normalize(before + narration));
+        // The caret sat after a full stop, so insertion spacing adds one space before the narration.
+        Check("Notepad long multiline Unicode inserted", Normalize(Read(edit)) == Normalize(before + " " + narration));
         Check("Notepad long insertion acknowledged", result == "Inserted");
         End(edit); target = InsertionTarget.Capture();
         ((TextPattern)edit.GetCurrentPattern(TextPattern.Pattern)).DocumentRange.Select();
@@ -676,7 +703,7 @@ internal static partial class Program
                 Check(name + " reuses the verified worker", metrics.Reused && whisper.WorkerId == id && metrics.InitializationMs < 100);
                 Check(name + " recognition completes faster", elapsed < baseline);
                 ratios.Add(baseline / elapsed);
-                Console.WriteLine($"{name}: original={baseline:F0}ms warm={elapsed:F0}ms speedup={baseline/elapsed:F1}x context={metrics.AudioContext} encode={metrics.EncodeMs:F0}ms decode={metrics.DecodeMs:F0}ms");
+                Console.WriteLine($"{name}: original={baseline:F0}ms warm={elapsed:F0}ms speedup={baseline/elapsed:F1}x context={metrics.AudioContext}");
             }
             Check("short and medium speech gain at least twofold", ratios.Take(2).All(ratio => ratio >= 2));
             using (var cancel = new CancellationTokenSource()) {

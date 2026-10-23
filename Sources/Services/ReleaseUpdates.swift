@@ -78,15 +78,58 @@ struct MacUpdatePlan: Codable {
     let source: URL; let destination: URL; let version: String; let pid: Int32; let started: TimeInterval
 }
 enum MacUpdateInstaller {
+    // A release embeds its approved team before signing. Unsigned development
+    // builds deliberately cannot install production updates.
+    static var expectedTeam: String { Bundle.main.object(forInfoDictionaryKey: "PFLOWUpdateTeamID") as? String ?? "" }
     static func run(_ executable: String, _ args: [String]) throws {
         let process = Process(); process.executableURL = URL(fileURLWithPath: executable); process.arguments = args
         process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
         try process.run(); process.waitUntilExit(); guard process.terminationStatus == 0 else { throw UpdateError.failed }
     }
+    static func metadata(_ app: URL) throws -> [String: Any] {
+        guard let info = try PropertyListSerialization.propertyList(from: Data(contentsOf: app.appendingPathComponent("Contents/Info.plist")), format: nil) as? [String: Any] else { throw UpdateError.invalid }
+        return info
+    }
+    static func developerRequirement(team: String) throws -> String {
+        guard team.range(of: #"^[A-Z0-9]{10}$"#, options: .regularExpression) != nil else { throw UpdateError.invalid }
+        return "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"\(team)\""
+    }
+    // Kept separate from pFlow metadata so a real third-party Developer ID app
+    // can exercise the platform's team policy without failing on its bundle ID.
+    static func verifyDeveloperID(_ app: URL, team: String) throws {
+        try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--all-architectures", "-R", "=" + (try developerRequirement(team: team)), app.path])
+    }
+    // Earlier builds, including public 0.3.5, used the internal name Yap. Updates
+    // only move forward, so every bundle this code accepts (its own helper copy
+    // and the download) carries the current name.
+    static let permittedExecutables: Set<String> = ["pFlow"]
+    // The bundle's main program, accepted only under a permitted plain name and
+    // only as a regular file that really lives in this bundle's Contents/MacOS.
+    static func executable(_ app: URL) throws -> URL {
+        guard let name = try metadata(app)["CFBundleExecutable"] as? String,
+              name.range(of: #"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"#, options: .regularExpression) != nil,
+              permittedExecutables.contains(name) else { throw UpdateError.invalid }
+        let file = app.appendingPathComponent("Contents/MacOS", isDirectory: true).appendingPathComponent(name, isDirectory: false)
+        let inside = app.resolvingSymlinksInPath().appendingPathComponent("Contents/MacOS", isDirectory: true).appendingPathComponent(name, isDirectory: false)
+        guard try FileManager.default.attributesOfItem(atPath: file.path)[.type] as? FileAttributeType == .typeRegular,
+              file.resolvingSymlinksInPath().standardizedFileURL.path == inside.standardizedFileURL.path else { throw UpdateError.invalid }
+        return file
+    }
+    static func verifyBundle(_ app: URL, version: String) throws {
+        let info = try metadata(app)
+        guard info["CFBundleIdentifier"] as? String == "com.pesh.Yap", info["CFBundleShortVersionString"] as? String == version else { throw UpdateError.invalid }
+        try run("/usr/bin/lipo", ["-verify_arch", "arm64", try executable(app).path])
+    }
     static func verify(_ app: URL, version: String) throws {
-        guard let bundle = Bundle(url: app), bundle.bundleIdentifier == "com.pesh.Yap", bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == version else { throw UpdateError.invalid }
-        try run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path])
-        try run("/usr/bin/lipo", ["-verify_arch", "arm64", app.appendingPathComponent("Contents/MacOS/Yap").path])
+        try verifyDeveloperID(app, team: expectedTeam)
+        try verifyBundle(app, version: version)
+        guard try metadata(app)["PFLOWUpdateTeamID"] as? String == expectedTeam else { throw UpdateError.invalid }
+        try run("/usr/sbin/spctl", ["--assess", "--type", "execute", app.path])
+    }
+    static func copyHelper(from app: URL, to helper: URL, version: String, validate: (URL, String) throws -> Void = verify) throws {
+        try validate(app, version)
+        try FileManager.default.copyItem(at: app, to: helper)
+        try validate(helper, version)
     }
     static func launchAndVerify(_ app: URL) throws {
         try run("/usr/bin/open", ["-n", app.path])
@@ -117,15 +160,19 @@ enum MacUpdateInstaller {
             throw error
         }
     }
-    static func apply(_ file: URL) -> Int32 {
+    static func apply(_ file: URL, validate: (URL, String) throws -> Void = verify) -> Int32 {
         let fm = FileManager.default, job = file.deletingLastPathComponent()
         var restart: URL?
         do {
+            let ownVersion = try metadata(Bundle.main.bundleURL)["CFBundleShortVersionString"] as? String ?? ""
+            try validate(Bundle.main.bundleURL, ownVersion)
             let plan = try JSONDecoder().decode(MacUpdatePlan.self, from: Data(contentsOf: file))
             guard plan.source.lastPathComponent == "pFlow.app", plan.source.deletingLastPathComponent().lastPathComponent.hasPrefix(".pflow-update-"), plan.source.deletingLastPathComponent().deletingLastPathComponent() == plan.destination.deletingLastPathComponent(),
                   let old = NSRunningApplication(processIdentifier: plan.pid), old.bundleURL?.resolvingSymlinksInPath() == plan.destination,
                   let date = old.launchDate, abs(date.timeIntervalSince1970 - plan.started) < 0.01 else { throw UpdateError.invalid }
-            try verify(plan.source, version: plan.version)
+            let previous = try metadata(plan.destination)["CFBundleShortVersionString"] as? String ?? ""
+            guard try ReleaseCatalog.version(previous).lexicographicallyPrecedes(ReleaseCatalog.version(plan.version)) else { throw UpdateError.invalid }
+            try validate(plan.source, plan.version)
             try Data("ready".utf8).write(to: job.appendingPathComponent("ready"), options: .atomic)
             let deadline = Date().addingTimeInterval(120)
             while kill(plan.pid, 0) == 0 {
@@ -134,7 +181,11 @@ enum MacUpdateInstaller {
             }
             guard !fm.fileExists(atPath: job.appendingPathComponent("cancel").path), !NSRunningApplication.runningApplications(withBundleIdentifier: "com.pesh.Yap").contains(where: { $0.processIdentifier != getpid() && $0.bundleURL?.resolvingSymlinksInPath() == plan.destination }) else { throw UpdateError.busy }
             restart = plan.destination
-            try replace(source: plan.source, destination: plan.destination) { try launchAndVerify(plan.destination) }
+            try validate(plan.source, plan.version)
+            try replace(source: plan.source, destination: plan.destination) {
+                try validate(plan.destination, plan.version)
+                try launchAndVerify(plan.destination)
+            }
             try Data("installed".utf8).write(to: job.appendingPathComponent("result"), options: .atomic)
             try? fm.removeItem(at: plan.source.deletingLastPathComponent())
             return 0
@@ -195,13 +246,9 @@ final class MacUpdates: ObservableObject {
             try MacUpdateInstaller.run("/usr/bin/hdiutil", ["detach", mount.path])
             let plan = MacUpdatePlan(source: source, destination: destination, version: offer.version, pid: getpid(), started: NSRunningApplication.current.launchDate!.timeIntervalSince1970)
             let file = job.appendingPathComponent("plan.json"); try JSONEncoder().encode(plan).write(to: file, options: .atomic)
-            let helperApp = job.appendingPathComponent("helper.app"); try fm.copyItem(at: Bundle.main.bundleURL, to: helperApp)
-            let infoFile = helperApp.appendingPathComponent("Contents/Info.plist")
-            var info = try PropertyListSerialization.propertyList(from: Data(contentsOf: infoFile), format: nil) as! [String: Any]
-            info["CFBundleIdentifier"] = "com.pesh.Yap.UpdateHelper"
-            try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0).write(to: infoFile)
-            try MacUpdateInstaller.run("/usr/bin/codesign", ["--force", "--sign", "-", helperApp.path])
-            let process = Process(); process.executableURL = helperApp.appendingPathComponent("Contents/MacOS/Yap"); process.arguments = ["--apply-update", file.path]; try process.run(); helper = process
+            let helperApp = job.appendingPathComponent("helper.app")
+            try MacUpdateInstaller.copyHelper(from: Bundle.main.bundleURL, to: helperApp, version: Self.current)
+            let process = Process(); process.executableURL = try MacUpdateInstaller.executable(helperApp); process.arguments = ["--apply-update", file.path]; try process.run(); helper = process
             let deadline = Date().addingTimeInterval(60)
             while !fm.fileExists(atPath: job.appendingPathComponent("ready").path) { guard process.isRunning, Date() < deadline else { throw UpdateError.failed }; try await Task.sleep(for: .milliseconds(100)) }
             try Task.checkCancellation(); NSApplication.shared.terminate(nil)

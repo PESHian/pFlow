@@ -1,0 +1,91 @@
+{
+ "description": "Moving the caret stops typing for the take; nothing is written afterwards, cancel leaves the text.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "Dear Sam,\n",
+   "selection": [
+    10,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "Thanks for",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Thanks for the map",
+   "expect": {
+    "action": "write",
+    "range": [
+     10,
+     0
+    ],
+    "text": "Thanks for",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Dear Sam,\nThanks for",
+    "selection": [
+     20,
+     0
+    ]
+   }
+  },
+  {
+   "op": "select",
+   "range": [
+    3,
+    0
+   ]
+  },
+  {
+   "op": "update",
+   "text": "Thanks for the map and",
+   "expect": {
+    "action": "stop",
+    "reason": "caret"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Thanks for the map and the",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "final",
+   "text": "Thanks for the map and the compass.",
+   "expect": {
+    "action": "stop",
+    "reason": "caret"
+   }
+  },
+  {
+   "op": "cancel",
+   "expect": {
+    "action": "stop",
+    "reason": "caret"
+   },
+   "field": {
+    "value": "Dear Sam,\nThanks for",
+    "selection": [
+     3,
+     0
+    ]
+   }
+  }
+ ]
+}

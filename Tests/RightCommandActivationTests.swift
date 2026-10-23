@@ -79,6 +79,14 @@ final class RightCommandActivationTests: XCTestCase {
         XCTAssertEqual(a.press(at: 2), [.finish])
         XCTAssertEqual(a.release(at: 2.1), [])
     }
+    func testTwoDeliberateTapsEnterContinuousMode() {
+        var a = RightCommandActivation()
+        XCTAssertEqual(a.press(at: 1), [.start])
+        XCTAssertEqual(a.release(at: 1.25), [.pause])
+        XCTAssertEqual(a.press(at: 1.50), [.resume])
+        XCTAssertEqual(a.release(at: 1.75), [])
+        XCTAssertEqual(a.state, .continuous)
+    }
     func testSingleTapCommitsOnce() {
         var a = RightCommandActivation()
         _ = a.press(at: 0)

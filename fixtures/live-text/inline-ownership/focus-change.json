@@ -1,0 +1,59 @@
+{
+ "description": "Moving to another field stops typing; cancel does not touch either field.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "",
+   "selection": [
+    0,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "Hello",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Hello there",
+   "expect": {
+    "action": "write",
+    "range": [
+     0,
+     0
+    ],
+    "text": "Hello",
+    "confirm": "ok"
+   }
+  },
+  {
+   "op": "focus",
+   "element": "other"
+  },
+  {
+   "op": "update",
+   "text": "Hello there friend",
+   "expect": {
+    "action": "stop",
+    "reason": "focus"
+   }
+  },
+  {
+   "op": "cancel",
+   "expect": {
+    "action": "stop",
+    "reason": "focus"
+   }
+  }
+ ]
+}

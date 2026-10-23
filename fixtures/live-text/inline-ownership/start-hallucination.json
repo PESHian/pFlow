@@ -1,0 +1,87 @@
+{
+ "description": "A phrase only one Whisper window heard is never typed.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "",
+   "selection": [
+    0,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "On the first cold night.",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "The harbor",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "The harbor opens",
+   "expect": {
+    "action": "write",
+    "range": [
+     0,
+     0
+    ],
+    "text": "The harbor",
+    "confirm": "ok"
+   }
+  },
+  {
+   "op": "update",
+   "text": "The harbor opens at dawn",
+   "expect": {
+    "action": "write",
+    "range": [
+     10,
+     0
+    ],
+    "text": " opens",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "The harbor opens",
+    "selection": [
+     16,
+     0
+    ]
+   }
+  },
+  {
+   "op": "final",
+   "text": "The harbor opens at dawn.",
+   "expect": {
+    "action": "write",
+    "range": [
+     16,
+     0
+    ],
+    "text": " at dawn.",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "The harbor opens at dawn.",
+    "selection": [
+     25,
+     0
+    ]
+   }
+  }
+ ]
+}

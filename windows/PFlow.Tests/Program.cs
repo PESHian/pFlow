@@ -5,12 +5,18 @@ using System.Text.RegularExpressions;
 if (args.Contains("--updates-network-only")) { await UpdateChecks.Network(); return; }
 if (args.Contains("--capture-only")) { KeyCaptureChecks.Run(); return; }
 if (args.Contains("--learn-keys-only")) { HotkeyChecks.Run(); KeyCaptureChecks.Run(); return; }
+if (args.Contains("--live-text-only")) { await LiveTextChecks.Run(); LiveInlineChecks.Run(); SpeechChecks.Run(); InstalledChecks.Run(); return; }
+if (args.Contains("--installed-only")) { InstalledChecks.Run(); return; }
 UpdateChecks.Run();
 if (!args.Contains("--hotkeys-only")) await UpdateChecks.Network();
 if (args.Contains("--updates-only")) return;
 HotkeyChecks.Run();
 KeyCaptureChecks.Run();
 if (args.Contains("--hotkeys-only")) return;
+await LiveTextChecks.Run();
+LiveInlineChecks.Run();
+SpeechChecks.Run();
+InstalledChecks.Run();
 int passed = 0;
 void Check(string name, bool condition) { if (!condition) throw new Exception("FAIL: " + name); passed++; Console.WriteLine("PASS: " + name); }
 string Words(string value) => string.Join(" ", Regex.Split(value.Trim(), @"\s+"));
@@ -113,6 +119,10 @@ void CapsuleSpacingChecks()
     Check("recognition pause segments have separators", TextProcessing.JoinRecognitionLines("First.\nSecond.\r\nThird.") == "First. Second. Third.");
     Check("recognition blank paragraphs preserved", TextProcessing.JoinRecognitionLines("First.\n\nNext.") == "First.\n\nNext.");
     Check("recognition lists preserved", TextProcessing.JoinRecognitionLines("1. First.\n2. Next.") == "1. First.\n2. Next.");
+    // Whisper segment lines start with a space; the owner saw "this  brown" and "sea  of pee" at every join.
+    Check("segment joins never double a space", TextProcessing.JoinRecognitionLines("there was this\n brown little fox\n and he stunk\n like all sin.") == "there was this brown little fox and he stunk like all sin.");
+    Check("segment joins keep paragraph breaks and collapse tabs", TextProcessing.JoinRecognitionLines("First part. \n\n Second\tpart.\n continues.") == "First part.\n\nSecond part. continues.");
+
     string sentence = "Morgan checked the blue bicycle near the front gate and recorded every visible detail in the fictional exercise. ";
     string account = string.Concat(Enumerable.Repeat(sentence, 4)) + "Regarding the witness, Alex described the silver lock and did not guess who left it there. " + string.Concat(Enumerable.Repeat(sentence, 4));
     string grouped = TextProcessing.Paragraphs(account);
@@ -126,6 +136,30 @@ void CapsuleSpacingChecks()
     Check("meter is independent of display cadence", single.Levels().Zip(frames.Levels()).All(pair => Math.Abs(pair.First - pair.Second) < 1e-8));
     wave.Reset(); wave.Advance(double.NaN, .1); Check("silence and invalid input stay flat", wave.Levels().All(x => x == 0));
     for(int i = 0; i < 100; i++) wave.Advance(1, .016); Check("loud levels bounded", wave.Levels().All(x => x >= 0 && x <= 1));
+    // Waveform loudness: a fixture trace of a Windows microphone at ordinary speech levels must move the bars.
+    Check("ordinary speech on a Windows microphone (-35 dBFS) rises above the capsule's 0.25 peak floor, so syllables fill the bars",
+        AudioLevels.FromDecibels(-35) > 0.25 && AudioLevels.FromDecibels(-25) > 0.45 && AudioLevels.FromDecibels(-15) > 0.6);
+    Check("room noise stays flat and the level is monotonic and bounded", AudioLevels.FromDecibels(-60) == 0 && AudioLevels.FromDecibels(-52) < 0.06 && AudioLevels.FromRms(0) == 0 && AudioLevels.FromRms(1) == 1 && AudioLevels.FromRms(2) == 1
+        && AudioLevels.FromDecibels(-40) < AudioLevels.FromDecibels(-30) && AudioLevels.FromDecibels(-30) < AudioLevels.FromDecibels(-20));
+    { var trace = new WaveMotion(); double peak = 0; var speech = new[] { -50, -38, -32, -28, -30, -36, -48, -50, -31, -27, -33, -47 };
+      foreach (int db in speech) { for (int i = 0; i < 6; i++) trace.Advance(AudioLevels.FromDecibels(db), .016); peak = Math.Max(peak, trace.Levels().Max()); }
+      Check("a speech-shaped trace at normal microphone levels peaks above 0.4 of full scale (was 0.2 with the old -45 dB floor)", peak > 0.4); }
+    Check("same words: line breaks and spaces may differ, words may not", TextProcessing.SameWords("one two\n\nthree", "one  two three") && !TextProcessing.SameWords("one two", "onetwo") && !TextProcessing.SameWords("one two", "one two three") && TextProcessing.SameWords(" a ", "a"));
+    Check("log lines lose every path, so an account name never reaches the log", PrivateLog.Scrub(@"Could not find file 'C:\Users\Fictional\AppData\Local\pFlow\x.json'.") == "Could not find file '<path>'."
+        && PrivateLog.Scrub(@"\\server\share\Fictional\f.txt was locked") == "<path> was locked" && PrivateLog.Scrub("/Users/fictional/Library/x failed") == "<path> failed"
+        && PrivateLog.Scrub("Focus changed. Your text is in History.") == "Focus changed. Your text is in History." && PrivateLog.Reason(new IOException(@"locked D:\Fictional\a.b")) == "IOException: locked <path>");
+    Check("a path with a space in the account name is scrubbed whole, quoted or not",
+        PrivateLog.Scrub(@"Could not find file 'C:\Users\John Smith\AppData\Local\pFlow\x.json'.") == "Could not find file '<path>'."
+        && PrivateLog.Scrub(@"Access to C:\Users\John Smith\Documents\notes.txt was denied") == "Access to <path> was denied"
+        && PrivateLog.Scrub(@"Access to the path 'C:\Users\John Smith' is denied.") == "Access to the path '<path>' is denied."
+        && PrivateLog.Scrub("open \"/Users/John Smith/Library/x\" failed") == "open \"<path>\" failed"
+        && PrivateLog.Scrub("/home/john smith/a b/x failed") == "<path> failed"
+        && !PrivateLog.Scrub(@"saved C:\Users\John Smith\Desktop\a.txt and D:\Users\Jane Smith\b.txt").Contains("Smith"));
+    // Setup carries the package at its end, found only through the trailer.
+    { var trailer = SetupPackage.Trailer(123456); var bytes = new byte[500000];
+      Check("the setup trailer names where the ZIP starts", trailer.Length == 16 && SetupPackage.ZipStart(trailer, 500000) == 123456);
+      Check("no trailer, a wrong magic, or an offset past the end means no package", SetupPackage.ZipStart(new byte[16], 500000) == null && SetupPackage.ZipStart(trailer, 100) == null && SetupPackage.ZipStart(trailer[..15], 500000) == null);
+      Check("package paths stay under the unpack folder", SetupPackage.SafeEntry("payloads/win-x64/pFlow.exe") && SetupPackage.SafeEntry("shared/models/") && !SetupPackage.SafeEntry("../x") && !SetupPackage.SafeEntry("a/../b") && !SetupPackage.SafeEntry("/etc") && !SetupPackage.SafeEntry("C:\\x") && !SetupPackage.SafeEntry("")); }
     var areas = new[] { new WorkArea(0, 0, 1920, 1040), new WorkArea(-1920, 0, 1920, 1040) };
     Check("default bottom center", CapsulePlacement.Place(areas, 0, 120, 32, null, null) == (900, 968));
     Check("focused negative display bottom center", CapsulePlacement.Place(areas, 1, 120, 32, null, null) == (-1020, 968));
@@ -208,7 +242,34 @@ Check("cleanup rejects moved quotation", !TextFidelity.CleanupIsFaithful("Morgan
 Check("cleanup rejects introduced operator", !TextFidelity.CleanupIsFaithful("Morgan saw Alex.", "Morgan < saw Alex."));
 Check("cleanup rejects introduced quotes", !TextFidelity.CleanupIsFaithful("Morgan saw Alex.", "Morgan saw \"Alex\"."));
 Check("cleanup keeps risky blocks exactly", TextFidelity.CleanupIsFaithful("At - 12, Morgan said \"five\" 🙂.", "At - 12, Morgan said \"five\" 🙂."));
-Check("cleanup intentionally rejects numeric stammer repair", !TextFidelity.CleanupIsFaithful("The server server stopped at 14:30.", "The server stopped at 14:30."));
+Check("cleanup permits stammer repair beside an intact time", TextFidelity.CleanupIsFaithful("The server server stopped at 14:30.", "The server stopped at 14:30."));
+Check("cleanup never collapses a repeated number", !TextFidelity.CleanupIsFaithful("Room five five, by the stairs 5 5.", "Room five five, by the stairs 5."));
+// Numbers spoken as words are numbers: a repeat is a digit, never a stammer ("room five five" is room 55).
+Check("cleanup never collapses a repeated number word", !TextFidelity.CleanupIsFaithful("room five five", "Room five."));
+Check("cleanup never collapses a repeated number word before another", !TextFidelity.CleanupIsFaithful("two two seven", "Two seven."));
+Check("cleanup never collapses oh inside a number run", !TextFidelity.CleanupIsFaithful("agent oh oh seven", "Agent oh seven."));
+Check("cleanup still punctuates a repeated number word", TextFidelity.CleanupIsFaithful("room five five", "Room five, five."));
+Check("cleanup still repairs oh oh outside a number", TextFidelity.CleanupIsFaithful("oh oh well we tried", "Oh well, we tried."));
+Check("symbols-only difference is told apart from changed words", TextFidelity.OnlySymbolsDiffer("5,6,7", "5, 6, 7") && TextFidelity.OnlySymbolsDiffer("it cost $40", "It cost 40.")
+    && !TextFidelity.OnlySymbolsDiffer("we didn't go", "We did not go.") && !TextFidelity.OnlySymbolsDiffer("room five five", "Room five."));
+// The model now sees takes with numbers, contractions and symbols; punctuation and case may change, nothing else.
+Check("cleanup accepts punctuation and case around numbers", TextFidelity.CleanupIsFaithful("so next year in 4040 bc jimmy dean was born in a sea of pee", "So next year in 4040 BC, Jimmy Dean was born in a sea of pee."));
+Check("cleanup accepts a comma in far far away with a contraction", TextFidelity.CleanupIsFaithful("far far away we didn't stop at 4:30", "Far, far away, we didn't stop at 4:30."));
+Check("cleanup accepts a period after a number at the end", TextFidelity.CleanupIsFaithful("the total was 40 then we left", "The total was 40. Then we left."));
+Check("cleanup rejects a changed number beside punctuation", !TextFidelity.CleanupIsFaithful("call me at 4:30 tomorrow", "Call me at 4:31 tomorrow."));
+Check("cleanup rejects a lost apostrophe", !TextFidelity.CleanupIsFaithful("we didn't go", "We did not go."));
+Check("cleanup rejects a dropped currency sign", !TextFidelity.CleanupIsFaithful("it cost $40 at the store", "It cost 40 at the store."));
+Check("cleanup rejects a thousands separator turned into words", !TextFidelity.CleanupIsFaithful("about 1,000 people came", "About 1 000 people came."));
+Check("cleanup accepts a spoken clock time written with a colon", TextFidelity.CleanupIsFaithful("we met him at about 6 30 and left", "We met him at about 6:30 and left.") && TextFidelity.CleanupIsFaithful("the train at 12 05 was late", "The train at 12:05 was late."));
+Check("cleanup rejects a colon after an hour past 24", !TextFidelity.CleanupIsFaithful("the code was 25 30 today", "The code was 25:30 today."));
+Check("cleanup rejects a colon before a minute past 59", !TextFidelity.CleanupIsFaithful("we met at 6 60", "We met at 6:60."));
+Check("cleanup rejects a colon before a one-digit minute", !TextFidelity.CleanupIsFaithful("we met at 6 5", "We met at 6:5."));
+Check("cleanup accepts a colon only after an hour, so a second one in a split time is rejected", !TextFidelity.CleanupIsFaithful("the split was 6 30 45", "The split was 6:30:45."));
+Check("cleanup still rejects a thousands comma or a decimal point joined into the number", !TextFidelity.CleanupIsFaithful("about 1 000 people", "About 1,000 people.") && !TextFidelity.CleanupIsFaithful("it was 3 5 metres", "It was 3.5 metres."));
+Check("cleanup keeps a decimal inside a number", TextFidelity.CleanupIsFaithful("dose was 3.5 mg then rest", "Dose was 3.5 mg. Then rest."));
+Check("cleanup rejects a dropped percent", !TextFidelity.CleanupIsFaithful("maybe 40% done", "Maybe 40 done."));
+Check("cleanup accepts filler removal with symbols present", TextFidelity.CleanupIsFaithful("um the price is $5 uh each", "The price is $5 each."));
+Check("cleanup accepts a question mark", TextFidelity.CleanupIsFaithful("are you coming at 5", "Are you coming at 5?"));
 Check("cleanup rejects sign loss", !TextFidelity.CleanupIsFaithful("Temperature was -12 degrees.", "Temperature was 12 degrees."));
 Check("cleanup rejects positive sign loss", !TextFidelity.CleanupIsFaithful("The balance was +12.", "The balance was 12."));
 Check("cleanup rejects changed decimal", !TextFidelity.CleanupIsFaithful("Dose was .5 liters.", "Dose was 5 liters."));

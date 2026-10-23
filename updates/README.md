@@ -21,6 +21,11 @@ Mac assets use pFlow-Mac-VERSION-testing.dmg. Keep the full universal Windows ZI
 and Mac DMG available for a first install or recovery. Both apps retain the
 previous application folder when replacing it; user data remains outside the app.
 
+New Mac feed entries also require an attested trusted-release receipt for the
+exact DMG and approved Apple team. The legacy filename remains for 0.3.5 clients.
+See [Mac release checks and setup](MAC-RELEASE.md). Existing Mac downloads remain
+available; their signing status is not changed by a source commit.
+
 The update protocol allows only HTTPS downloads from this GitHub repository and
 GitHub's release CDN. Clients verify the feed signature, platform, version,
 expected byte count and SHA-256 before installation. Windows also rejects unsafe

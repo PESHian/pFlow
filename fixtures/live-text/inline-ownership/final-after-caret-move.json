@@ -1,0 +1,69 @@
+{
+ "description": "The person moves the caret right before the finished text arrives, with no update in between: the final is refused and nothing is written.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "Memo: ",
+   "selection": [
+    6,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "Lanterns",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Lanterns on the pier",
+   "expect": {
+    "action": "write",
+    "range": [
+     6,
+     0
+    ],
+    "text": "Lanterns",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Memo: Lanterns",
+    "selection": [
+     14,
+     0
+    ]
+   }
+  },
+  {
+   "op": "select",
+   "range": [
+    2,
+    0
+   ]
+  },
+  {
+   "op": "final",
+   "text": "Lanterns on the pier at dusk.",
+   "expect": {
+    "action": "stop",
+    "reason": "caret"
+   },
+   "field": {
+    "value": "Memo: Lanterns",
+    "selection": [
+     2,
+     0
+    ]
+   }
+  }
+ ]
+}

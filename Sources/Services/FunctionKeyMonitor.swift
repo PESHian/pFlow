@@ -106,7 +106,7 @@ final class FunctionKeyMonitor {
             // Accessibility not granted (an active tap requires it). The picker
             // change is still saved; sync() runs again on the next launch or
             // trigger change, after the permission flow has done its thing.
-            NSLog("Yap: could not create function-key event tap; is Accessibility granted?")
+            NSLog("pFlow: could not create function-key event tap; is Accessibility granted?")
             return
         }
 

@@ -1,0 +1,55 @@
+{
+  "description": "Revisions replace earlier words; they are not appended.",
+  "events": [
+    {
+      "op": "begin",
+      "session": "take-a"
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 0,
+      "text": "The light",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 1,
+      "text": "The lighthouse",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 2,
+      "text": "The lighthouse keeper whistled",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 3,
+      "text": "The lighthouse keeper whistles",
+      "isFinal": false
+    },
+    {
+      "op": "update",
+      "session": "take-a",
+      "sequence": 4,
+      "text": "The lighthouse keeper whistles at dawn.",
+      "isFinal": true
+    }
+  ],
+  "expected": {
+    "shown": [
+      "The light",
+      "The lighthouse",
+      "The lighthouse keeper whistled",
+      "The lighthouse keeper whistles",
+      "The lighthouse keeper whistles at dawn."
+    ],
+    "text": "The lighthouse keeper whistles at dawn.",
+    "phase": "final"
+  }
+}

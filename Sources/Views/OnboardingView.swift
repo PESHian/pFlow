@@ -22,52 +22,38 @@ struct OnboardingView: View {
                     title: "Microphone",
                     detail: "To hear you.",
                     granted: app.permissions.microphone == .granted,
-                    action: { Task { await app.permissions.requestMicrophone() } }
+                    action: { Task { await app.permissions.grantMicrophone() } }
                 )
                 PermissionStep(
                     icon: "waveform",
                     title: "Speech Recognition",
                     detail: "To transcribe on-device.",
                     granted: app.permissions.speech == .granted,
-                    action: { Task { await app.permissions.requestSpeech() } }
+                    action: { Task { await app.permissions.grantSpeech() } }
                 )
                 PermissionStep(
                     icon: "accessibility",
                     title: "Accessibility",
                     detail: "To paste into other apps.",
                     granted: app.permissions.accessibility,
-                    action: {
-                        app.permissions.requestAccessibility()
-                        app.permissions.openAccessibilitySettings()
-                    }
+                    action: { Task { await app.permissions.grantAccessibility() } }
                 )
+                if let hint = app.permissions.accessibilityHint {
+                    Text(hint)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 PermissionStep(
                     icon: "wand.and.stars",
                     title: "Automation",
                     detail: "To place text in the focused field.",
                     granted: app.permissions.automation == .granted,
-                    action: {
-                        Task {
-                            await app.permissions.requestAutomation()
-                            if app.permissions.automation != .granted {
-                                app.permissions.openAutomationSettings()
-                            }
-                        }
-                    }
+                    action: { Task { await app.permissions.grantAutomation() } }
                 )
             }
 
             Spacer(minLength: 0)
-
-            if !app.permissions.accessibility {
-                Button("Already switched on? Reset and re-grant") {
-                    app.permissions.resetAccessibilityGrant()
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-            }
 
             Button(app.permissions.allGranted ? "Continue to Settings" : "Continue") {
                 NSApp.keyWindow?.close()

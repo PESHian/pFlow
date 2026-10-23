@@ -15,7 +15,7 @@ struct RightCommandActivation {
     private var pressedAt: TimeInterval = 0
     private var releasedAt: TimeInterval = 0
     static let doubleTapWindow: TimeInterval = 0.3
-    static let tapDuration: TimeInterval = 0.18
+    static let tapDuration: TimeInterval = doubleTapWindow
 
     init() {}
 

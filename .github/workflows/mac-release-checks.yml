@@ -1,0 +1,17 @@
+name: Mac release policy tests
+on:
+  push:
+    paths: ['scripts/mac_*.py', 'scripts/publish-update-feed.py', 'scripts/tests/**', 'release.sh', '.github/workflows/mac-*.yml']
+  pull_request:
+    paths: ['scripts/mac_*.py', 'scripts/publish-update-feed.py', 'scripts/tests/**', 'release.sh', '.github/workflows/mac-*.yml']
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - run: bash -n release.sh
+      - run: python3 -m unittest discover -s scripts/tests -p 'test_*.py'

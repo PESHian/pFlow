@@ -1,0 +1,19 @@
+{
+ "description": "A field whose text cannot be read uses Preview.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": null,
+   "selection": [
+    0,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "unsupported",
+ "steps": []
+}

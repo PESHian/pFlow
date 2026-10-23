@@ -26,6 +26,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PFLOW_UPDATE_SIGNING_KEY: ${{ secrets.PFLOW_UPDATE_SIGNING_KEY }}
           RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+          PFLOW_DEVELOPER_TEAM: ${{ vars.PFLOW_DEVELOPER_TEAM }}
         run: |
           python3 - <<'PY'
           import os, pathlib, subprocess, tempfile

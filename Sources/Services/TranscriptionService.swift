@@ -2,7 +2,7 @@ import Speech
 import AVFoundation
 
 final class TranscriptionService: StreamingTranscriber {
-    var onPartial: ((String) -> Void)?
+    var onTranscript: ((String) -> Void)?
 
     private var transcriber: SpeechTranscriber?
     private var analyzer: SpeechAnalyzer?
@@ -10,7 +10,18 @@ final class TranscriptionService: StreamingTranscriber {
     private var recognizerTask: Task<Void, Never>?
     private let converter = BufferConverter()
     private var analyzerFormat: AVAudioFormat?
+    // Written by the results task, read by finish(); the lock keeps them consistent.
+    private let textLock = NSLock()
     private var finalized = ""
+    private var volatile = ""
+    private var recognitionFailed = false
+    private let reportingOptions: Set<SpeechTranscriber.ReportingOption>
+
+    /// `fastResults` asks Apple Speech for quicker, less settled live words.
+    /// Timing runs compare it with the default; see the speed table in the ledger.
+    init(fastResults: Bool = false) {
+        reportingOptions = fastResults ? [.volatileResults, .fastResults] : [.volatileResults]
+    }
 
     /// The supported locale to transcribe `locale` with, or nil if this engine
     /// covers none of it. The returned locale is what must be handed to
@@ -28,12 +39,16 @@ final class TranscriptionService: StreamingTranscriber {
     }
 
     func begin(locale: Locale, contextualStrings: [String]) async throws {
-        finalized = ""
+        textLock.withLock {
+            finalized = ""
+            volatile = ""
+            recognitionFailed = false
+        }
 
         let transcriber = SpeechTranscriber(
             locale: locale,
             transcriptionOptions: [],
-            reportingOptions: [.volatileResults],
+            reportingOptions: reportingOptions,
             attributeOptions: [.audioTimeRange]
         )
         self.transcriber = transcriber
@@ -63,17 +78,25 @@ final class TranscriptionService: StreamingTranscriber {
             guard let self, let transcriber = self.transcriber else { return }
             do {
                 for try await result in transcriber.results {
+                    // A volatile result replaces the previous volatile one; it is
+                    // a revision of the unfinished words, not more words.
                     let text = String(result.text.characters)
-                    if result.isFinal {
-                        self.finalized += text
-                        let snapshot = self.finalized
-                        await MainActor.run { self.onPartial?(snapshot) }
-                    } else {
-                        let snapshot = self.finalized + text
-                        await MainActor.run { self.onPartial?(snapshot) }
+                    let snapshot = self.textLock.withLock {
+                        if result.isFinal {
+                            self.finalized += text
+                            self.volatile = ""
+                        } else {
+                            self.volatile = text
+                        }
+                        return self.finalized + self.volatile
                     }
+                    self.onTranscript?(snapshot)
                 }
             } catch {
+                if !Task.isCancelled {
+                    NSLog("pFlow: live recognition stopped: \(error.localizedDescription)")
+                    self.textLock.withLock { self.recognitionFailed = true }
+                }
             }
         }
 
@@ -96,12 +119,15 @@ final class TranscriptionService: StreamingTranscriber {
         recognizerTask?.cancel()
         recognizerTask = nil
 
-        let result = finalized.trimmingCharacters(in: .whitespacesAndNewlines)
+        let (text, kept, failed) = textLock.withLock { (finalized, finalized + volatile, recognitionFailed) }
         transcriber = nil
         analyzer = nil
         inputBuilder = nil
         analyzerFormat = nil
-        return result
+        if failed {
+            throw TranscriptionError.interrupted(kept: kept.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Reserve the model ahead of time at launch so the first dictation isn't held up by it.
@@ -130,7 +156,7 @@ final class TranscriptionService: StreamingTranscriber {
             do {
                 try await AssetInventory.reserve(locale: locale)
             } catch {
-                NSLog("Yap: could not reserve locale \(locale.identifier): \(error.localizedDescription)")
+                NSLog("pFlow: could not reserve locale \(locale.identifier): \(error.localizedDescription)")
             }
         }
     }

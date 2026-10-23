@@ -1,0 +1,94 @@
+{
+ "description": "Switching apps stops typing for the take, even after coming back. Cancel removes pFlow's words only because everything is exactly as pFlow left it.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "Log: ",
+   "selection": [
+    5,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "Boat",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Boat ready",
+   "expect": {
+    "action": "write",
+    "range": [
+     5,
+     0
+    ],
+    "text": "Boat",
+    "confirm": "ok"
+   }
+  },
+  {
+   "op": "app",
+   "pid": 2
+  },
+  {
+   "op": "update",
+   "text": "Boat ready to sail",
+   "expect": {
+    "action": "stop",
+    "reason": "app"
+   }
+  },
+  {
+   "op": "app",
+   "pid": 1
+  },
+  {
+   "op": "update",
+   "text": "Boat ready to sail now",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "final",
+   "text": "Boat ready to sail now.",
+   "expect": {
+    "action": "stop",
+    "reason": "app"
+   }
+  },
+  {
+   "op": "cancel",
+   "expect": {
+    "action": "write",
+    "range": [
+     5,
+     4
+    ],
+    "text": "",
+    "select": [
+     5,
+     0
+    ],
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Log: ",
+    "selection": [
+     5,
+     0
+    ]
+   }
+  }
+ ]
+}

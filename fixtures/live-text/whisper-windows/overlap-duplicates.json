@@ -1,0 +1,89 @@
+{
+  "description": "A long sentence forces sliding windows. Words heard before the new window starts are kept (placed in time by character share); the new window repeats 'carried', which is dropped. A repeated window end is ignored, and a window that starts inside kept audio adds no copy.",
+  "language": "en",
+  "windows": [
+    {
+      "startMs": 0,
+      "endMs": 6000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 6000,
+          "text": " Seven otters carried smooth pebbles across the shallow bay",
+          "noSpeechProbability": 0.03
+        }
+      ]
+    },
+    {
+      "startMs": 2000,
+      "endMs": 8000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 3500,
+          "text": " carried smooth pebbles across the shallow bay.",
+          "noSpeechProbability": 0.02
+        },
+        {
+          "fromMs": 3500,
+          "toMs": 6000,
+          "text": " The tide was turning",
+          "noSpeechProbability": 0.04
+        }
+      ]
+    },
+    {
+      "startMs": 2000,
+      "endMs": 8000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 6000,
+          "text": " Carried smooth pebbles across the shallow bay the tide was burning",
+          "noSpeechProbability": 0.05
+        }
+      ]
+    },
+    {
+      "startMs": 5500,
+      "endMs": 9000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 3500,
+          "text": " The tide was turning slowly.",
+          "noSpeechProbability": 0.03
+        }
+      ]
+    },
+    {
+      "startMs": 5000,
+      "endMs": 10000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 500,
+          "text": " bay.",
+          "noSpeechProbability": 0.1
+        },
+        {
+          "fromMs": 500,
+          "toMs": 5000,
+          "text": " The tide was turning slowly.",
+          "noSpeechProbability": 0.03
+        }
+      ]
+    }
+  ],
+  "expected": {
+    "afterEach": [
+      "Seven otters carried smooth pebbles across the shallow bay",
+      "Seven otters carried smooth pebbles across the shallow bay. The tide was turning",
+      "Seven otters carried smooth pebbles across the shallow bay. The tide was turning",
+      "Seven otters carried smooth pebbles across the shallow bay. The tide was turning slowly.",
+      "Seven otters carried smooth pebbles across the shallow bay. The tide was turning slowly."
+    ],
+    "text": "Seven otters carried smooth pebbles across the shallow bay. The tide was turning slowly.",
+    "committedEndMs": 5500
+  }
+}

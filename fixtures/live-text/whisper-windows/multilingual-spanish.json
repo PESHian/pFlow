@@ -1,0 +1,63 @@
+{
+  "description": "Spanish: accents are kept, comparison ignores case and punctuation, so 'Está'/'está' at the boundary is one word. An opening ¿ takes a space before it.",
+  "language": "es",
+  "windows": [
+    {
+      "startMs": 0,
+      "endMs": 6000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 6000,
+          "text": " ¿Dónde está el faro? Está junto al río",
+          "noSpeechProbability": 0.04
+        }
+      ]
+    },
+    {
+      "startMs": 4000,
+      "endMs": 10000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 2500,
+          "text": " está junto al río.",
+          "noSpeechProbability": 0.05
+        },
+        {
+          "fromMs": 2500,
+          "toMs": 6000,
+          "text": " Las gaviotas duermen",
+          "noSpeechProbability": 0.06
+        }
+      ]
+    },
+    {
+      "startMs": 6500,
+      "endMs": 11000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 2000,
+          "text": " Las gaviotas duermen.",
+          "noSpeechProbability": 0.05
+        },
+        {
+          "fromMs": 2000,
+          "toMs": 4500,
+          "text": " ¿Y los barcos?",
+          "noSpeechProbability": 0.05
+        }
+      ]
+    }
+  ],
+  "expected": {
+    "afterEach": [
+      "¿Dónde está el faro? Está junto al río",
+      "¿Dónde está el faro? Está junto al río. Las gaviotas duermen",
+      "¿Dónde está el faro? Está junto al río. Las gaviotas duermen. ¿Y los barcos?"
+    ],
+    "text": "¿Dónde está el faro? Está junto al río. Las gaviotas duermen. ¿Y los barcos?",
+    "committedEndMs": 8500
+  }
+}

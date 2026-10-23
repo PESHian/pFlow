@@ -1,0 +1,83 @@
+{
+  "description": "A window that ends no later than the last applied one, or before the kept audio, is ignored.",
+  "language": "en",
+  "windows": [
+    {
+      "startMs": 0,
+      "endMs": 3000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 1800,
+          "text": " Brave turtles",
+          "noSpeechProbability": 0.05
+        },
+        {
+          "fromMs": 1800,
+          "toMs": 3000,
+          "text": " swim north",
+          "noSpeechProbability": 0.05
+        }
+      ]
+    },
+    {
+      "startMs": 0,
+      "endMs": 2500,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 2500,
+          "text": " Grave turtles",
+          "noSpeechProbability": 0.05
+        }
+      ]
+    },
+    {
+      "startMs": 1800,
+      "endMs": 3000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 1200,
+          "text": " swam nowhere",
+          "noSpeechProbability": 0.05
+        }
+      ]
+    },
+    {
+      "startMs": 0,
+      "endMs": 1500,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 1500,
+          "text": " Brave",
+          "noSpeechProbability": 0.05
+        }
+      ]
+    },
+    {
+      "startMs": 1800,
+      "endMs": 4500,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 2700,
+          "text": " swim north at dawn",
+          "noSpeechProbability": 0.04
+        }
+      ]
+    }
+  ],
+  "expected": {
+    "afterEach": [
+      "Brave turtles swim north",
+      "Brave turtles swim north",
+      "Brave turtles swim north",
+      "Brave turtles swim north",
+      "Brave turtles swim north at dawn"
+    ],
+    "text": "Brave turtles swim north at dawn",
+    "committedEndMs": 1800
+  }
+}

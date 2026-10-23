@@ -1,0 +1,55 @@
+{
+ "description": "A write the app changes to other text of the same length, with the caret where expected, is still uncertain: the whole value is read back.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "",
+   "selection": [
+    0,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "Rain",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Rain soon",
+   "expect": {
+    "action": "write",
+    "range": [
+     0,
+     0
+    ],
+    "text": "Rain",
+    "confirm": "uncertain"
+   },
+   "apply": {
+    "value": "Rein",
+    "selection": [
+     4,
+     0
+    ]
+   }
+  },
+  {
+   "op": "final",
+   "text": "Rain soon.",
+   "expect": {
+    "action": "stop",
+    "reason": "uncertain"
+   }
+  }
+ ]
+}

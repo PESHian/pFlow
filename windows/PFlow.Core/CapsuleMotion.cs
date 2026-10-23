@@ -1,5 +1,16 @@
 namespace PFlow.Core;
 
+/// Microphone loudness as a 0..1 level for the waveform. Windows microphones
+/// often sit around -35 dBFS for ordinary speech, so the floor is -55 dB with a
+/// gentle curve: ordinary speech lands well above the capsule's 0.25 peak floor
+/// and fills the bars, while room noise near -55 dB stays flat.
+public static class AudioLevels
+{
+    public const double FloorDb = -55, Curve = 1.2;
+    public static double FromRms(double rms) => rms <= 0 ? 0 : Math.Pow(Math.Clamp((20 * Math.Log10(rms) - FloorDb) / -FloorDb, 0, 1), Curve);
+    public static double FromDecibels(double db) => FromRms(Math.Pow(10, db / 20));
+}
+
 public sealed class WaveMotion
 {
     const double Interval = .04;

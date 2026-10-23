@@ -1,0 +1,51 @@
+{
+ "description": "A refused write ends typing even though nothing changed.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "",
+   "selection": [
+    0,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "Kite",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "Kite flying",
+   "expect": {
+    "action": "write",
+    "range": [
+     0,
+     0
+    ],
+    "text": "Kite",
+    "confirm": "uncertain"
+   },
+   "apply": {
+    "accepted": false
+   }
+  },
+  {
+   "op": "final",
+   "text": "Kite flying.",
+   "expect": {
+    "action": "stop",
+    "reason": "uncertain"
+   }
+  }
+ ]
+}

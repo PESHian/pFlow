@@ -10,10 +10,14 @@ for arch in ('x64','x86','arm64'):
     assert not (root/'models').exists(),'Model changes require a full installer'
     paths=sorted(x for x in root.rglob('*') if x.is_file())
     assert all(x.suffix.lower()!='.pdb' for x in paths)
+    if arch=='x64': assert (root/'engine/pflow-whisper-avx2.exe').is_file(),'x64 payload needs the AVX2 speech worker'
     manifest=[]
     for file in paths:
-        with file.open('rb') as stream: digest=hashlib.file_digest(stream,'sha256').hexdigest()
-        manifest.append(dict(path=file.relative_to(root).as_posix(),sha256=digest))
+        data=file.read_bytes()
+        # No developer home folder may reach a user (same rule as windows/scripts/package-universal.py).
+        for raw in (data,data[::2],data[1::2]):
+            assert not re.search(rb'(?:/home/(?!runner/)[^/\x00\r\n ]+|/Users/[^/\x00\r\n ]+|[a-z]:[\\/]Users[\\/](?!runneradmin[\\/])[^\\/\x00\r\n ]+)',raw,re.I),file
+        manifest.append(dict(path=file.relative_to(root).as_posix(),sha256=hashlib.sha256(data).hexdigest()))
     archive=a.output/f'pFlow-Windows-{arch}-{a.version}-update.zip'
     with zipfile.ZipFile(archive,'x',compression=zipfile.ZIP_DEFLATED,compresslevel=1) as z:
         for file in paths:z.write(file,file.relative_to(root).as_posix())

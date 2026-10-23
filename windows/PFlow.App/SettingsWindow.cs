@@ -13,12 +13,12 @@ internal sealed partial class SettingsWindow : Window
     readonly Func<bool> busy;
     readonly Action? checkUpdates;
     Action? cancelKeySelection;
-    CancellationTokenSource? download;
+    DownloadControl textDownload = null!, whisperDownload = null!;
+    readonly TextBlock modelStatus = Text("");
     readonly TextBlock processingTime = Text("Processing time appears here after your next dictation.");
     readonly ContentControl page = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
     UIElement home = null!;
     readonly Dictionary<string, UIElement> navigationPages = [];
-    readonly TextBlock notice = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 1, 0, 1) };
     public SettingsWindow(StateStore store, Whisper whisper, LocalTextModel textModel, KeyboardHook keyboard, Action appearance, Func<bool> busy, Action? checkUpdates = null)
     {
         this.store = store; this.whisper = whisper; this.keyboard = keyboard; this.appearance = appearance; this.busy = busy;
@@ -35,13 +35,38 @@ internal sealed partial class SettingsWindow : Window
         home = Scroll(General()); ShowHome(); ApplyTheme(); SourceInitialized += (_, _) => ApplyTheme();
         processingTime.Text = ProcessingTimes.Read(store.DirectoryPath);
         var timingRefresh = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(1), System.Windows.Threading.DispatcherPriority.Background, (_, _) => { if (IsVisible && !busy()) processingTime.Text = ProcessingTimes.Read(store.DirectoryPath); }, Dispatcher);
-        Closed += (_, _) => { download?.Cancel(); timingRefresh.Stop(); };
+        Closed += (_, _) => { textDownload?.Cancel(); whisperDownload?.Cancel(); timingRefresh.Stop(); };
     }
     static StackPanel Panel() => new() { Margin = new Thickness(20) };
     static TextBlock Text(string value) => new() { Text = value, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 5), LineHeight = 19 };
     static Button Button(string label, Action click) { var b = new Button { Content = label, Margin = new Thickness(0, 4, 0, 4), HorizontalAlignment = HorizontalAlignment.Left }; b.Click += (_, _) => click(); return b; }
-    static ScrollViewer Scroll(UIElement content) => new() { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = content };
-    internal void OpenHistoryPage() => ShowPage("View history", History, true);
+    /// Pages, lists and long text boxes scroll by touch (drag or pan) as well as by wheel and keyboard.
+    /// A list or text box inside a page pans only while it has something to scroll (WPF would otherwise
+    /// swallow the finger: it cancels the manipulation and turns it into mouse input, so the page never
+    /// moves); with nothing to scroll the page around it takes the drag. At its end, what the finger
+    /// cannot use there moves the page too, instead of nudging the window.
+    internal static T Pannable<T>(T element) where T : UIElement
+    {
+        ScrollViewer.SetPanningMode(element, PanningMode.VerticalOnly);
+        if (element is ScrollViewer) return element;
+        element.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((sender, e) => {
+            if (e.OriginalSource is ScrollViewer inner) ScrollViewer.SetPanningMode(element, inner.ScrollableHeight > 0 ? PanningMode.VerticalOnly : PanningMode.None);
+        }));
+        element.AddHandler(ManipulationBoundaryFeedbackEvent, new EventHandler<System.Windows.Input.ManipulationBoundaryFeedbackEventArgs>((sender, e) => {
+            if (PageAround(element) is { } page) { page.ScrollToVerticalOffset(page.VerticalOffset - e.BoundaryFeedback.Translation.Y); e.Handled = true; }
+        }));
+        return element;
+    }
+    /// The nearest scrolling page above an element, or null.
+    static ScrollViewer? PageAround(DependencyObject element)
+    {
+        for (var parent = VisualTreeHelper.GetParent(element); parent != null; parent = VisualTreeHelper.GetParent(parent))
+            if (parent is ScrollViewer page && ScrollViewer.GetPanningMode(page) != PanningMode.None) return page;
+        return null;
+    }
+    internal static ScrollViewer Scroll(UIElement content) => Pannable(new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = content });
+    /// History is built fresh each time it opens, so it always shows the latest takes.
+    internal void OpenHistoryPage() => ShowPage("View history", History, false);
     void ShowHome() { cancelKeySelection?.Invoke(); page.Content = home; }
     void ShowPage(string title, Func<UIElement> create, bool cache)
     {
@@ -95,7 +120,7 @@ internal sealed partial class SettingsWindow : Window
         StackPanel p;
         Navigate(root, "Templates", "Choose a report format or use plain dictation.", Templates);
         Navigate(root, "Usage statistics", "Daily words, speaking pace, and activity by app.", Statistics, false);
-        Navigate(root, "View history", "Browse and copy past transcripts.", History);
+        Navigate(root, "View history", "Browse and copy past transcripts.", History, cache: false);
         Navigate(root, "Dictionary", "Teach pFlow names and words it often gets wrong.", Dictionary);
         p = Section(root, "Shortcut"); p.Children.Add(Text("Activation key"));
         var activation = new ComboBox { ItemsSource = KeyLabels.Options(store.Preferences.ActivationKey), DisplayMemberPath = "Name", SelectedValuePath = "Id", SelectedValue = store.Preferences.ActivationKey, Margin = new Thickness(0, 0, 0, 8) };
@@ -161,18 +186,32 @@ internal sealed partial class SettingsWindow : Window
         keyboard.PhysicalKey += Mapping; keyboard.KeyCaptured += Captured;
         Deactivated += (_,_) => CancelSelection(); StateChanged += (_,_) => { if (WindowState == WindowState.Minimized) CancelSelection(); };
         Closed += (_,_) => { CancelSelection(); timeout.Stop(); keyboard.PhysicalKey -= Mapping; keyboard.KeyCaptured -= Captured; };
+        p = Section(root, "Live text");
+        // Read when the next recording starts; a recording in progress keeps its choice.
+        // All three choices stay visible, like the Mac app.
+        var liveChoices = new System.Windows.Controls.Primitives.UniformGrid { Columns = 3, Margin = new Thickness(-5, 0, -5, 8) };
+        var liveNote = Text(LiveTextModes.Note(store.Preferences.LiveTextMode)); liveNote.FontSize = 12; liveNote.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted");
+        string saved = LiveTextModes.Resolve(store.Preferences.LiveTextMode);
+        foreach (var choice in LiveTextModes.All) {
+            var option = Option(choice.Id, choice.Title, "LiveText", saved == choice.Id, "AppearanceChoice", () => {
+                store.Preferences.LiveTextMode = choice.Id; store.SavePreferences(); liveNote.Text = LiveTextModes.Note(choice.Id);
+            });
+            option.Content = new TextBlock { Text = choice.Title, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, FontSize = 12, FontWeight = FontWeights.SemiBold };
+            option.Margin = new Thickness(5, 0, 5, 0); option.MinHeight = 52; liveChoices.Children.Add(option);
+        }
+        p.Children.Add(liveChoices); p.Children.Add(liveNote);
         p = Section(root, "Dictation");
         Check(p, "Copy dictation to clipboard after insertion", store.Preferences.CopyDictationToClipboard, x => store.Preferences.CopyDictationToClipboard = x);
         Check(p, "Quiet start and stop sounds", store.Preferences.Sounds, x => store.Preferences.Sounds = x);
         Check(p, "Group long narrations into paragraphs", store.Preferences.Paragraphs, x => store.Preferences.Paragraphs = x);
         Check(p, "Clean up dictation (English)", store.Preferences.Cleanup, x => store.Preferences.Cleanup = x);
         p = Section(root, "Local intelligence");
-        if (LocalTextModel.IsSupported) {
+        if (textModel.Supported) {
         Check(p, "Use the local text model for reports and optional AI cleanup", store.Preferences.UseLocalAI, x => store.Preferences.UseLocalAI = x);
         Check(p, "AI cleanup (slower, English)", store.Preferences.UseAICleanup, x => store.Preferences.UseAICleanup = x);
-        p.Children.Add(Text("English cleanup removes filler words immediately. Other languages keep their recognized words. AI cleanup is optional, English only, and can take up to eight seconds. Blocks with numbers, quotes, contractions, or symbols keep their original words. Reports use your sentences."));
-        p.Children.Add(Text(textModel.FilesPresent ? "Local text model installed. Processing stays on this PC." : "Local AI is unavailable until its model is installed. Plain dictation still works."));
-        p.Children.Add(Button("Download or repair text model (2.5 GB)", DownloadTextModel));
+        p.Children.Add(Text("English cleanup removes filler words immediately. Other languages keep their recognized words. AI cleanup is optional and English only: the local text model adds sentences, commas and capitals and keeps every word and number as spoken; it can take about as long as the recording. When it cannot finish, your words are kept as recognized and the processing line below says so. Reports use your sentences."));
+        modelStatus.Text = textModel.Status; p.Children.Add(modelStatus);
+        textDownload = new DownloadControl("Text model", LocalTextModel.Current.Size, () => textModel.CurrentInstalled, textModel.Download, Blocked, () => modelStatus.Text = textModel.Status); p.Children.Add(textDownload);
         } else p.Children.Add(Text(LocalTextModel.UnsupportedReason));
         p = Section(root, "Speech recognition");
         p.Children.Add(Text("Language"));
@@ -184,12 +223,11 @@ internal sealed partial class SettingsWindow : Window
         p.Children.Add(language);
         p.Children.Add(processingTime);
         p.Children.Add(Text($"Microphone devices: {WaveRecorder.waveInGetNumDevs()}. Windows microphone access must allow desktop apps."));
-        p.Children.Add(Button("Download or repair Whisper model (488 MB)", Download));
-        p.Children.Add(Button("Cancel download", () => download?.Cancel())); p.Children.Add(notice);
+        whisperDownload = new DownloadControl("Whisper model", Whisper.ModelBytes, () => whisper.ModelPresent, whisper.Download, Blocked); p.Children.Add(whisperDownload);
         p = Section(root, "General");
         using (var run = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run"))
             Check(p, "Launch pFlow when I sign in", run?.GetValue("pFlow by Pesh") != null, SetStartup);
-        p = Section(root, "Updates"); p.Children.Add(Text("pFlow " + UpdateWindow.CurrentVersion));
+        p = Section(root, "Updates"); p.Children.Add(Text("pFlow " + UpdateWindow.CurrentVersion + " · " + whisper.EngineDescription));
         p.Children.Add(Button("Check for updates", () => this.checkUpdates?.Invoke()));
         p.Children.Add(Text("Checks GitHub only when you ask. Settings and History are kept during updates."));
         p = Section(root, "Privacy"); p.Children.Add(Text("Recordings are deleted after processing. Settings and History stay in your Windows user folder. Model downloads need the internet; recording and transcription do not. No cloud model or account is used."));
@@ -200,30 +238,13 @@ internal sealed partial class SettingsWindow : Window
         using var key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run");
         if (enabled) key.SetValue("pFlow by Pesh", "\"" + Environment.ProcessPath + "\""); else key.DeleteValue("pFlow by Pesh", false);
     }
-    async void Download()
-    {
-        if (download != null || busy()) { notice.Text = "Finish or cancel dictation first."; return; }
-        download = new CancellationTokenSource();
-        try { await whisper.Download(new Progress<double>(v => notice.Text = $"Downloading model: {v:P0}"), download.Token); notice.Text = "Whisper model checksum verified. Ready for offline dictation."; }
-        catch (OperationCanceledException) { notice.Text = "Download canceled."; }
-        catch (Exception e) { notice.Text = e.Message; }
-        finally { download.Dispose(); download = null; }
-    }
-    async void DownloadTextModel()
-    {
-        if (download != null || busy()) { notice.Text = "Finish or cancel dictation first."; return; }
-        download = new CancellationTokenSource();
-        try { await textModel.Download(new Progress<double>(v => notice.Text = $"Downloading text model: {v:P0}"), download.Token); notice.Text = "Text model checksum verified. Local AI is ready."; }
-        catch (OperationCanceledException) { notice.Text = "Download canceled."; }
-        catch (Exception e) { notice.Text = e.Message; }
-        finally { download.Dispose(); download = null; }
-    }
+    string? Blocked() => busy() ? "Finish or cancel dictation first." : null;
     UIElement Dictionary()
     {
         var p = Panel(); p.Children.Add(Text("Learned terms bias Whisper. Exact replacements change only whole words or phrases and never cascade."));
-        var terms = new TextBox { Text = string.Join("\n", store.Preferences.DictionaryTerms), AcceptsReturn = true, Height = 100, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }; p.Children.Add(terms);
+        var terms = Pannable(new TextBox { Text = string.Join("\n", store.Preferences.DictionaryTerms), AcceptsReturn = true, Height = 100, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }); p.Children.Add(terms);
         p.Children.Add(Button("Save learned terms", () => { store.Preferences.DictionaryTerms = terms.Text.Split('\n').Select(x => x.Trim()).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList(); Save(); }));
-        var list = new ListBox { Height = 150 }; void Refresh() => list.ItemsSource = store.Preferences.DictionaryReplacements.Select(x => $"{x.Heard} → {x.Replacement}").ToList(); Refresh(); p.Children.Add(list);
+        var list = Pannable(new ListBox { Height = 150 }); void Refresh() => list.ItemsSource = store.Preferences.DictionaryReplacements.Select(x => $"{x.Heard} → {x.Replacement}").ToList(); Refresh(); p.Children.Add(list);
         p.Children.Add(Text("Heard")); var heard = new TextBox(); p.Children.Add(heard); p.Children.Add(Text("Replace with")); var replacement = new TextBox(); p.Children.Add(replacement);
         p.Children.Add(Button("Save replacement", () => { if (string.IsNullOrWhiteSpace(heard.Text) || string.IsNullOrWhiteSpace(replacement.Text)) return; var entry = store.Preferences.DictionaryReplacements.FirstOrDefault(x => x.Heard.Equals(heard.Text.Trim(), StringComparison.OrdinalIgnoreCase)); if (entry == null) store.Preferences.DictionaryReplacements.Insert(0, new() { Heard = heard.Text.Trim(), Replacement = replacement.Text.Trim() }); else entry.Replacement = replacement.Text.Trim(); Save(); Refresh(); }));
         p.Children.Add(Button("Delete selected replacement", () => { if (list.SelectedIndex >= 0) { store.Preferences.DictionaryReplacements.RemoveAt(list.SelectedIndex); Save(); Refresh(); } }));
@@ -234,7 +255,7 @@ internal sealed partial class SettingsWindow : Window
         var p = Panel(); p.Children.Add(Text("Create your own templates, or use plain dictation without a format. Give a new template a name, then edit and save its sections below."));
         var picker = new ComboBox { DisplayMemberPath = "Name", ItemsSource = store.Preferences.Templates, SelectedItem = store.Preferences.Templates.FirstOrDefault(x => x.Id == store.Preferences.ActiveTemplateId) }; System.Windows.Automation.AutomationProperties.SetName(picker, "Your templates"); p.Children.Add(picker);
         var empty = Text("No templates yet. Create one below whenever you need it."); empty.Visibility = store.Preferences.Templates.Count == 0 ? Visibility.Visible : Visibility.Collapsed; p.Children.Add(empty);
-        var editor = new TextBox { AcceptsReturn = true, AcceptsTab = true, FontFamily = new FontFamily("Consolas"), Height = 280, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto };
+        var editor = Pannable(new TextBox { AcceptsReturn = true, AcceptsTab = true, FontFamily = new FontFamily("Consolas"), Height = 280, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto });
         p.Children.Add(Text("Template name")); var name = new TextBox(); System.Windows.Automation.AutomationProperties.SetName(name, "Template name"); p.Children.Add(name);
         var create = Button("New template", () => { var t = new DictationTemplate { Name = name.Text.Trim(), Sections = [new() { Title = "Narrative", IncludeFullDictation = true }] }; editor.Text = JsonSerializer.Serialize(t, StateStore.Json); });
         create.IsEnabled = false; name.TextChanged += (_, _) => create.IsEnabled = !string.IsNullOrWhiteSpace(name.Text); p.Children.Add(create);
@@ -254,12 +275,50 @@ internal sealed partial class SettingsWindow : Window
     }
     UIElement History()
     {
-        var p = Panel(); var list = new ListBox { Height = 180, DisplayMemberPath = "CreatedAt", ItemsSource = store.History.ToList() }; p.Children.Add(list);
-        var text = new TextBox { AcceptsReturn = true, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, Height = 230, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }; p.Children.Add(text);
-        var result = Text(""); p.Children.Add(result);
-        list.SelectionChanged += (_, _) => { if (list.SelectedItem is Transcript t) { text.Text = t.Text; result.Text = t.InsertionStatus; } };
-        p.Children.Add(Button("Copy selected dictation", () => { if (list.SelectedItem is Transcript t) Clipboard.SetText(t.Text); }));
-        p.Children.Add(Button("Delete selected dictation", () => { if (list.SelectedItem is Transcript t) { store.Delete(t.Id); list.ItemsSource = store.History.ToList(); text.Clear(); } }));
-        p.Children.Add(Button("Refresh History", () => list.ItemsSource = store.History.ToList())); return p;
+        // No sideways scrolling: a row's first words trim with an ellipsis at the list's edge instead.
+        var list = Pannable(new ListBox { MinHeight = 120, Margin = new Thickness(0, 0, 0, 12) }); ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled); System.Windows.Automation.AutomationProperties.SetName(list, "Past dictations");
+        // The rows are all one height: the list is never shorter than two of them, and the remainder
+        // below a whole number of them becomes bottom padding, so no row is ever sliced mid-glyph.
+        void WholeRows() {
+            if (list.Items.Count == 0 || list.Items[0] is not ListBoxItem first || first.ActualHeight <= 0) return;
+            double frame = list.BorderThickness.Top + list.BorderThickness.Bottom + 12;
+            list.MinHeight = Math.Max(120, 2 * first.ActualHeight + frame);
+            double inner = Math.Max(list.ActualHeight, list.MinHeight) - frame, rest = inner - Math.Floor(inner / first.ActualHeight) * first.ActualHeight;
+            list.Padding = new Thickness(6, 6, 6, 6 + rest);
+        }
+        list.SizeChanged += (_, _) => WholeRows(); list.Loaded += (_, _) => WholeRows();
+        var empty = Text("No dictations yet. Your takes appear here."); empty.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); empty.Margin = new Thickness(10, 8, 10, 8); empty.VerticalAlignment = VerticalAlignment.Top;
+        var text = Pannable(new TextBox { AcceptsReturn = true, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MinHeight = 120, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }); System.Windows.Automation.AutomationProperties.SetName(text, "Dictation text");
+        var result = Text(""); result.FontSize = 12; result.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); result.Margin = new Thickness(0, 8, 0, 8);
+        var copy = Button("Copy", () => { if (list.SelectedItem is ListBoxItem { Tag: Transcript t }) Clipboard.SetText(t.Text); }); copy.Margin = new Thickness(0, 0, 10, 0); copy.IsEnabled = false;
+        var delete = Button("Delete", () => { }); delete.Margin = new Thickness(0); delete.IsEnabled = false;
+        void Refresh() {
+            list.Items.Clear();
+            foreach (var t in store.History) {
+                var row = new StackPanel();
+                var when = Text(HistoryRow.When(t.CreatedAt, DateTimeOffset.Now) + "  ·  " + HistoryRow.Status(t.InsertionStatus)); when.FontSize = 12; when.Margin = new Thickness(0, 0, 0, 2); when.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); row.Children.Add(when);
+                var words = Text(HistoryRow.Words(t.Text)); words.TextWrapping = TextWrapping.NoWrap; words.TextTrimming = TextTrimming.CharacterEllipsis; words.Margin = new Thickness(0); row.Children.Add(words);
+                var item = new ListBoxItem { Content = row, Tag = t }; System.Windows.Automation.AutomationProperties.SetName(item, when.Text + " — " + words.Text); list.Items.Add(item);
+            }
+            empty.Visibility = list.Items.Count == 0 ? Visibility.Visible : Visibility.Collapsed; list.UpdateLayout(); WholeRows();
+            text.Clear(); result.Text = ""; copy.IsEnabled = delete.IsEnabled = false;
+        }
+        list.SelectionChanged += (_, _) => {
+            if (list.SelectedItem is ListBoxItem { Tag: Transcript t }) { text.Text = t.Text; result.Text = t.InsertionStatus; copy.IsEnabled = delete.IsEnabled = true; }
+        };
+        delete.Click += (_, _) => { if (list.SelectedItem is ListBoxItem { Tag: Transcript t }) { store.Delete(t.Id); Refresh(); } };
+        Refresh();
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal }; buttons.Children.Add(copy); buttons.Children.Add(delete);
+        // The list and the text share the window's height; the page scrolls only below MinHeight.
+        var grid = new Grid();
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(2, GridUnitType.Star) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(3, GridUnitType.Star) });
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        var top = new Grid(); top.Children.Add(list); top.Children.Add(empty);
+        Grid.SetRow(top, 0); Grid.SetRow(text, 1); Grid.SetRow(result, 2); Grid.SetRow(buttons, 3);
+        grid.Children.Add(top); grid.Children.Add(text); grid.Children.Add(result); grid.Children.Add(buttons);
+        var frame = new Border { Child = grid, Padding = new Thickness(20), MinHeight = 440 };
+        frame.SetBinding(FrameworkElement.HeightProperty, new System.Windows.Data.Binding("ViewportHeight") { RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.FindAncestor, typeof(ScrollViewer), 1) });
+        return frame;
     }
 }

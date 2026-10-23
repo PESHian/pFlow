@@ -28,9 +28,11 @@ internal sealed class WaveRecorder : IDisposable
     public double Level { get; private set; }
     public double DurationSeconds => Math.Max(0, (file.Length - 44) / 32000.0);
     public string Path { get; }
-    public WaveRecorder(string path)
+    // Live text gets a copy of each block on the writer thread, never on the audio callback.
+    readonly Action<byte[]>? live;
+    public WaveRecorder(string path, Action<byte[]>? live = null)
     {
-        Path = path; file = new(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None); file.Write(new byte[44]);
+        Path = path; this.live = live; file = new(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None); file.Write(new byte[44]);
         callback = Receive;
         var format = new Format { Tag = 1, Channels = 1, Rate = 16000, BytesPerSecond = 32000, Align = 2, Bits = 16 };
         try {
@@ -63,9 +65,11 @@ internal sealed class WaveRecorder : IDisposable
                 var header = Marshal.PtrToStructure<Header>(pointer);
                 if (header.Recorded > 0) {
                     var bytes = new byte[header.Recorded]; Marshal.Copy(header.Data, bytes, 0, bytes.Length); file.Write(bytes);
+                    // Live words are display only; a problem there must never stop the recording.
+                    try { live?.Invoke(bytes); } catch (Exception) { }
                     double sum = 0; for (int i = 0; i + 1 < bytes.Length; i += 2) { double v = BitConverter.ToInt16(bytes, i) / 32768.0; sum += v * v; }
                     double rms = Math.Sqrt(sum / Math.Max(1, bytes.Length / 2));
-                    Level = rms <= 0 ? 0 : Math.Pow(Math.Clamp((20 * Math.Log10(rms) + 45) / 45, 0, 1), 1.5);
+                    Level = AudioLevels.FromRms(rms);
                 }
                 lock (sync) {
                     if (!stopping) {

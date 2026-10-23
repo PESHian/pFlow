@@ -1,0 +1,19 @@
+{
+ "description": "Without Accessibility permission the take uses Preview.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": false,
+   "value": "",
+   "selection": [
+    0,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "permission",
+ "steps": []
+}

@@ -3,11 +3,48 @@ import Carbon.HIToolbox
 import CoreGraphics
 import ApplicationServices
 
+/// Why the finished text was not put in. Named on the Copy card, in plain
+/// words, so the person never sees a generic "saved in History" for a cause
+/// they could fix (Accessibility off, another window in front).
+enum InsertionBlock: Equatable {
+    /// This build is not trusted for Accessibility: no typing, no paste.
+    case accessibilityOff
+    case secureInput
+    case appChanged
+    case fieldChanged
+    case textChanged
+    case caretMoved
+    /// A key was still held when the paste was due.
+    case interrupted
+    /// The take was cancelled while the paste was waiting.
+    case cancelled
+    case clipboard
+    case nothingToInsert
+    /// Live typing wrote into the field and then stopped for this reason.
+    case typingStopped(LiveInlineOwnership.Stop)
+
+    var reason: String {
+        switch self {
+        case .accessibilityOff: return "Accessibility is off, so pFlow could not put the text in."
+        case .secureInput: return "Another app is blocking keystrokes, so the text was not put in."
+        case .appChanged: return "You switched windows, so the text was not put in."
+        case .fieldChanged: return "Can't reach this field, so the text was not put in."
+        case .textChanged: return "The text in the field changed, so the words were not put in."
+        case .caretMoved: return "The cursor moved, so the text was not put in."
+        case .interrupted: return "A key was still held down, so the text was not put in."
+        case .cancelled: return "The take was cancelled before the text could go in."
+        case .clipboard: return "The clipboard could not be used, so the text was not put in."
+        case .nothingToInsert: return "There was no text to put in."
+        case .typingStopped(let stop): return stop.cardReason
+        }
+    }
+}
+
 enum InjectionOutcome: Equatable {
     case pasted
     case unconfirmed
     case leftOnClipboard
-    case savedToHistory
+    case savedToHistory(InsertionBlock)
     /// Another app holds Secure Event Input, which blocks synthetic keystrokes.
     case blockedBySecureInput(String?)
 }
@@ -21,10 +58,38 @@ protocol TextInjecting {
     func captureTarget()
     func deliver(_ text: String) async -> InjectionOutcome
     func deliver(_ text: String, formatted: NSAttributedString?) async -> InjectionOutcome
+    /// The captured field is a password field. Dictation does not start there.
+    var targetIsSecure: Bool { get }
+    /// This build is trusted for Accessibility right now (never cached: a
+    /// grant made between two takes counts for the next one).
+    var accessibilityGranted: Bool { get }
+
+    // Live typing ("Type in the current app") for one take. `beginLive` uses
+    // the field captured by `captureTarget`, so it runs right after it,
+    // before any pFlow UI. The final-only `deliver` above is unchanged and is
+    // what Off and Preview use.
+    func beginLive(session: String) -> LiveInlineStart
+    /// After `beginLive` returned `.waiting`: the same check over the field
+    /// the app reports now. `.waiting` again while there is still nothing.
+    func retryLive(session: String) -> LiveInlineStart
+    /// Returns the reason when live typing stops with this update.
+    func reconcileLive(session: String, transcript: String) -> LiveInlineOwnership.Stop?
+    /// pFlow's words may be in the destination for this take.
+    func typedLive(session: String) -> Bool
+    func finalizeLive(session: String, text: String) -> LiveInlineFinal
+    func cancelLive(session: String) -> LiveInlineCancel
 }
 
 extension TextInjecting {
     func deliver(_ text: String, formatted: NSAttributedString?) async -> InjectionOutcome { await deliver(text) }
+    var targetIsSecure: Bool { false }
+    var accessibilityGranted: Bool { true }
+    func beginLive(session: String) -> LiveInlineStart { .preview(.unsupported) }
+    func retryLive(session: String) -> LiveInlineStart { .preview(.unsupported) }
+    func reconcileLive(session: String, transcript: String) -> LiveInlineOwnership.Stop? { nil }
+    func typedLive(session: String) -> Bool { false }
+    func finalizeLive(session: String, text: String) -> LiveInlineFinal { .notTyped }
+    func cancelLive(session: String) -> LiveInlineCancel { .nothingTyped }
 }
 
 @MainActor
@@ -38,6 +103,7 @@ final class TextInjector: TextInjecting {
 
     var targetApplicationName: String? { targetApp?.localizedName }
     var targetApplicationBundleID: String? { targetApp?.bundleIdentifier }
+    var accessibilityGranted: Bool { AXIsProcessTrusted() }
     /// Lets the pasteboard server round-trip complete before ⌘V.
     private static let prePasteDelay: TimeInterval = 0.03
 
@@ -52,7 +118,9 @@ final class TextInjector: TextInjecting {
     private var targetField: AXUIElement?
     private var originalValue: String?
     private var originalSelection: CFRange?
+    private(set) var targetIsSecure = false
     private var delivering = false
+    private var live = LiveInlineSlot()
 
     private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
         var value: CFTypeRef?
@@ -74,25 +142,84 @@ final class TextInjector: TextInjecting {
         return AXValueGetValue(value, .cfRange, &range) ? range : nil
     }
 
-    private func targetUnchanged() -> Bool {
-        guard let targetApp, targetApp.isActive else { return false }
-        guard let targetField else { return true }
+    /// The first reason the captured target is no longer where the text can
+    /// go, or nil while it is.
+    private func targetBlock() -> InsertionBlock? {
+        guard let targetApp, targetApp.isActive else { return .appChanged }
+        guard let targetField else { return nil }
         guard let focused = focusedField(targetApp), CFEqual(focused, targetField),
-              attribute(focused, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole else { return false }
-        if let originalValue, attribute(focused, kAXValueAttribute) as? String != originalValue { return false }
+              attribute(focused, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole else { return .fieldChanged }
+        if let originalValue, attribute(focused, kAXValueAttribute) as? String != originalValue { return .textChanged }
         if let originalSelection {
             guard let current = selection(focused), current.location == originalSelection.location,
-                  current.length == originalSelection.length else { return false }
+                  current.length == originalSelection.length else { return .caretMoved }
         }
-        return true
+        return nil
     }
+
+    private func targetUnchanged() -> Bool { targetBlock() == nil }
 
     func captureTarget() {
         guard !delivering else { return }
         targetApp = NSWorkspace.shared.frontmostApplication
+        captureField()
+    }
+
+    /// The focused field of the captured app and what it holds, so a paste
+    /// later can tell whether anything changed.
+    private func captureField() {
         targetField = targetApp.flatMap(focusedField)
         originalValue = targetField.flatMap { attribute($0, kAXValueAttribute) as? String }
         originalSelection = targetField.flatMap(selection)
+        targetIsSecure = targetField.map { attribute($0, kAXSubroleAttribute) as? String == kAXSecureTextFieldSubrole } ?? false
+    }
+
+    private func beginLiveOverCapturedField(session: String) -> LiveInlineStart {
+        guard !delivering, let targetApp, let targetField else { return live.begin(id: session, field: nil) }
+        return beginLive(session: session, field: AXLiveTextField(pid: targetApp.processIdentifier, element: targetField))
+    }
+
+    func beginLive(session: String) -> LiveInlineStart {
+        let start = beginLiveOverCapturedField(session: session)
+        // An Electron or Chromium app has no text field for Accessibility
+        // until asked. Once asked, the coordinator looks again shortly.
+        guard start == .preview(.unsupported), !delivering, let targetApp, WebAppAccessibility.enable(targetApp) else { return start }
+        return .waiting
+    }
+
+    func retryLive(session: String) -> LiveInlineStart {
+        guard let targetApp, targetApp.isActive else { return .preview(.app) }
+        // The field the app reports now replaces the one captured before it
+        // built its tree, for live typing and for the normal paste alike.
+        captureField()
+        let start = beginLiveOverCapturedField(session: session)
+        return start == .preview(.unsupported) ? .waiting : start
+    }
+
+    /// The same live typing over a given field; tests pass one they own.
+    func beginLive(session: String, field: LiveTextField) -> LiveInlineStart {
+        live.begin(id: session, field: field)
+    }
+
+    func reconcileLive(session: String, transcript: String) -> LiveInlineOwnership.Stop? {
+        live.reconcile(session: session, transcript: transcript)
+    }
+
+    func typedLive(session: String) -> Bool { live.typed(session: session) }
+
+    func finalizeLive(session: String, text: String) -> LiveInlineFinal {
+        let result = live.finalize(session: session, text: text)
+        // "Copy dictation to clipboard": the finished words, once, after they
+        // went in. Live words never touch the clipboard.
+        if result == .applied, copyToClipboard(),
+           placeOnClipboard(Self.clipboardItem(text: text, formatted: nil, sessionID: UUID().uuidString)) == nil {
+            NSLog("pFlow: the finished text could not be copied to the clipboard")
+        }
+        return result
+    }
+
+    func cancelLive(session: String) -> LiveInlineCancel {
+        live.cancel(session: session)
     }
 
     func deliver(_ text: String) async -> InjectionOutcome {
@@ -113,7 +240,7 @@ final class TextInjector: TextInjecting {
     }
 
     func deliver(_ text: String, formatted: NSAttributedString?) async -> InjectionOutcome {
-        guard !text.isEmpty else { return .savedToHistory }
+        guard !text.isEmpty else { return .savedToHistory(.nothingToInsert) }
         guard !delivering else { return .unconfirmed }
         delivering = true
         defer { delivering = false }
@@ -121,28 +248,24 @@ final class TextInjector: TextInjecting {
         let sessionID = UUID().uuidString
         var saved: [[NSPasteboard.PasteboardType: Data]]?
 
-        func placeOnClipboard(_ prepared: NSPasteboardItem?) -> Int? {
-            guard let item = prepared else { return nil }
-            let cleared = pasteboard.clearContents()
-            guard pasteboard.writeObjects([item]) else {
-                if let saved, pasteboard.changeCount == cleared { PasteboardSnapshot.restore(saved, to: pasteboard) }
-                return nil
-            }
-            return pasteboard.changeCount
-        }
-        func unavailable(_ outcome: InjectionOutcome = .leftOnClipboard) -> InjectionOutcome {
+        func unavailable(_ block: InsertionBlock, _ outcome: InjectionOutcome = .leftOnClipboard) -> InjectionOutcome {
             guard keepCopy,
-                  placeOnClipboard(Self.clipboardItem(text: text, formatted: formatted, sessionID: sessionID)) != nil else { return .savedToHistory }
+                  placeOnClipboard(Self.clipboardItem(text: text, formatted: formatted, sessionID: sessionID)) != nil else { return .savedToHistory(block) }
             return outcome
         }
 
-        guard AXIsProcessTrusted() else { return unavailable() }
-        guard !SecureInput.isEnabled else { return unavailable(.blockedBySecureInput(SecureInput.holderName())) }
-        guard targetUnchanged() else { return unavailable() }
+        guard AXIsProcessTrusted() else {
+            NSLog("pFlow: Accessibility is off for this build, so the text cannot be put in")
+            return unavailable(.accessibilityOff)
+        }
+        guard !SecureInput.isEnabled else { return unavailable(.secureInput, .blockedBySecureInput(SecureInput.holderName())) }
+        if let block = targetBlock() { return unavailable(block) }
         await waitForModifiersToClear()
         let held: NSEvent.ModifierFlags = [.command, .shift, .option, .control, .function]
-        guard !Task.isCancelled, !SecureInput.isEnabled,
-              NSEvent.modifierFlags.intersection(held).isEmpty, targetUnchanged() else { return unavailable() }
+        guard !Task.isCancelled else { return unavailable(.cancelled) }
+        guard NSEvent.modifierFlags.intersection(held).isEmpty else { return unavailable(.interrupted) }
+        guard !SecureInput.isEnabled else { return unavailable(.secureInput, .blockedBySecureInput(SecureInput.holderName())) }
+        if let block = targetBlock() { return unavailable(block) }
 
         let insertion = InsertionSpacing.prepare(text, formatted: formatted, value: originalValue,
             selection: originalSelection.map { NSRange(location: $0.location, length: $0.length) })
@@ -152,21 +275,23 @@ final class TextInjector: TextInjecting {
         if !keepCopy {
             let before = pasteboard.changeCount
             guard let snapshot = PasteboardSnapshot.capture(pasteboard), pasteboard.changeCount == before else {
-                return .savedToHistory
+                return .savedToHistory(.clipboard)
             }
             saved = snapshot
         }
-        guard let change = placeOnClipboard(prepared) else { return .savedToHistory }
+        guard let change = placeOnClipboard(prepared, restoring: saved) else { return .savedToHistory(.clipboard) }
         defer {
             if let saved {
                 _ = PasteboardSnapshot.restoreIfOwned(saved, to: pasteboard, change: change, session: sessionID)
             }
         }
         try? await Task.sleep(nanoseconds: UInt64(Self.prePasteDelay * 1_000_000_000))
-        guard !Task.isCancelled, !SecureInput.isEnabled, targetUnchanged(),
-              PasteboardSnapshot.isOwned(pasteboard, change: change, session: sessionID) else {
-            return keepCopy && PasteboardSnapshot.isOwned(pasteboard, change: change, session: sessionID)
-                ? .leftOnClipboard : .savedToHistory
+        let owned = PasteboardSnapshot.isOwned(pasteboard, change: change, session: sessionID)
+        let lateBlock: InsertionBlock? = Task.isCancelled ? .cancelled
+            : SecureInput.isEnabled ? .secureInput
+            : targetBlock() ?? (owned ? nil : .clipboard)
+        if let lateBlock {
+            return keepCopy && owned ? .leftOnClipboard : .savedToHistory(lateBlock)
         }
         let expected: String? = {
             guard let value = originalValue, let range = originalSelection, range.location >= 0,
@@ -191,12 +316,26 @@ final class TextInjector: TextInjecting {
         return .unconfirmed
     }
 
+    /// Replaces the clipboard with `prepared`. Returns the new change count, or
+    /// nil when it could not be written; then `saved`, if given, is put back
+    /// unless something else changed the clipboard meanwhile.
+    private func placeOnClipboard(_ prepared: NSPasteboardItem?,
+                                  restoring saved: [[NSPasteboard.PasteboardType: Data]]? = nil) -> Int? {
+        guard let item = prepared else { return nil }
+        let cleared = pasteboard.clearContents()
+        guard pasteboard.writeObjects([item]) else {
+            if let saved, pasteboard.changeCount == cleared { PasteboardSnapshot.restore(saved, to: pasteboard) }
+            return nil
+        }
+        return pasteboard.changeCount
+    }
+
     /// System Events (via Apple Events) is the only route that proved reliable
     /// across native, Electron and web apps alike; synthetic key events remain a
     /// fallback for when automation is unavailable.
     private func postPaste() async {
         if pasteViaAppleScript() { return }
-        NSLog("Yap: AppleScript paste unavailable, falling back to synthetic key events")
+        NSLog("pFlow: AppleScript paste unavailable, falling back to synthetic key events")
         await postSyntheticPaste()
     }
 
@@ -245,7 +384,7 @@ final class TextInjector: TextInjecting {
         var error: NSDictionary?
         script.executeAndReturnError(&error)
         if let error {
-            NSLog("Yap: AppleScript paste failed: \(error)")
+            NSLog("pFlow: AppleScript paste failed: \(error)")
             return false
         }
         return true

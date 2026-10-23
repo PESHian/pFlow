@@ -1,0 +1,70 @@
+{
+  "description": "Words still in progress are rewritten by the next window: a misheard word at the end is corrected, and later wording changes are shown.",
+  "language": "en",
+  "windows": [
+    {
+      "startMs": 0,
+      "endMs": 2500,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 2500,
+          "text": " Marigold painted the brass clog",
+          "noSpeechProbability": 0.05
+        }
+      ]
+    },
+    {
+      "startMs": 0,
+      "endMs": 3500,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 3500,
+          "text": " Marigold painted the brass clock",
+          "noSpeechProbability": 0.04
+        }
+      ]
+    },
+    {
+      "startMs": 0,
+      "endMs": 5000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 2600,
+          "text": " Marigold painted the brass clock.",
+          "noSpeechProbability": 0.03
+        },
+        {
+          "fromMs": 2600,
+          "toMs": 5000,
+          "text": " It ticked softly.",
+          "noSpeechProbability": 0.05
+        }
+      ]
+    },
+    {
+      "startMs": 2600,
+      "endMs": 6000,
+      "segments": [
+        {
+          "fromMs": 0,
+          "toMs": 3400,
+          "text": " It ticked very softly.",
+          "noSpeechProbability": 0.04
+        }
+      ]
+    }
+  ],
+  "expected": {
+    "afterEach": [
+      "Marigold painted the brass clog",
+      "Marigold painted the brass clock",
+      "Marigold painted the brass clock. It ticked softly.",
+      "Marigold painted the brass clock. It ticked very softly."
+    ],
+    "text": "Marigold painted the brass clock. It ticked very softly.",
+    "committedEndMs": 2600
+  }
+}

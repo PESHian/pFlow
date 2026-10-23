@@ -12,8 +12,9 @@ settings:
     SWIFT_STRICT_CONCURRENCY: minimal
     SWIFT_SERIALIZE_DEBUGGING_OPTIONS: NO
     OTHER_SWIFT_FLAGS: '$(inherited) -file-prefix-map "$(SRCROOT)=/_/pflow" -debug-prefix-map "$(SRCROOT)=/_/pflow"'
-    MARKETING_VERSION: "0.3.5"
-    CURRENT_PROJECT_VERSION: "27"
+    MARKETING_VERSION: "0.3.13"
+    CURRENT_PROJECT_VERSION: "35"
+    PFLOW_DEVELOPER_TEAM: ""
     DEAD_CODE_STRIPPING: YES
     # Apple Silicon only. The on-device SpeechAnalyzer needs it, and the Intel
     # fallback sent audio to Apple, which we won't do.
@@ -41,7 +42,10 @@ targets:
       base:
         INFOPLIST_FILE: Sources/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: com.pesh.Yap
-        PRODUCT_NAME: Yap
+        # The executable and built app are pFlow so macOS lists that name. The
+        # bundle ID and Swift module stay Yap to keep data, login and tests.
+        PRODUCT_NAME: pFlow
+        PRODUCT_MODULE_NAME: Yap
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Yap-Bridging-Header.h
         PFLOW_ENTITLEMENTS_FILE: Sources/Yap.entitlements
         CODE_SIGN_ENTITLEMENTS: $(PFLOW_ENTITLEMENTS_FILE)
@@ -50,6 +54,13 @@ targets:
         ENABLE_HARDENED_RUNTIME: NO
         LD_RUNPATH_SEARCH_PATHS:
           - "@executable_path/../Frameworks"
+      configs:
+        # Release drops the debug map, which records each object file by its
+        # build-machine path (the builder's home folder) inside the app binary.
+        Release:
+          DEPLOYMENT_POSTPROCESSING: YES
+          STRIP_INSTALLED_PRODUCT: YES
+          STRIP_STYLE: debugging
 
   YapTests:
     type: bundle.unit-test
@@ -58,11 +69,21 @@ targets:
       - path: Tests
       - path: updates/test-vectors.json
         buildPhase: resources
+      - path: fixtures/live-text/transcript-updates
+        type: folder
+        buildPhase: resources
+      - path: fixtures/live-text/whisper-windows
+        type: folder
+        buildPhase: resources
+      - path: fixtures/live-text/inline-ownership
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: Yap
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.pesh.YapTests
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/pFlow.app/Contents/MacOS/pFlow
         GENERATE_INFOPLIST_FILE: YES
 
 schemes:

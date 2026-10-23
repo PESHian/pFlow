@@ -19,7 +19,7 @@ enum AppRelauncher {
         ) { app, error in
             Task { @MainActor in
                 guard error == nil, app != nil else {
-                    NSLog("Yap: relaunch failed (\(error?.localizedDescription ?? "unknown")), falling back")
+                    NSLog("pFlow: relaunch failed (\(error?.localizedDescription ?? "unknown")), falling back")
                     relaunchViaOpenTool()
                     return
                 }
@@ -39,13 +39,7 @@ enum AppRelauncher {
     }
 
     /// Both relaunch paths briefly leave two instances alive — two status items,
-    /// two hotkey registrations. Run this early in the new instance.
-    static func terminateOtherInstances() {
-        guard let bundleID = Bundle.main.bundleIdentifier else { return }
-        let me = ProcessInfo.processInfo.processIdentifier
-        for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-        where app.processIdentifier != me {
-            app.terminate()
-        }
-    }
+    /// two hotkey registrations. The new instance settles that at launch through
+    /// `InstalledCopies.retireOtherInstances()`, which also keeps an older copy
+    /// from quitting a newer one.
 }

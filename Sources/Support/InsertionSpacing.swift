@@ -48,7 +48,7 @@ enum InsertionSpacing {
         return true
     }
 
-    private static func usesUnspacedScript(_ character: Character) -> Bool {
+    static func usesUnspacedScript(_ character: Character) -> Bool {
         character.unicodeScalars.contains {
             (0x2E80...0x9FFF).contains($0.value) || (0xF900...0xFAFF).contains($0.value)
                 || (0x20000...0x323AF).contains($0.value)

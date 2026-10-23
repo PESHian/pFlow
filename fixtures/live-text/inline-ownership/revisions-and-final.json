@@ -1,0 +1,141 @@
+{
+ "description": "Revisions replace only pFlow's span; unsettled last words wait; the final replaces the span once.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "Note: ",
+   "selection": [
+    6,
+    0
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "The",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "The light",
+   "expect": {
+    "action": "write",
+    "range": [
+     6,
+     0
+    ],
+    "text": "The",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Note: The",
+    "selection": [
+     9,
+     0
+    ]
+   }
+  },
+  {
+   "op": "update",
+   "text": "The lighthouse keeper",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "The lighthouse keeper waves",
+   "expect": {
+    "action": "write",
+    "range": [
+     9,
+     0
+    ],
+    "text": " lighthouse keeper",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Note: The lighthouse keeper",
+    "selection": [
+     27,
+     0
+    ]
+   }
+  },
+  {
+   "op": "update",
+   "text": "The lighthouse keeper waved at us",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "The light house keeper waved at us",
+   "expect": {
+    "action": "write",
+    "range": [
+     9,
+     18
+    ],
+    "text": "",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Note: The",
+    "selection": [
+     9,
+     0
+    ]
+   }
+  },
+  {
+   "op": "update",
+   "text": "The light house keeper waved at us",
+   "expect": {
+    "action": "write",
+    "range": [
+     9,
+     0
+    ],
+    "text": " light house keeper waved at us",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Note: The light house keeper waved at us",
+    "selection": [
+     40,
+     0
+    ]
+   }
+  },
+  {
+   "op": "final",
+   "text": "The lighthouse keeper waved at us.",
+   "expect": {
+    "action": "write",
+    "range": [
+     15,
+     25
+    ],
+    "text": "house keeper waved at us.",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Note: The lighthouse keeper waved at us.",
+    "selection": [
+     40,
+     0
+    ]
+   }
+  }
+ ]
+}

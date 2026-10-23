@@ -1,0 +1,90 @@
+{
+ "description": "Live words replace the selected text; cancel puts the selected text back and selects it again.",
+ "begin": {
+  "field": {
+   "app": 1,
+   "element": "target",
+   "secure": false,
+   "trusted": true,
+   "value": "Pack the old tent today",
+   "selection": [
+    9,
+    8
+   ]
+  },
+  "writable": true
+ },
+ "beginResult": "ready",
+ "steps": [
+  {
+   "op": "update",
+   "text": "new",
+   "expect": {
+    "action": "none"
+   }
+  },
+  {
+   "op": "update",
+   "text": "new canvas",
+   "expect": {
+    "action": "write",
+    "range": [
+     9,
+     8
+    ],
+    "text": "new",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Pack the new today",
+    "selection": [
+     12,
+     0
+    ]
+   }
+  },
+  {
+   "op": "update",
+   "text": "new canvas tarp",
+   "expect": {
+    "action": "write",
+    "range": [
+     12,
+     0
+    ],
+    "text": " canvas",
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Pack the new canvas today",
+    "selection": [
+     19,
+     0
+    ]
+   }
+  },
+  {
+   "op": "cancel",
+   "expect": {
+    "action": "write",
+    "range": [
+     9,
+     10
+    ],
+    "text": "old tent",
+    "select": [
+     9,
+     8
+    ],
+    "confirm": "ok"
+   },
+   "field": {
+    "value": "Pack the old tent today",
+    "selection": [
+     9,
+     8
+    ]
+   }
+  }
+ ]
+}

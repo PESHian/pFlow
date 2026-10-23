@@ -72,12 +72,12 @@ internal static partial class Program
         try {
             Check("isolated window station", ObjectName(GetProcessWindowStation()) == args[2]);
             Check("isolated desktop", ObjectName(GetThreadDesktop(GetCurrentThreadId())) == "fixture");
-            if (args.Contains("--insertion-only")) { NativeInsertion(); Console.WriteLine($"{passed} native insertion/caret checks passed."); return 0; }
+            if (args.Contains("--insertion-only")) { NativeInsertion(); NativeLiveTyping(); Console.WriteLine($"{passed} native insertion/caret checks passed."); return 0; }
             if (args.Contains("--learn-keys-only")) { _ = Application.Current ?? new PFlow.Windows.Program { ShutdownMode = ShutdownMode.OnExplicitShutdown }; NativeHotkeys(); NativeKeyCapture(); Console.WriteLine($"{passed} native learned-key checks passed."); return 0; }
-            if (args.Contains("--controls-only")) { NativeControls(); Console.WriteLine($"{passed} native settings controls checks passed."); return 0; }
+            if (args.Contains("--controls-only")) { NativeControls(); NativeHistory(); NativeDownloads(); NativeCapsule(); Console.WriteLine($"{passed} native settings controls checks passed."); return 0; }
             NativeUpdates();
             if (args.Contains("--updates-only")) { Console.WriteLine($"{passed} native update checks passed."); return 0; }
-            NativeHotkeys(); NativeKeyCapture(); NativeControls(); NativeInsertion();
+            NativeHotkeys(); NativeKeyCapture(); NativeControls(); NativeHistory(); NativeDownloads(); NativeCapsule(); NativeInsertion(); NativeLiveTyping();
             Check("INPUT size matches Windows ABI", Marshal.SizeOf<Native.Input>() == (IntPtr.Size == 8 ? 40 : 28));
             Check("INPUT union alignment matches Windows ABI", Marshal.OffsetOf<Native.Input>(nameof(Native.Input.Data)).ToInt32() == (IntPtr.Size == 8 ? 8 : 4));
             Check("keyboard structure matches Windows ABI", Marshal.SizeOf<Native.KeyboardInput>() == (IntPtr.Size == 8 ? 24 : 16));
@@ -186,9 +186,44 @@ internal static partial class Program
         Directory.CreateDirectory(directory);
         try {
             await using var whisper = new Whisper(directory, assets);
-            using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+            using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(6));
             await whisper.Prewarm();
             int? worker = whisper.WorkerId;
+            var bytes = File.ReadAllBytes(audio); int data = bytes.AsSpan().IndexOf("data"u8) + 8;
+            var all = MemoryMarshal.Cast<byte, short>(bytes.AsSpan(data, (bytes.Length - data) & ~1)).ToArray();
+            string Recording(string name, short[] pcm) {
+                string path = Path.Combine(directory, "public-sample-" + name + ".wav"); var file = new byte[data + pcm.Length * 2];
+                bytes.AsSpan(0, data).CopyTo(file); MemoryMarshal.AsBytes(pcm.AsSpan()).CopyTo(file.AsSpan(data));
+                BitConverter.TryWriteBytes(file.AsSpan(4), file.Length - 8); BitConverter.TryWriteBytes(file.AsSpan(data - 4), pcm.Length * 2);
+                File.WriteAllBytes(path, file); return path;
+            }
+            // Two recordings for each audio context the finished pass uses: the full 30 s, 1024 and 512 frames.
+            var takes = new (string Name, string Path)[] {
+                ("long 1", Recording("three-times", all.Concat(all).Concat(all).ToArray())), ("long 2", Recording("part-then-whole", all[..(9 * 16000)].Concat(all).ToArray())),
+                ("medium 1", audio), ("medium 2", Recording("first-9s", all[..(9 * 16000)])),
+                ("short 1", Recording("first-4s", all[..(4 * 16000)])), ("short 2", Recording("first-7s", all[..(7 * 16000)])) };
+            string PathOf(string name) => takes.Single(take => take.Name == name).Path;
+            var reference = new Dictionary<string, string>();
+            foreach (var (name, path) in takes) reference[name] = await whisper.Transcribe(path, "en", [], deadline.Token);
+            Check("every reference take is recognized", reference.Values.All(text => text.Length > 0));
+            // A finished text must equal its reference whatever ran just before it: a take with another audio
+            // context, or one with the same context but another length. "long 1" was the worker's first pass.
+            // With one finished-text state for every take, a 4 s take changed the next 20 s take's text (S6c).
+            string previous = "short 2";
+            foreach (string name in new[] { "short 1", "long 2", "long 1", "short 2", "medium 2", "medium 1", "long 1" }) {
+                Check($"finished text does not depend on the take before ({previous}, then {name})", await whisper.Transcribe(PathOf(name), "en", [], deadline.Token) == reference[name]);
+                previous = name;
+            }
+            // Live windows must not change the finished text either. When they shared one state, 13 of 21 such pairs changed (S6b).
+            uint sequence = 0;
+            foreach (var (name, windows) in new[] { ("long 1", new[] { (0, 3), (0, 6), (0, 10) }), ("long 2", new[] { (2, 7), (1, 9) }) }) {
+                foreach (var (start, end) in windows) {
+                    var samples = all[(start * 16000)..(end * 16000)].Select(x => x / 32768f).ToArray();
+                    await whisper.RecognizeLive(new LiveWindowRequest(7, ++sequence, 0, samples.Length, samples), "en", deadline.Token);
+                }
+                string afterLive = await whisper.Transcribe(PathOf(name), "en", [], deadline.Token);
+                Check($"live windows leave the finished text unchanged ({name})", afterLive == reference[name] && whisper.WorkerId == worker);
+            }
             string first = await whisper.Transcribe(audio, "en", [], deadline.Token);
             string words = string.Join(" ", first.ToLowerInvariant().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
             Check("native CPU transcription retains public JFK words", words.Contains("ask not what your country can do for you") && words.Contains("ask what you can do for your country"));
@@ -198,6 +233,13 @@ internal static partial class Program
             try { using var change = new FileStream(whisper.ModelPath, FileMode.Open, FileAccess.Write, FileShare.ReadWrite); }
             catch (IOException) { locked = true; }
             Check("model stays protected while resident", locked);
+            // Live text: one bounded window through the same resident worker, versioned framing on this architecture.
+            var pcm = MemoryMarshal.Cast<byte, short>(bytes.AsSpan(data, Math.Min(5 * 32000, bytes.Length - data)));
+            var live = new LiveSession(42); live.Append(pcm);
+            var window = live.Next();
+            var segments = window == null ? null : await whisper.RecognizeLive(window, "en", deadline.Token);
+            var update = segments == null ? null : live.Complete(window!, segments);
+            Check("live window is recognized by the resident worker on this architecture", update != null && update.Text.Contains("Americans", StringComparison.OrdinalIgnoreCase) && whisper.WorkerId == worker && whisper.LiveRequests == 6);
             Console.WriteLine($"{passed} architecture speech checks passed ({RuntimeInformation.ProcessArchitecture}).");
             return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }
