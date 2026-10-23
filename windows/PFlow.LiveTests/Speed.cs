@@ -53,7 +53,7 @@ internal static partial class Program
     {
         string directory = Path.Combine(root, "wer-fictional-" + Guid.NewGuid()); Directory.CreateDirectory(directory);
         var store = new StateStore(directory); store.Preferences.Language = "en"; ChooseModel(store, directory);
-        await using var whisper = new Whisper(directory, PackageAssets) { ChosenId = () => store.Preferences.SpeechModel };
+        var whisper = new Whisper(directory, PackageAssets) { ChosenId = () => store.Preferences.SpeechModel };
         string label = SpeedOption("label", "run") + (SpeedOption("model", "") is { Length: > 0 } m ? "-" + m : "");
         var rows = new List<Dictionary<string, object>>();
         try {
@@ -74,7 +74,8 @@ internal static partial class Program
             }
         } finally {
             File.WriteAllText(Path.Combine(root, $"wer-{label}-{DateTime.UtcNow:yyyyMMddHHmmss}.json"), JsonSerializer.Serialize(rows, new JsonSerializerOptions { WriteIndented = true }));
-            Directory.Delete(directory, true);
+            // The worker holds the model file open: end it before the folder with the copied model goes.
+            await whisper.DisposeAsync(); Directory.Delete(directory, true);
         }
     }
     static string Reference(string audio) => File.ReadAllText(Path.ChangeExtension(Path.Combine(root, audio), ".txt")).Trim();
