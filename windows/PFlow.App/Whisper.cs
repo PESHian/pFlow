@@ -15,8 +15,22 @@ internal sealed class Whisper : IAsyncDisposable
     /// Progress frames the current worker sent during finished-text passes.
     internal int WorkerHeartbeats => worker?.Heartbeats ?? 0;
     /// Whisper small, the one speech model (SpeechModels.Small): a copy in pFlow's own folder when an
-    /// earlier version downloaded one there, else the package's. Checked by size and hash when the worker starts.
-    public string ModelPath { get { string download = System.IO.Path.Combine(root, SpeechModels.Small.FileName); return File.Exists(download) ? download : System.IO.Path.Combine(assets, "models", SpeechModels.Small.FileName); } }
+    /// earlier version downloaded one there and it is whole, else the package's (always installed). Checked
+    /// by size here and by size and hash when the worker starts; an own copy that fails either is passed
+    /// over for the package's, and Settings and the log say so.
+    public string ModelPath => OwnCopy == OwnCopyState.Usable ? OwnCopyPath : PackagePath;
+    string OwnCopyPath => System.IO.Path.Combine(root, SpeechModels.Small.FileName);
+    string PackagePath => System.IO.Path.Combine(assets, "models", SpeechModels.Small.FileName);
+    internal enum OwnCopyState { None, Usable, WrongSize, Damaged }
+    bool ownCopyDamaged;
+    internal OwnCopyState OwnCopy => !File.Exists(OwnCopyPath) ? OwnCopyState.None : ownCopyDamaged ? OwnCopyState.Damaged
+        : new FileInfo(OwnCopyPath).Length != SpeechModels.Small.Bytes ? OwnCopyState.WrongSize : OwnCopyState.Usable;
+    /// For Settings and the diagnostic report: null while nothing is wrong.
+    internal string? OwnCopyNote => OwnCopy is OwnCopyState.WrongSize or OwnCopyState.Damaged
+        ? "pFlow's own copy of Whisper small is damaged, so the copy included with pFlow is used." : null;
+    internal string ModelSource => OwnCopy switch {
+        OwnCopyState.Usable => "pFlow's own copy", OwnCopyState.WrongSize => "the package's (own copy has the wrong size)",
+        OwnCopyState.Damaged => "the package's (own copy failed its checksum)", _ => "the package's" };
     /// The small live-words model next to the main model, or null when it is not installed (then live
     /// windows run on the main model and Settings says so). Checked by size and hash when the worker starts.
     public string? LiveModelPath { get { string path = System.IO.Path.Combine(assets, "models", LiveSpeechModel.FileName); return File.Exists(path) ? path : null; } }
@@ -31,18 +45,31 @@ internal sealed class Whisper : IAsyncDisposable
     /// Deletes the speech models 0.1.25 could download and 0.1.26 removed (SpeechModels.RetiredFiles),
     /// only those exact files in pFlow's own folder, and their unfinished downloads. Returns the names
     /// removed; the log gets the file names only, never a path.
-    public IReadOnlyList<string> RemoveRetiredModels()
+    /// Only a file with the very size and SHA-256 pFlow downloaded is deleted (`retired` stands in for
+    /// SpeechModels.Retired in a test); anything else under that name is left and logged.
+    public IReadOnlyList<string> RemoveRetiredModels(IReadOnlyList<SpeechModel>? retired = null)
     {
         var removed = new List<string>();
-        foreach (string file in SpeechModels.RetiredFiles) {
-            string path = System.IO.Path.Combine(root, file);
-            try { if (File.Exists(path)) { File.Delete(path); removed.Add(file); } }
+        foreach (var model in retired ?? SpeechModels.Retired) {
+            string file = model.FileName, path = System.IO.Path.Combine(root, file);
+            try {
+                if (File.Exists(path)) {
+                    if (!Downloaded(path, model)) InsertionLog.Record("retired speech model name kept: " + file + " is not the file pFlow downloaded (size or checksum differs)");
+                    else { File.Delete(path); removed.Add(file); }
+                }
+            }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException) { InsertionLog.Record("retired speech model not removed: " + file + " (" + error.GetType().Name + ")"); }
             int partial = PartialDownloads.Sweep(root, file);
             if (partial > 0) removed.Add(file + " (unfinished download x" + partial + ")");
         }
         if (removed.Count > 0) InsertionLog.Record("removed retired speech models: " + string.Join(", ", removed));
         return removed;
+    }
+    static bool Downloaded(string path, SpeechModel model)
+    {
+        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, FileOptions.SequentialScan);
+        if (file.Length != model.Bytes) return false;
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(file)).Equals(model.Sha, StringComparison.OrdinalIgnoreCase);
     }
     public bool FilesPresent => File.Exists(ModelPath) && new FileInfo(ModelPath).Length == SpeechModels.Small.Bytes && File.Exists(Executable);
     /// For Settings: "x64, fast speech engine (AVX2)" and the like (one rule: SpeechEngine.Describe).
@@ -53,7 +80,23 @@ internal sealed class Whisper : IAsyncDisposable
     async Task EnsureWorker(CancellationToken cancel)
     {
         if (worker != null && !worker.Exited) return;
-        ResetWorker(); worker = await SpeechWorker.Start(Executable, ModelPath, LiveModelPath, cancel);
+        ResetWorker();
+        string model = ModelPath; var clock = Stopwatch.StartNew();
+        try {
+            try { worker = await SpeechWorker.Start(Executable, model, LiveModelPath, cancel); }
+            catch (InvalidDataException) when (model == OwnCopyPath) {
+                // pFlow's own copy failed its size or checksum: the package's copy is used from now on.
+                ownCopyDamaged = true; InsertionLog.Record("own copy of Whisper small failed its check; using the package's copy");
+                worker = await SpeechWorker.Start(Executable, ModelPath, LiveModelPath, cancel);
+            }
+            Diagnostics.Recorder.Event("worker.start", new DiagField("result", "ready"), new DiagField("ms", clock.ElapsedMilliseconds), new DiagField("loadMs", worker.LoadMs),
+                new DiagField("progressFrames", worker.StartHeartbeats), new DiagField("engine", System.IO.Path.GetFileName(Executable)), new DiagField("model", ModelSource),
+                new DiagField("liveModel", LiveModelPath == null ? "missing" : worker.LiveModelLoaded ? "loaded" : "rejected (size or checksum)"),
+                new DiagField("threads", SpeechThreads.Final(SpeechWorker.LogicalProcessors) + " final / " + SpeechThreads.Live(SpeechWorker.LogicalProcessors) + " live"));
+        } catch (Exception error) {
+            Diagnostics.Recorder.Event("worker.start", new DiagField("result", "failed"), new DiagField("ms", clock.ElapsedMilliseconds), new DiagField("reason", PrivateLog.Reason(error)));
+            throw;
+        }
     }
     internal async Task Prewarm(CancellationToken cancel = default)
     {

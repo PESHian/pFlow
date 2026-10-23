@@ -4,7 +4,8 @@ namespace PFlow.Core;
 /// notch does not jump: the page glides to its new place with an ease-out over `DurationMs`. A notch
 /// that arrives during a glide adds to where the page was heading (a fast flick of five notches goes
 /// five notches) and the glide restarts from where the page is now. A precision touchpad's small,
-/// frequent deltas are already smooth and are applied as they come, without a glide.
+/// frequent deltas are already smooth and are applied as they come, without a glide; one that arrives
+/// during a glide moves the page at once and the rest of the notch still glides (`Shift`).
 public sealed class ScrollGlide
 {
     public const double DurationMs = 150;
@@ -35,6 +36,15 @@ public sealed class ScrollGlide
         return From + (To - From) * Ease(t);
     }
 
-    /// Something else moved the page (a touchpad, the scroll bar, a finger, a key): the glide lets go.
+    /// A touchpad moved the page `pixels` during a glide: the page moves that much at once and the
+    /// rest of the notch still glides, from the new place, on the same clock.
+    public void Shift(double pixels, double maximum)
+    {
+        if (!Active) return;
+        double top = Math.Max(0, maximum);
+        From = Math.Clamp(From + pixels, 0, top); To = Math.Clamp(To + pixels, 0, top);
+    }
+
+    /// Something else took the page (the scroll bar, a finger, a key, a click): the glide lets go.
     public void Stop() => Active = false;
 }

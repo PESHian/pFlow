@@ -26,8 +26,21 @@ internal sealed class SpeechWorker : IDisposable
         _ = Drain(process.StandardError.BaseStream);
     }
     static async Task Drain(Stream errors) { try { await errors.CopyToAsync(Stream.Null); } catch (IOException) { } catch (ObjectDisposedException) { } }
-    /// Processors the thread counts are sized for; the speed harness lowers it (with a matching affinity mask) to stand in for a small computer.
-    internal static int LogicalProcessors { get; set; } = Environment.ProcessorCount;
+    /// Processors the thread counts are sized for: the ones Windows lets pFlow (and so its worker) run on
+    /// now, read at every worker start. Whisper's threads wait for each other by spinning, so more threads
+    /// than processors stall it: with 6-processor counts on 2 processors the first live window never
+    /// finished in a 23 s take and the finished pass ran out of time (VM, W027). Tests may set it.
+    internal static int LogicalProcessors { get => fixedProcessors ?? UsableProcessors(); set => fixedProcessors = value; }
+    static int? fixedProcessors;
+    /// Back to the processors Windows allows (after a test fixed a count).
+    internal static void UseUsableProcessors() => fixedProcessors = null;
+    internal static int UsableProcessors()
+    {
+        try {
+            int usable = System.Numerics.BitOperations.PopCount((ulong)Process.GetCurrentProcess().ProcessorAffinity.ToInt64());
+            return usable > 0 ? Math.Min(usable, Environment.ProcessorCount) : Environment.ProcessorCount;
+        } catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException) { return Environment.ProcessorCount; }
+    }
     /// Test hooks: a delay per 1 MB hashed (a slow disk), and starts to fail outright (a worker that dies at launch).
     internal static Func<Task>? StartThrottle { get; set; }
     internal static int FailNextStarts { get; set; }
@@ -58,6 +71,9 @@ internal sealed class SpeechWorker : IDisposable
             }
             var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
             worker = new(lease, liveLease, Process.Start(info) ?? throw new SpeechWorkerLost("The speech engine could not start."));
+            // A windowless background process may be put in efficiency mode, which on a processor with
+            // efficiency cores can leave it too slow for live words: the worker asks to run at full speed.
+            FullSpeed(worker.process);
             using var kill = token.Register(worker.Abort);
             int finalThreads = SpeechThreads.Final(LogicalProcessors), liveThreads = SpeechThreads.Live(LogicalProcessors);
             await worker.Write(LiveWorkerProtocol.EncodeHello(finalThreads, liveThreads, model, liveModel), token);
@@ -73,6 +89,15 @@ internal sealed class SpeechWorker : IDisposable
             throw new SpeechWorkerLost(Stalled, error);
         } catch { if (worker != null) worker.Dispose(); else { lease.Dispose(); liveLease?.Dispose(); } throw; }
     }
+    static void FullSpeed(Process process)
+    {
+        try {
+            var state = new PowerThrottlingState { Version = 1, ControlMask = 1, StateMask = 0 };
+            SetProcessInformation(process.Handle, 4, ref state, Marshal.SizeOf<PowerThrottlingState>());
+        } catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception or EntryPointNotFoundException) { }
+    }
+    [StructLayout(LayoutKind.Sequential)] struct PowerThrottlingState { public uint Version, ControlMask, StateMask; }
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetProcessInformation(IntPtr process, int kind, ref PowerThrottlingState information, int size);
     static FileStream Lease(string path) => new(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
     /// Size and SHA-256 of a model file, chunk by chunk; each chunk resets the stall limit.
     static async Task Verify(FileStream file, long bytes, string sha, string name, string remedy, CancellationTokenSource stall, CancellationToken token)

@@ -34,13 +34,25 @@ internal static partial class Program
             string expected = string.Join("|", Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).Where(path => !doomed.Contains(Path.GetRelativePath(root, path))).Order(StringComparer.Ordinal)
                 .Select(path => Path.GetRelativePath(root, path) + ":" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)))));
             var whisper = new Whisper(root, root);
-            var removed = whisper.RemoveRetiredModels();
+            // The real pins never match these fictional bytes: by name alone nothing is deleted any more.
+            var untouched = whisper.RemoveRetiredModels();
+            Check("files under the retired names that are not pFlow's downloads (other size) are left alone", untouched.Count == 2 && File.Exists(Path.Combine(root, turbo)) && File.Exists(Path.Combine(root, medium)));
+            // Fictional pins with the fixture files' own sizes and checksums stand in for the real downloads.
+            SpeechModel Pin(string file) { byte[] bytes = File.ReadAllBytes(Path.Combine(root, file)); return new SpeechModel(file, file, Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)), bytes.Length); }
+            var pins = new[] { Pin(turbo), Pin(medium) };
+            var removed = whisper.RemoveRetiredModels(pins);
             Check($"at start the two retired speech models and their unfinished downloads are deleted ({string.Join(", ", removed)})",
                 removed.Count == 4 && removed.Contains(turbo) && removed.Contains(medium) && doomed.All(file => !File.Exists(Path.Combine(root, file))));
             Check("nothing else in pFlow's folder is touched: small's copy, the text model and its download, look-alike names, the app's files, a subfolder", Snapshot() == expected);
             string log; lock (lines) log = string.Join("\n", lines);
             Check("the log names the removed files and never a path", log.Contains("removed retired speech models: ") && log.Contains(turbo) && log.Contains(medium) && !log.Contains(root) && !log.Contains(":\\"));
-            Check("the next start finds nothing to remove and changes nothing", whisper.RemoveRetiredModels().Count == 0 && Snapshot() == expected);
+            Check("the next start finds nothing to remove and changes nothing", whisper.RemoveRetiredModels(pins).Count == 0 && Snapshot() == expected);
+            // Same size, other bytes: not pFlow's download either, so it stays.
+            var lookalike = new byte[pins[0].Bytes]; File.WriteAllBytes(Path.Combine(root, turbo), lookalike);
+            Check("a file of the right size whose checksum differs is kept and logged", whisper.RemoveRetiredModels(pins).Count == 0 && File.Exists(Path.Combine(root, turbo)));
+            lock (lines) log = string.Join("\n", lines);
+            Check("the log says why a retired name was kept, without a path", log.Contains("retired speech model name kept: " + turbo) && !log.Contains(root));
+            File.Delete(Path.Combine(root, turbo));
         } finally { InsertionLog.Written -= Logged; Directory.Delete(root, true); }
 
         // Settings: the speech card names the one model; no tiles, no rows, no speech download, in both themes at both widths.
@@ -56,13 +68,16 @@ internal static partial class Program
                     settings.Show(); settings.UpdateLayout(); Drain();
                     string tag = $"{theme} {width:F0}: ";
                     var texts = Descendants<TextBlock>(settings).Select(t => t.Text).ToList();
+                    Check(tag + "Troubleshooting has one button, \"Save a diagnostic report\", with its one-line explanation and no status until it is used",
+                        texts.Contains("TROUBLESHOOTING") && texts.Contains(DiagnosticReport.Explanation)
+                        && Descendants<Button>(settings).Count(b => b.Content as string == DiagnosticReport.ButtonLabel) == 1 && !texts.Any(t => t.StartsWith("Saved on your Desktop", StringComparison.Ordinal)));
                     Check(tag + "Settings says \"Speech model: Whisper small (included)\" and shows nothing to choose or download for speech",
                         texts.Contains(SpeechModels.SettingsLine) && !Descendants<RadioButton>(settings).Any(r => r.GroupName == "SpeechModel")
                         && !texts.Any(t => t.Contains("large-v3-turbo") || t.Contains("Whisper medium")) && Descendants<DownloadControl>(settings).Count() == 1);
                     if (shots != null) {
                         Directory.CreateDirectory(shots);
                         var page = Descendants<ScrollViewer>(settings).First(x => x.Content is StackPanel);
-                        foreach (var (name, label) in new[] { ("speech", "SPEECH RECOGNITION"), ("templates", "REPORT TEMPLATES (OPTIONAL)") }) {
+                        foreach (var (name, label) in new[] { ("speech", "SPEECH RECOGNITION"), ("templates", "REPORT TEMPLATES (OPTIONAL)"), ("troubleshooting", "TROUBLESHOOTING") }) {
                             var heading = Descendants<TextBlock>(settings).First(t => t.Text == label);
                             page.ScrollToVerticalOffset(page.VerticalOffset + heading.TranslatePoint(new Point(0, 0), page).Y - 12); settings.UpdateLayout(); Drain();
                             Shoot(settings, Path.Combine(shots, $"{name}-{theme}-{width:F0}.png"), theme == "light");
@@ -71,5 +86,41 @@ internal static partial class Program
                 } finally { settings.Close(); }
             }
         } finally { Directory.Delete(states, true); }
+
+        // Worker threads follow the processors Windows lets pFlow use (W027: spinning threads on fewer processors stall Whisper).
+        {
+            var self = System.Diagnostics.Process.GetCurrentProcess(); var all = self.ProcessorAffinity;
+            try {
+                int full = SpeechWorker.LogicalProcessors;
+                self.ProcessorAffinity = (IntPtr)0b11; int two = SpeechWorker.LogicalProcessors;
+                Check($"thread counts are sized for the processors pFlow may use: {full} with all, {two} when held to two", full == Environment.ProcessorCount && two == 2
+                    && SpeechThreads.Live(two) == 1 && SpeechThreads.Final(two) == 1);
+            } finally { self.ProcessorAffinity = all; }
+        }
+        // An own copy of small with the wrong size (0.1.26 failed every take on it): the package's copy is used and Settings says so.
+        string damaged = Path.Combine(Path.GetTempPath(), "pflow-speech-own-copy-fictional-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(Path.Combine(damaged, "models"));
+        try {
+            File.WriteAllBytes(Path.Combine(damaged, SpeechModels.Small.FileName), new byte[4096]);
+            var whisper = new Whisper(damaged, damaged);
+            Check("a wrong-size own copy of Whisper small is passed over for the package's copy",
+                whisper.ModelPath == Path.Combine(damaged, "models", SpeechModels.Small.FileName) && whisper.OwnCopy == Whisper.OwnCopyState.WrongSize && whisper.OwnCopyNote != null);
+            Check("with no own copy there is nothing to say", new Whisper(Path.Combine(damaged, "models"), damaged).OwnCopyNote == null);
+            string? shots = Environment.GetEnvironmentVariable("PFLOW_SHOTS");
+            foreach (string theme in new[] { "light", "dark" }) {
+                var store = new StateStore(damaged); store.Preferences.Theme = theme;
+                using var hook = new KeyboardHook(_ => { }) { Enabled = false };
+                var settings = new SettingsWindow(store, whisper, new LocalTextModel(damaged), hook, () => { }, () => false) { ShowActivated = false, Width = 420, Height = 740 };
+                try {
+                    settings.Show(); settings.UpdateLayout(); Drain();
+                    Check(theme + ": Settings says the damaged own copy is passed over", Descendants<TextBlock>(settings).Any(t => t.Text == whisper.OwnCopyNote));
+                    if (shots != null) {
+                        var page = Descendants<ScrollViewer>(settings).First(x => x.Content is StackPanel);
+                        var heading = Descendants<TextBlock>(settings).First(t => t.Text == "SPEECH RECOGNITION");
+                        page.ScrollToVerticalOffset(page.VerticalOffset + heading.TranslatePoint(new Point(0, 0), page).Y - 12); settings.UpdateLayout(); Drain();
+                        Shoot(settings, Path.Combine(shots, $"own-copy-{theme}-420.png"), theme == "light");
+                    }
+                } finally { settings.Close(); }
+            }
+        } finally { Directory.Delete(damaged, true); }
     }
 }

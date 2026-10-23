@@ -114,8 +114,36 @@ internal sealed class InsertionTarget : IInsertionTarget
     static extern bool QueryFullProcessImageName(IntPtr process, int flags, System.Text.StringBuilder name, ref int size);
     /// The captured field for live typing, made before any pFlow window shows.
     /// Null when the field cannot take verified range writes: the take uses Preview.
-    internal ILiveTextField? LiveField() => readable ? LiveTextField.Create(element, foreground, processId) : null;
+    internal ILiveTextField? LiveField() => LiveField(out _);
+    /// The field live words can be typed into: a Win32 edit or rich edit control (range writes), else a
+    /// readable Chrome or Edge web field (typed characters); null with the reason otherwise.
+    internal ILiveTextField? LiveField(out string why)
+    {
+        if (!readable) { why = placeholder ? "Chromium placeholder pane (field not readable yet)" : "field not readable: " + Refusal; return null; }
+        if (LiveTextField.Create(element, foreground, processId, out why) is { } win32) return win32;
+        string win32Why = why;
+        try { if (LiveKeyField.Create(element, foreground, processId, ApplicationName, out why) is { } web) return web; }
+        catch (Exception error) { why = "web field check failed (" + error.GetType().Name + ")"; }
+        why = win32Why + "; " + why;
+        return null;
+    }
     internal string DescribeLiveField() => LiveTextField.Describe(element, foreground);
+    /// What the capture saw, for the diagnostic report: kinds, classes, patterns and yes/no only; never
+    /// the field's text, its name or label, or a window title.
+    internal DiagField[] Diagnose()
+    {
+        string patterns = "unreadable"; bool? password = null, focusable = null;
+        try {
+            patterns = string.Join(",", element.GetSupportedPatterns().Select(p => p.ProgrammaticName.Replace("PatternIdentifiers.Pattern", "")).Order(StringComparer.Ordinal));
+            password = element.Current.IsPassword; focusable = element.Current.IsKeyboardFocusable;
+        } catch (Exception error) when (error is ElementNotAvailableException or COMException or InvalidOperationException) { }
+        IntPtr control = LiveTextField.FocusedControl(foreground);
+        return [new("app", ApplicationName), new("appIntegrity", DiagnosticEnvironment.IntegrityName(LiveTextField.Integrity(processId))),
+            new("pflowIntegrity", DiagnosticEnvironment.IntegrityName(LiveTextField.Integrity(0))), new("field", Kind),
+            new("focusedControl", control == IntPtr.Zero ? "none" : LiveTextField.BaseClass(control)), new("patterns", patterns), new("password", password),
+            new("keyboardFocusable", focusable), new("readable", readable), new("placeholder", placeholder), new("refusal", Refusal),
+            new("keyboardLayout", DiagnosticEnvironment.ForegroundLayout(foreground))];
+    }
     static void CheckSecure(AutomationElement e)
     {
         for (AutomationElement? node = e; node != null; node = TreeWalker.ControlViewWalker.GetParent(node))
@@ -152,7 +180,7 @@ internal sealed class InsertionTarget : IInsertionTarget
     }
     /// A Chromium field with nothing in it reports its label as its text (the
     /// value is empty): that is no text. Every other field reads as it is.
-    static string DocumentText(AutomationElement e, TextPatternRange range)
+    internal static string DocumentText(AutomationElement e, TextPatternRange range)
     {
         string text = range.GetText(-1);
         if (text.Length == 0) return text;

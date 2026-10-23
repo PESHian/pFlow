@@ -33,6 +33,10 @@ internal sealed partial class Program : Application
     bool quitting;
     readonly OperationGate operations = new();
     long sessionId;
+    // How the next take was started: the activation key, unless the recording control was clicked.
+    string triggerSource = "key";
+    // The Live text mode the current take read when it began.
+    string takeMode = LiveTextModes.Off;
     readonly Mutex single = new(true, "Local\\pFlow-by-Pesh-Windows", out _);
     [STAThread] public static int Main(string[] args)
     {
@@ -56,9 +60,14 @@ internal sealed partial class Program : Application
             _ = Task.Run(Uninstaller.Register);
             store = new StateStore(directory); whisper = new Whisper(directory);
             InsertionLog.Path = Path.Combine(directory, "insertion.log");
+            // The diagnostic recorder's compact lines (what typing did, why it stopped) go to insertion.log too.
+            Diagnostics.Recorder.Compact = InsertionLog.Append;
             textModel = new LocalTextModel(directory);
-            // The speech models 0.1.25 could download are gone in 0.1.26: their files are deleted before the worker starts.
-            try { whisper.RemoveRetiredModels(); whisper.SweepPartials(); textModel.SweepPartials(); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+            if (whisper.OwnCopyNote is { } ownCopy) InsertionLog.Record(ownCopy);
+            try { whisper.SweepPartials(); textModel.SweepPartials(); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+            // The speech models 0.1.25 could download are gone since 0.1.26: their files, checked by size and checksum, are
+            // deleted in the background (the worker never reads them).
+            _ = Task.Run(() => { try { whisper.RemoveRetiredModels(); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { } });
             _ = Task.Run(async () => { try { await whisper.Prewarm(); } catch { /* Recording retries and reports a load error when needed. */ } });
             _ = Task.Run(async () => { try { await textModel.Prewarm(); } catch { /* The next take verifies the file and reports it. */ } });
             // Only our abandoned private recording folders are removed. History/settings remain.
@@ -100,7 +109,7 @@ internal sealed partial class Program : Application
     {
         if (!store.Preferences.Enabled) { Notify("Turn on Dictation enabled in the tray menu first."); return; }
         if (recorder != null) OnTrigger(TriggerAction.Stop);
-        else if (!operations.Busy) OnTrigger(TriggerAction.Continuous);
+        else if (!operations.Busy) { triggerSource = "recording control"; try { OnTrigger(TriggerAction.Continuous); } finally { triggerSource = "key"; } }
     }
     void Set(Phase value, string? detail = null)
     {
@@ -119,6 +128,8 @@ internal sealed partial class Program : Application
         bool changed = transcript.Apply(update);
         if (transcript.LastSequence == accepted) return;
         if (changed) preview.ShowText(transcript.Text);
+        Diagnostics.Recorder.Detail("live.update", new DiagField("seq", update.Sequence), new DiagField("changed", changed), new DiagField("words", DiagnosticRecorder.Words(transcript.Text)),
+            new DiagField("typing", typingSession == owner.SessionName && recorder != null));
         // A repeat of the same words still goes to typing: it is how the last words settle.
         if (typingSession == owner.SessionName && recorder != null && typing.Reconcile(typingSession, transcript.Text) is LiveStop stop)
             ShowCard(LiveInlineText.StoppedNote(stop));
@@ -158,6 +169,8 @@ internal sealed partial class Program : Application
             if (recorder != null) { Set(action == TriggerAction.Continuous ? Phase.Continuous : Phase.Recording); return; }
             if (operations.Busy) { keyboard.Reset(); return; }
             try {
+                Diagnostics.Recorder.BeginTake(new DiagField("trigger", action == TriggerAction.Continuous ? triggerSource == "key" ? "double tap (hands-free)" : triggerSource : "hold"),
+                    new DiagField("key", store.Preferences.ActivationKey), new DiagField("liveText", LiveTextModes.Resolve(store.Preferences.LiveTextMode)));
                 if (!whisper.FilesPresent) throw new InvalidOperationException("Install the Whisper model in Settings first. The complete Windows package must include its engine.");
                 // Captured first: hiding the card could activate another window, which must never become the target.
                 target = InsertionTarget.Capture();
@@ -167,7 +180,7 @@ internal sealed partial class Program : Application
                 session = new CancellationTokenSource(TimeSpan.FromHours(2));
                 sessionDirectory = Path.Combine(store.DirectoryPath, "recording-" + Guid.NewGuid()); Directory.CreateDirectory(sessionDirectory);
                 Cue(true);
-                string mode = LiveTextModes.Resolve(store.Preferences.LiveTextMode);
+                string mode = takeMode = LiveTextModes.Resolve(store.Preferences.LiveTextMode);
                 typing.Abandon(); typingSession = null; card = false;
                 if (LiveTextModes.ShowsPreview(mode)) {
                     LiveRecognizer recognizer = null!;
@@ -177,7 +190,9 @@ internal sealed partial class Program : Application
                     live = recognizer; transcript.Begin(recognizer.SessionName); preview.Begin();
                     if (mode == LiveTextModes.TypeInApp) {
                         // Checked against the field just captured, before any pFlow window shows.
-                        var refused = typing.Begin(recognizer.SessionName, target.LiveField());
+                        var field = target.LiveField(out string why);
+                        if (field == null) Diagnostics.Recorder.Event("typing.field", new DiagField("result", "none"), new DiagField("why", why));
+                        var refused = typing.Begin(recognizer.SessionName, field);
                         if (refused == null) typingSession = recognizer.SessionName;
                         else InsertionLog.Record("live typing not started: " + refused);
                         preview.SetNote(refused is LiveStop stop ? LiveInlineText.PreviewNote(stop) : target.TypingNote);
@@ -188,6 +203,10 @@ internal sealed partial class Program : Application
                 live?.Start();
                 if (target.Placeholder) _ = CaptureAgainSoon(sessionId);
                 Set(action == TriggerAction.Continuous ? Phase.Continuous : Phase.Recording);
+                // After the microphone runs: what the field and the app look like, for the diagnostic report.
+                // Never worth a take: a field that cannot describe itself is only noted.
+                try { Diagnostics.Recorder.Event("capture.detail", DiagnosticEnvironment.Take(target)); }
+                catch (Exception error) { Diagnostics.Recorder.Event("capture.detail", new DiagField("unreadable", error.GetType().Name)); }
             } catch (Exception error) {
                 Cancel();
                 if (operations.Complete(sessionId)) {
@@ -195,6 +214,7 @@ internal sealed partial class Program : Application
                     if (sessionDirectory != null && Directory.Exists(sessionDirectory)) Directory.Delete(sessionDirectory, true);
                     sessionDirectory = null;
                 }
+                Diagnostics.Recorder.EndTake(new DiagField("result", "could not start"), new DiagField("reason", PrivateLog.Reason(error)));
                 Failure(error);
             }
         } else if (action == TriggerAction.Stop && recorder != null) DelayedFinish();
@@ -214,6 +234,7 @@ internal sealed partial class Program : Application
         var takeLive = live; string? liveWords = null; string? takeTyping = typingSession;
         double seconds = 0; bool processing = false;
         var timing = new Dictionary<string, double> { ["releaseDelayMs"] = elapsed.Elapsed.TotalMilliseconds };
+        string outcome = "unfinished";
         try {
             var stop = Stopwatch.StartNew(); string path = active.Path; seconds = active.Stop(); timing["microphoneStopMs"] = stop.Elapsed.TotalMilliseconds;
             if (takeLive != null) {
@@ -228,11 +249,12 @@ internal sealed partial class Program : Application
             processing = true; var pipeline = new DictationPipeline(store, whisper, textModel) { Timing = (name, ms) => timing[name] = ms };
             var result = await pipeline.Run(path, seconds, originalTarget, folder, capsule.Handle, Set, cancellation.Token, liveWords, TypingFor(takeTyping));
             InsertionLog.Record("take done: " + seconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s, status=" + result.Status);
+            outcome = result.Status;
             // Words that did not go in are shown in the card to copy; the card says why, so no balloon then.
             if (result.Prompt is { } offer) prompt.ShowWords(offer.Text, offer.Reason, capsule.Handle);
             else if (result.Notice != null) Notify(result.Notice);
-        } catch (OperationCanceledException) { InsertionLog.Record("take canceled"); Set(Phase.Canceled); }
-        catch (Exception error) { InsertionLog.Record("take failed: " + InsertionLog.Reason(error)); Failure(error); }
+        } catch (OperationCanceledException) { InsertionLog.Record("take canceled"); outcome = "canceled"; Set(Phase.Canceled); }
+        catch (Exception error) { InsertionLog.Record("take failed: " + InsertionLog.Reason(error)); outcome = "failed"; Failure(error); }
         finally {
             // Whatever happened, this take never writes again; typed words stay where they are.
             if (takeTyping != null && typingSession == takeTyping) { typing.Abandon(); typingSession = null; }
@@ -251,6 +273,7 @@ internal sealed partial class Program : Application
             }
             // One private, overwritten timing record. No words, audio, paths, or application names.
             try { store.Write("last-processing-times.json", timing); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            Diagnostics.Recorder.EndTake([new DiagField("result", seconds < 0.3 && !processing ? "too short" : outcome), .. timing.Select(t => new DiagField(t.Key, t.Value))]);
         }
     }
     /// Chromium answered the take's first capture with its placeholder pane and was
@@ -267,9 +290,21 @@ internal sealed partial class Program : Application
             try { again = InsertionTarget.Capture(); }
             catch (InvalidOperationException error) { InsertionLog.Record("take: capture again refused: " + InsertionLog.Reason(error)); return; }
             if (!first.SameWindow(again)) { InsertionLog.Record("take: focus left the window; placeholder kept"); return; }
-            if (again.CanInsert && !again.Placeholder) { target = again; InsertionLog.Record("take: field readable after " + wait + " ms: " + again.Kind); return; }
+            if (again.CanInsert && !again.Placeholder) { target = again; InsertionLog.Record("take: field readable after " + wait + " ms: " + again.Kind); BeginTypingLate(again); return; }
             InsertionLog.Record("take: still the placeholder after " + wait + " ms");
         }
+    }
+    /// Type mode, when the field became readable during the take (Chromium built its tree after the
+    /// knock): live typing begins now in that field, under the same rules, with the words still to come.
+    void BeginTypingLate(InsertionTarget field)
+    {
+        if (live is not { } recognizer || typingSession != null || recorder == null || takeMode != LiveTextModes.TypeInApp) return;
+        var liveField = field.LiveField(out string why);
+        if (liveField == null) { Diagnostics.Recorder.Event("typing.field", new DiagField("result", "none"), new DiagField("stage", "field readable during the take"), new DiagField("why", why)); return; }
+        var refused = typing.Begin(recognizer.SessionName, liveField);
+        if (refused != null) { InsertionLog.Record("live typing not started: " + refused); return; }
+        typingSession = recognizer.SessionName;
+        preview.SetNote(field.TypingNote);
     }
     /// Takes this take's typed words back out, only while the field is exactly
     /// as pFlow left it; otherwise they stay and the person is told.
@@ -282,6 +317,7 @@ internal sealed partial class Program : Application
     void Cancel()
     {
         stopDelay?.Cancel(); session?.Cancel(); CancelTyping(typingSession);
+        if (recorder != null) Diagnostics.Recorder.EndTake(new DiagField("result", "canceled while recording"));
         if (recorder != null) {
             recorder.Dispose(); recorder = null;
             if (sessionDirectory != null && Directory.Exists(sessionDirectory)) Directory.Delete(sessionDirectory, true);

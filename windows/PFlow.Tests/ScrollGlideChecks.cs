@@ -29,6 +29,18 @@ internal static class ScrollGlideChecks
         Check("or above its top", glide.To == 0);
         glide.Add(0, 48, 1000, 0); glide.Stop();
         Check("something else moving the page stops the glide", !glide.Active);
+        // A touchpad delta mid-glide (0.1.26 dropped the rest of the notch): the page moves at once and still lands a whole notch further.
+        var carried = new ScrollGlide();
+        carried.Add(current: 100, pixels: 48, maximum: 1000, nowMs: 0);
+        double before = carried.At(50);
+        carried.Shift(12, 1000);
+        double after = carried.At(50);
+        Check($"a touchpad delta during a glide moves the page at once ({before:F1} -> {after:F1}) and keeps the rest of the notch gliding",
+            Math.Abs(after - before - 12) < 1e-9 && carried.Active && carried.At(150) == 160 && !carried.Active);
+        var edge = new ScrollGlide(); edge.Add(0, 48, 40, 0); edge.Shift(30, 40);
+        Check("a carried glide never goes past the end", edge.At(150) == 40);
+        var idle = new ScrollGlide(); idle.Shift(12, 1000);
+        Check("a touchpad delta with no glide under way changes no glide", !idle.Active && idle.To == 0);
         Console.WriteLine($"{passed} scroll glide checks passed.");
     }
 }

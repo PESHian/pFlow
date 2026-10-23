@@ -14,5 +14,9 @@ public static class SpeechModels
     /// 0.1.26: 3-4 times small's time per take on the owner's PC. At start pFlow deletes these exact
     /// files from its own folder, with their unfinished downloads, and nothing else. A saved choice of
     /// either (settings key speechModel) is no longer read: every take runs on small.
-    public static readonly IReadOnlyList<string> RetiredFiles = ["ggml-large-v3-turbo-q8_0.bin", "ggml-medium-q5_0.bin"];
+    public static readonly IReadOnlyList<SpeechModel> Retired = [
+        new("Whisper large-v3-turbo", "ggml-large-v3-turbo-q8_0.bin", "317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1", 874188075),
+        new("Whisper medium", "ggml-medium-q5_0.bin", "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f", 539212467)];
+    /// Only a file with the very size and SHA-256 pFlow downloaded is deleted; anything else by that name is left alone.
+    public static readonly IReadOnlyList<string> RetiredFiles = [.. Retired.Select(model => model.FileName)];
 }

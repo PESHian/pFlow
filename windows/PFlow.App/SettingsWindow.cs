@@ -228,6 +228,7 @@ internal sealed partial class SettingsWindow : Window
         p.Children.Add(language);
         // One speech model, in every package: named here, nothing to choose or download.
         var speechModel = Text(SpeechModels.SettingsLine); System.Windows.Automation.AutomationProperties.SetName(speechModel, SpeechModels.SettingsLine); p.Children.Add(speechModel);
+        if (whisper.OwnCopyNote is { } ownCopy) { var note = Text(ownCopy); note.FontSize = 12; note.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); p.Children.Add(note); }
         p.Children.Add(processingTime);
         p.Children.Add(Text($"Microphone devices: {WaveRecorder.waveInGetNumDevs()}. Windows microphone access must allow desktop apps."));
         p = Section(root, "General");
@@ -236,6 +237,10 @@ internal sealed partial class SettingsWindow : Window
         p = Section(root, "Updates"); p.Children.Add(Text("pFlow " + UpdateWindow.CurrentVersion + " · " + whisper.EngineDescription));
         p.Children.Add(Button("Check for updates", () => this.checkUpdates?.Invoke()));
         p.Children.Add(Text("Checks GitHub only when you ask. Settings and History are kept during updates."));
+        p = Section(root, "Troubleshooting"); p.Children.Add(Text(DiagnosticReport.Explanation));
+        var reportSaved = Text(""); reportSaved.FontSize = 12; reportSaved.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); reportSaved.Visibility = Visibility.Collapsed;
+        p.Children.Add(Button(DiagnosticReport.ButtonLabel, () => { reportSaved.Text = DiagnosticReport.Save(whisper, store, keyboard.ActivationKey); reportSaved.Visibility = Visibility.Visible; }));
+        p.Children.Add(reportSaved);
         p = Section(root, "Privacy"); p.Children.Add(Text("Recordings are deleted after processing. Settings and History stay in your Windows user folder. Model downloads need the internet; recording and transcription do not. No cloud model or account is used."));
         return root;
     }

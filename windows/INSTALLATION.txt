@@ -2,14 +2,14 @@ pFlow by Pesh: Windows and Mac installation
 
 WINDOWS: x64 (Intel/AMD), ARM64, or x86 (32-bit)
 
-Use pFlow-Setup-0.1.26-testing.exe. One file installs the right build (x64,
+Use pFlow-Setup-0.1.27-testing.exe. One file installs the right build (x64,
 ARM64 or x86) for your Windows user account. No administrator password, no
 .NET installation and no architecture choice is needed.
 Windows 11 and Windows 10 version 1607 or later are required. Older Windows
 cannot run the included .NET 10 runtime. Microsoft's supported Windows 10
 editions are LTSC/Enterprise; Windows 10/older hardware is not fully tested here.
 
-1. Download pFlow-Setup-0.1.26-testing.exe from https://github.com/PESHian/pFlow/releases
+1. Download pFlow-Setup-0.1.27-testing.exe from https://github.com/PESHian/pFlow/releases
 2. Double-click it. This test build is not signed, so Windows may show
    "Windows protected your PC": click "More info", then "Run anyway".
 3. If pFlow is already running, Setup asks to close it, then asks whether you
@@ -24,6 +24,8 @@ editions are LTSC/Enterprise; Windows 10/older hardware is not fully tested here
    Escape stays available to cancel. Right Windows is the unchanged default.
    Settings > Updates shows one line with your version, architecture and speech
    engine (for example "x64, fast speech engine (AVX2)"): quote it when reporting.
+   If something goes wrong, Settings > Troubleshooting > Save a diagnostic report
+   puts a text file on your Desktop to send. It holds no dictated words.
 6. Allow desktop microphone access in Windows Settings > Privacy & security >
    Microphone. On Windows 10, this is Settings > Privacy > Microphone.
 7. Open Notepad. Hold your chosen key, speak, and release to insert. Double-tap

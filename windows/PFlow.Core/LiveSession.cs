@@ -171,15 +171,21 @@ public sealed class LiveSession(uint session, LiveWindowPlanner? planner = null,
     {
         long now = clock?.Invoke() ?? 0;
         // A window that never ran has nothing to rest from and says nothing about speed.
-        if (!began) { restUntil = now; return; }
+        long audioMs = (ended.EndSample - ended.StartSample) / LiveWindowPlanner.SamplesPerMs;
+        if (!began) { restUntil = now; LastVerdict = new(ended.Sequence, audioMs, -1, -1, canceled, false, false, slowRun, TooSlow); return; }
         long took = Math.Max(0, now - inFlightSince);
         restUntil = now + (long)(took * RestRatio);
         // Replays have no clock; a window canceled because the take stopped says nothing about speed.
-        if (clock == null || Closed) return;
-        long audioMs = (ended.EndSample - ended.StartSample) / LiveWindowPlanner.SamplesPerMs;
-        if (canceled || took > Math.Max(audioMs, SlowWindowFloorMs)) { if (++slowRun >= SlowWindowsBeforeStop) TooSlow = true; }
+        if (clock == null || Closed) { LastVerdict = new(ended.Sequence, audioMs, took, -1, canceled, false, false, slowRun, TooSlow); return; }
+        long limit = Math.Max(audioMs, SlowWindowFloorMs);
+        bool slow = canceled || took > limit;
+        if (slow) { if (++slowRun >= SlowWindowsBeforeStop) TooSlow = true; }
         else slowRun = 0;
+        LastVerdict = new(ended.Sequence, audioMs, took, limit, canceled, true, slow, slowRun, TooSlow);
     }
+
+    /// How the last window that ended was judged, for the diagnostic report.
+    public LiveWindowVerdict? LastVerdict { get; private set; }
 
     /// The window was canceled (the take stopped, or it reached the time limit); a later one may run, after the same rest.
     public void Abandon(LiveWindowRequest request)
@@ -197,6 +203,11 @@ public sealed class LiveSession(uint session, LiveWindowPlanner? planner = null,
     /// Ends the take for live recognition and returns the words shown so far.
     public string Close() { lock (sync) { Closed = true; return merger.Text; } }
 }
+
+/// One live window as the speed rule saw it: `TookMs` is recognition only (-1: it never got the
+/// worker), `LimitMs` the most it may take before it counts as slow (-1: not judged, as when the take
+/// had already stopped), `SlowRun` the slow windows in a row so far, `TooSlow` whether live words ended.
+public readonly record struct LiveWindowVerdict(uint Sequence, long AudioMs, long TookMs, long LimitMs, bool Canceled, bool Judged, bool Slow, int SlowRun, bool TooSlow);
 
 /// Which words a finished take keeps. The finished text always comes from the
 /// whole-recording pass, so it includes the last words even if no live window

@@ -30,7 +30,8 @@ internal static partial class Program
         var removed = whisper.RemoveRetiredModels(); whisper.SweepPartials(); textModel.SweepPartials();
         var prewarm = Task.Run(() => whisper.Prewarm());
         _ = Task.Run(async () => { try { await textModel.Prewarm(); } catch (Exception) { } });
-        Check($"start removes the retired speech model files ({string.Join(", ", removed)})", SpeechModels.RetiredFiles.All(f => !File.Exists(Path.Combine(directory, f))) && removed.Count == 2);
+        // 0.1.27: only the exact downloads (size and checksum) are deleted; these fictional bytes are not them.
+        Check($"start leaves fictional files under the retired names alone ({removed.Count} removed)", SpeechModels.RetiredFiles.All(f => File.Exists(Path.Combine(directory, f))) && removed.Count == 0);
         bool busy = false;
         using var hook = new KeyboardHook(_ => { }) { Enabled = false };
         var settings = new SettingsWindow(store, whisper, textModel, hook, () => { }, () => busy) { ShowActivated = false, Width = 460, Height = 740 };

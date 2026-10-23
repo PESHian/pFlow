@@ -15,7 +15,9 @@ namespace PFlow.Windows;
 /// ScrollViewer jumped the full three lines for every event however small its delta (0.1.24), and
 /// 0.1.25 jumped 48 px in one frame per notch: both read as choppy. The box under the pointer takes
 /// the wheel while it can still move that way; otherwise the page does. Touch panning is not
-/// touched (it is manipulation, not the wheel), and a finger, the scroll bar or a key stops a glide.
+/// touched (it is manipulation, not the wheel); a finger, the scroll bar, a click, a key or closing the
+/// window stops every glide on the page, a text box's included, and a touchpad delta during a glide
+/// moves the page at once while the rest of the notch keeps gliding.
 /// Moving the offset re-arranges only the page's content at its new place; nothing is re-measured.
 internal static class SmoothScroll
 {
@@ -32,15 +34,25 @@ internal static class SmoothScroll
             if (target == null) return;
             Wheel(target, e.Delta); e.Handled = true;
         };
-        void Release(object? sender, EventArgs e) { if (gliders.TryGetValue(page, out var glider)) glider.Stop(); }
-        page.PreviewMouseDown += Release; page.PreviewKeyDown += Release; page.ManipulationStarted += Release; page.Unloaded += Release;
+        // A key, a click (the scroll bar too), a finger or the window closing stops every glide on the page, a text box's included.
+        void Release(object? sender, EventArgs e) => StopAll(page);
+        page.PreviewMouseDown += Release; page.PreviewKeyDown += Release; page.PreviewTouchDown += Release; page.PreviewStylusDown += Release;
+        page.ManipulationStarted += Release; page.Unloaded += Release;
+    }
+    /// Stops the glides of `page` and of every box inside it.
+    internal static void StopAll(ScrollViewer page)
+    {
+        foreach (var glider in Glider.Running.ToArray())
+            if (glider.Viewer == page || glider.Viewer.IsDescendantOf(page)) glider.Stop();
     }
     /// One wheel event on a viewer: a notch glides, a high-resolution delta moves at once.
     internal static void Wheel(ScrollViewer viewer, int delta)
     {
         var glider = gliders.GetValue(viewer, v => new Glider(v));
         if (ScrollGlide.IsNotch(delta)) glider.Notch(Pixels(delta));
-        else { glider.Stop(); viewer.ScrollToVerticalOffset(viewer.VerticalOffset + Pixels(delta)); }
+        // A touchpad delta during a glide moves the page at once; the rest of the notch keeps gliding.
+        else if (glider.Active) glider.Nudge(Pixels(delta));
+        else viewer.ScrollToVerticalOffset(viewer.VerticalOffset + Pixels(delta));
     }
     /// True while a notch is still gliding on this viewer (the checks wait on it).
     internal static bool Gliding(ScrollViewer viewer) => gliders.TryGetValue(viewer, out var glider) && glider.Active;
@@ -69,7 +81,10 @@ internal static class SmoothScroll
     /// device pixels, so text does not shimmer mid-glide.
     sealed class Glider
     {
+        /// Gliders with a glide under way (held only while they run).
+        internal static readonly HashSet<Glider> Running = [];
         readonly ScrollViewer viewer;
+        internal ScrollViewer Viewer => viewer;
         readonly ScrollGlide glide = new();
         readonly System.Windows.Threading.DispatcherTimer ticks;
         static readonly Stopwatch clock = Stopwatch.StartNew();
@@ -84,11 +99,12 @@ internal static class SmoothScroll
         internal void Notch(double pixels)
         {
             glide.Add(viewer.VerticalOffset, pixels, viewer.ScrollableHeight, clock.Elapsed.TotalMilliseconds);
-            if (!hooked) { hooked = true; CompositionTarget.Rendering += Frame; ticks.Start(); }
+            if (!hooked) { hooked = true; Running.Add(this); CompositionTarget.Rendering += Frame; ticks.Start(); }
             Step();
         }
+        internal void Nudge(double pixels) { glide.Shift(pixels, viewer.ScrollableHeight); Step(); }
         internal void Stop() { glide.Stop(); Unhook(); }
-        void Unhook() { if (hooked) { hooked = false; CompositionTarget.Rendering -= Frame; ticks.Stop(); } }
+        void Unhook() { if (hooked) { hooked = false; Running.Remove(this); CompositionTarget.Rendering -= Frame; ticks.Stop(); } }
         void Frame(object? sender, EventArgs e) => Step();
         void Step()
         {
