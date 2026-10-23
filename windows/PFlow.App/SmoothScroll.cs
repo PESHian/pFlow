@@ -33,11 +33,14 @@ internal static class SmoothScroll
     {
         for (var node = source; node != null && node != page; node = Parent(node))
             if (node is ScrollViewer inner) {
-                if (inner.CanContentScroll) return null;
+                if (ScrollsByItems(inner)) return null;
                 if (CanTake(inner, delta)) return inner;
             }
         return CanTake(page, delta) ? page : null;
     }
+    /// A list's viewer steps by whole items (its offsets are item counts); a text box's viewer also
+    /// reports CanContentScroll but its offsets are pixels, so it is scrolled by pixel like the page.
+    internal static bool ScrollsByItems(ScrollViewer viewer) => viewer.CanContentScroll && viewer.TemplatedParent is not System.Windows.Controls.Primitives.TextBoxBase;
     static bool CanTake(ScrollViewer viewer, int delta) => delta < 0 ? viewer.VerticalOffset < viewer.ScrollableHeight - 0.5 : viewer.VerticalOffset > 0.5;
     static DependencyObject? Parent(DependencyObject node) => node is Visual or System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node);
 }

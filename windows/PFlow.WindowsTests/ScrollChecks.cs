@@ -28,10 +28,10 @@ internal static partial class Program
             window.Show(); window.UpdateLayout(); Drain();
             ScrollViewer? Inner(TextBox box) => Descendants<ScrollViewer>(box).FirstOrDefault();
             Check("a wheel over a text box with nothing to scroll goes to the page", SmoothScroll.Target(page, Descendants<FrameworkElement>(shortBox).Last(), -30) == page);
-            Check("a wheel over a text box with more text scrolls the box, pixel by pixel", SmoothScroll.Target(page, Descendants<FrameworkElement>(longBox).Last(), -30) == Inner(longBox) && Inner(longBox)!.CanContentScroll == false);
+            Check("a wheel over a text box with more text scrolls the box, pixel by pixel", SmoothScroll.Target(page, Descendants<FrameworkElement>(longBox).Last(), -30) == Inner(longBox) && !SmoothScroll.ScrollsByItems(Inner(longBox)!));
             Inner(longBox)!.ScrollToBottom(); longBox.UpdateLayout(); Drain();
             Check("at the end of the box the wheel moves the page instead", SmoothScroll.Target(page, Descendants<FrameworkElement>(longBox).Last(), -30) == page);
-            Check("a list that scrolls by whole items keeps its own stepping", SmoothScroll.Target(page, Descendants<FrameworkElement>(list).Last(), -30) == null);
+            Check("a list that scrolls by whole items keeps its own stepping", SmoothScroll.Target(page, Descendants<FrameworkElement>(list).Last(), -30) == null && SmoothScroll.ScrollsByItems(Descendants<ScrollViewer>(list).First()));
             page.ScrollToBottom(); page.UpdateLayout(); Drain();
             Check("at the bottom of the page a wheel down has nowhere to go and is left alone", SmoothScroll.Target(page, Descendants<FrameworkElement>(shortBox).Last(), -30) == null && SmoothScroll.Target(page, Descendants<FrameworkElement>(shortBox).Last(), 30) == page);
         } finally { window.Close(); }
