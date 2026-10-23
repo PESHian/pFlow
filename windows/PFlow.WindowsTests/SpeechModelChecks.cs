@@ -28,7 +28,7 @@ internal static partial class Program
             Check("a file of the wrong size does not count as installed", !whisper.Installed(turbo) && whisper.InUse == SpeechModels.Small);
             using (var right = new FileStream(Path.Combine(root, turbo.FileName), FileMode.Create)) right.SetLength(turbo.Bytes);
             Check("with its file here the chosen model is in use and its path is the download", whisper.Installed(turbo) && whisper.InUse == turbo && whisper.ModelPath == Path.Combine(root, turbo.FileName)
-                && whisper.ModelStatus == $"In use: {turbo.Title} (574 MB). Recognition stays on this PC.");
+                && whisper.ModelStatus == $"In use: {turbo.Title} ({FileSize.Describe(turbo.Bytes)}). Recognition stays on this PC." && FileSize.Describe(turbo.Bytes) == "874 MB");
             File.WriteAllText(Path.Combine(root, turbo.FileName + "." + Guid.NewGuid() + ".download"), "partial");
             Check("a partial download of any speech model is swept", whisper.SweepPartials() == 1 && Directory.GetFiles(root, "*.download").Length == 0);
 
