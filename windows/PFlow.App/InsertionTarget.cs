@@ -33,14 +33,20 @@ internal sealed class InsertionTarget : IInsertionTarget
     readonly bool placeholder;
     readonly IntPtr foreground;
     readonly uint processId;
+    /// An app UI Automation cannot read (WeakField): read and checked its own way, or pasted unchecked.
+    readonly WeakField? weak;
     FieldState State => new(foreground.ToInt64(), processId, string.Join(".", runtimeId), before, start, length);
     public const string SavedToHistory = "Saved to History. Open History to copy your dictation.";
     public const string Unreachable = "Couldn't reach that box. Your words are in History.";
     public const string Unchecked = "Typed into the app; it did not let pFlow check the result. Look at the field before copying from History.";
+    /// Words pasted into an editable field pFlow cannot read (WeakField.Kinds.PasteOnly).
+    public const string Pasted = "Pasted into the app; pFlow could not check it.";
+    /// The one rule: these outcomes went into the app without a check. A done take, no card, no balloon.
+    internal static bool WentInUnchecked(string status) => status.StartsWith(Unchecked, StringComparison.Ordinal) || status.StartsWith(Pasted, StringComparison.Ordinal);
     /// Chromium's top-level window class (Chrome, Edge, Electron) and its legacy content window.
     static readonly string[] ChromiumHosts = ["Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND"];
     public const string PlainOnly = "Inserted as plain text; bold headings could not be applied safely.";
-    public bool CanInsert => readable || placeholder;
+    public bool CanInsert => readable || placeholder || weak != null;
     /// Chromium's placeholder pane: worth capturing again shortly (see `placeholder`).
     internal bool Placeholder => placeholder;
     public string ApplicationName { get; }
@@ -51,14 +57,14 @@ internal sealed class InsertionTarget : IInsertionTarget
     internal string Kind { get; }
     /// Why the field cannot take text, for the log; null when it can.
     internal string? Refusal { get; }
-    InsertionTarget(AutomationElement e, string text, int start, int length, bool readable, string? refusal)
+    InsertionTarget(AutomationElement e, string text, int start, int length, bool readable, string? refusal, WeakField? weak = null)
     {
-        element = e; runtimeId = e.GetRuntimeId(); before = text; this.start = start; this.length = length; this.readable = readable; Refusal = refusal;
+        element = e; runtimeId = e.GetRuntimeId(); before = text; this.start = start; this.length = length; this.readable = readable; Refusal = refusal; this.weak = weak;
         foreground = Native.GetForegroundWindow(); Native.GetWindowThreadProcessId(foreground, out processId);
         placeholder = !readable && refusal != null && ChromiumFocused();
         if (placeholder) { Refusal = refusal + "; Chromium placeholder pane"; Knock(); }
         using var process = Process.GetProcessById((int)processId); ApplicationName = process.ProcessName; ApplicationId = process.ProcessName;
-        TypingNote = TypingNoteFor(processId, ApplicationName); Kind = Describe(e);
+        TypingNote = TypingNoteFor(processId, ApplicationName); Kind = Describe(e) + (weak == null ? "" : " via " + weak.Kind);
     }
     /// The classic screen-reader knock on the focused Chromium window: WM_GETOBJECT
     /// with OBJID_CLIENT, which is what makes Chromium start building its tree.
@@ -158,7 +164,7 @@ internal sealed class InsertionTarget : IInsertionTarget
         return [new("app", LogName), new("appIntegrity", DiagnosticEnvironment.IntegrityName(LiveTextField.Integrity(processId))),
             new("pflowIntegrity", DiagnosticEnvironment.IntegrityName(LiveTextField.Integrity(0))), new("field", Kind),
             new("focusedControl", control == IntPtr.Zero ? "none" : PrivateLog.ClassLabel(LiveTextField.BaseClass(control))), new("patterns", patterns), new("password", password),
-            new("keyboardFocusable", focusable), new("readable", readable), new("placeholder", placeholder), new("refusal", Refusal),
+            new("keyboardFocusable", focusable), new("readable", readable), new("placeholder", placeholder), new("weakField", weak?.Describe() ?? "none"), new("refusal", Refusal),
             new("keyboardLayout", DiagnosticEnvironment.ForegroundLayout(foreground))];
     }
     static void CheckSecure(AutomationElement e)
@@ -181,8 +187,8 @@ internal sealed class InsertionTarget : IInsertionTarget
         var e = AutomationElement.FocusedElement ?? throw new InvalidOperationException("Place the cursor in a text field first.");
         if (e.Current.ProcessId == Environment.ProcessId && Refused((IntPtr)e.Current.NativeWindowHandle)) throw new InvalidOperationException(OwnWindow);
         CheckSecure(e);
-        if (!e.Current.IsEnabled || !e.Current.IsKeyboardFocusable) return new(e, "", 0, 0, false, "disabled or not keyboard-focusable");
-        if (e.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)) {
+        bool focusable = e.Current.IsEnabled && e.Current.IsKeyboardFocusable;
+        if (focusable && e.TryGetCurrentPattern(TextPattern.Pattern, out var pattern)) {
             var tp = (TextPattern)pattern; var selections = tp.GetSelection();
             if (selections.Length != 1) return new(e, "", 0, 0, false, "selections=" + selections.Length);
             var document = tp.DocumentRange;
@@ -192,9 +198,24 @@ internal sealed class InsertionTarget : IInsertionTarget
             var selected = selections[0].GetText(-1); int start = Math.Min(DocumentText(e, prefix).Length, text.Length);
             return new(e, text, start, Math.Min(selected.Length, text.Length - start), true, null);
         }
+        string refusal = focusable ? "no text pattern" : "disabled or not keyboard-focusable";
+        // An app UI Automation cannot read (LibreOffice, Notepad++): its own accessibility or messages, else a
+        // checked paste. Never in a Chromium window (browsers, Electron apps), which keep their own path.
+        if (!ChromiumWindow(front)) {
+            var weak = WeakField.Find(front, e, out string why);
+            if (weak is { Protected: true }) throw new InvalidOperationException("Dictation is off in password fields.");
+            if (weak != null) {
+                var state = weak.State();
+                return new(e, state?.Text ?? "", state?.Start ?? 0, state?.Length ?? 0, state != null, null, weak);
+            }
+            refusal += "; " + why;
+        }
         // Unsupported fields still permit dictation, but can never receive input or clipboard data.
-        return new(e, "", 0, 0, false, "no text pattern");
+        return new(e, "", 0, 0, false, refusal);
     }
+    /// The window or its focused control is Chromium's (Chrome, Edge, Electron apps).
+    static bool ChromiumWindow(IntPtr window) =>
+        ChromiumHosts.Contains(LiveTextField.ClassName(window)) || ChromiumHosts.Contains(LiveTextField.ClassName(LiveTextField.FocusedControl(window)));
     /// A Chromium field with nothing in it reports its label as its text (the
     /// value is empty): that is no text. Every other field reads as it is.
     internal static string DocumentText(AutomationElement e, TextPatternRange range)
@@ -237,6 +258,7 @@ internal sealed class InsertionTarget : IInsertionTarget
         cancel.ThrowIfCancellationRequested();
         try {
             if (placeholder) return await InsertBehindPlaceholder(text, clipboardOwner, keepClipboard, cancel, rtf);
+            if (weak != null) return await DeliverWeak(weak, text, clipboardOwner, keepClipboard, cancel, rtf);
             if (!readable) { Log("saved to History: " + Refusal); return SavedToHistory; }
             return await Deliver(text, clipboardOwner, keepClipboard, cancel, rtf);
         } catch (Exception error) when (error is not OperationCanceledException) { Log("refused: " + error.Message); throw; }
@@ -276,7 +298,7 @@ internal sealed class InsertionTarget : IInsertionTarget
     async Task<string> TypeUnchecked(string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf)
     {
         ValidateHost(); cancel.ThrowIfCancellationRequested();
-        if (new[] { 0x10, 0x11, 0x12, 0x5B, 0x5C }.Any(x => Native.GetAsyncKeyState(x) < 0)) throw new InvalidOperationException("Release the shortcut keys first. Your text is in History.");
+        RequireNoShortcutKeys();
         string line = OneLine(text); bool flattened = text.IndexOfAny(['\n', '\r']) >= 0;
         Log("path=unchecked typing " + InsertionLog.Length(line) + (flattened ? " line breaks as spaces" : ""));
         Native.Send(Native.UnicodeText(line));
@@ -290,6 +312,11 @@ internal sealed class InsertionTarget : IInsertionTarget
             catch (Exception error) when (error is InvalidOperationException or OutOfMemoryException) { Log("copy to clipboard failed: " + error.Message); status += " It could not be copied to the clipboard."; }
         }
         return status;
+    }
+    /// Shift, Ctrl, Alt or Windows still held would turn the words into shortcuts.
+    static void RequireNoShortcutKeys()
+    {
+        if (new[] { 0x10, 0x11, 0x12, 0x5B, 0x5C }.Any(x => Native.GetAsyncKeyState(x) < 0)) throw new InvalidOperationException("Release the shortcut keys first. Your text is in History.");
     }
     /// The text on one line for a box pFlow cannot see: every run of line
     /// breaks, with the spaces around it, becomes one space.
@@ -320,24 +347,64 @@ internal sealed class InsertionTarget : IInsertionTarget
             string fallback = await TypeUnicode(text, expected, cancel);
             return fallback == "Inserted" && rtf != null ? PlainOnly : fallback;
         }
+        return await Paste(lease, text, rtf, keepClipboard, "path=clipboard keep=" + keepClipboard + " rich=" + (rtf != null) + " field " + InsertionLog.Length(before) + " -> expected " + InsertionLog.Length(expected),
+            () => Confirm(expected, 20), () => false, cancel);
+    }
+    /// The one paste: checks before and after the clipboard is set, Ctrl+V, the result's own check, then the
+    /// person's clipboard back unless they asked to keep the words or `keepOurs` says the app may still read it.
+    async Task<string> Paste(ClipboardLease lease, string text, string? rtf, bool keepClipboard, string log, Func<Task<string>> confirm, Func<bool> keepOurs, CancellationToken cancel)
+    {
         using var clipboardLifetime = lease;
         Validate(); cancel.ThrowIfCancellationRequested();
         try {
-            Log("path=clipboard keep=" + keepClipboard + " rich=" + (rtf != null) + " field " + InsertionLog.Length(before) + " -> expected " + InsertionLog.Length(expected));
+            Log(log);
             lease.Put(text, rtf);
             Validate(); cancel.ThrowIfCancellationRequested();
-            if (new[] { 0x10, 0x11, 0x12, 0x5B, 0x5C }.Any(x => Native.GetAsyncKeyState(x) < 0)) throw new InvalidOperationException("Release the shortcut keys first. Your text is in History.");
+            RequireNoShortcutKeys();
             lease.DispatchPaste();
             // Do not retry an uncertain paste. Restoration does not shorten when cancellation arrives.
-            return await Confirm(expected, 20);
+            return await confirm();
         } finally {
-            if (keepClipboard) lease.Keep();
+            if (keepClipboard || keepOurs()) lease.Keep();
             else {
                 bool restored = lease.Restore();
                 for (int i = 0; !restored && i < 10; i++) { await Task.Delay(50); restored = lease.Restore(); }
                 if (!restored) throw new InvalidOperationException("Clipboard restore was blocked. Keep pFlow open and check your clipboard.");
             }
         }
+    }
+    /// An app UI Automation cannot read: always pasted (typed keys would meet the app's autocorrect), then
+    /// checked in what the app shows where it can be read; otherwise the status says it was not checked.
+    async Task<string> DeliverWeak(WeakField field, string text, IntPtr clipboardOwner, bool keepClipboard, CancellationToken cancel, string? rtf)
+    {
+        Validate();
+        string expected;
+        if (readable) {
+            if (start > before.Length || start + length > before.Length) throw new InvalidOperationException("The text selection could not be checked. Your text is in History.");
+            var payload = Prepare(State, text, rtf); text = payload.Text; rtf = payload.Rtf; expected = payload.Expected;
+        } else expected = text;
+        string? shownBefore = field.Shown();
+        var lease = new ClipboardLease(clipboardOwner, !keepClipboard);
+        bool busy = false;
+        string path = "path=" + field.Kind + " paste keep=" + keepClipboard + " rich=" + (rtf != null) + " field " + InsertionLog.Length(before) + " -> expected " + InsertionLog.Length(expected) + (shownBefore == null ? " unreadable" : "");
+        return await Paste(lease, text, rtf, keepClipboard, path, async () => {
+            if (shownBefore != null) {
+                var clock = Stopwatch.StartNew(); string? now = null;
+                for (int i = 0; i < 40; i++) {
+                    await Task.Delay(50); now = field.Shown();
+                    if (now != null && ShownText.Landed(shownBefore, now, expected)) { Log("confirmed in what the app shows after " + clock.ElapsedMilliseconds + " ms"); return "Inserted"; }
+                }
+                Log("not confirmed after " + clock.ElapsedMilliseconds + " ms: app shows " + InsertionLog.Length(now ?? "") + ", before " + InsertionLog.Length(shownBefore));
+                return now != null && shownBefore.Length > 0 && ShownText.Plain(now) == ShownText.Plain(shownBefore) ? NothingLanded : Unconfirmed;
+            }
+            // Nothing to read: give the app time to take the paste before the clipboard goes back. An app
+            // that stops answering keeps pFlow's words on the clipboard, so a late paste is still the words.
+            await Task.Delay(300);
+            busy = !field.Responding(2000);
+            if (!busy) await Task.Delay(500);
+            Log("pasted, not checked" + (busy ? "; the app did not answer, clipboard kept" : ""));
+            return busy ? Pasted + " The app was busy, so your words are also still on the clipboard." : Pasted;
+        }, () => busy, cancel);
     }
     internal static bool ApplyPlainValue(AutomationElement field, ValuePattern value, string expected, int caret, Action validateFocus)
     {
@@ -410,7 +477,7 @@ internal sealed class InsertionTarget : IInsertionTarget
     async Task<string> TypeUnicode(string text, string expected, CancellationToken cancel)
     {
         Validate(); cancel.ThrowIfCancellationRequested();
-        if (new[] { 0x10, 0x11, 0x12, 0x5B, 0x5C }.Any(x => Native.GetAsyncKeyState(x) < 0)) throw new InvalidOperationException("Release the shortcut keys first. Your text is in History.");
+        RequireNoShortcutKeys();
         Log("path=type field " + InsertionLog.Length(before) + " -> expected " + InsertionLog.Length(expected));
         // One SendInput batch cannot interleave another input event. Never retry a partially delivered batch.
         var inputs = Native.UnicodeText(text);

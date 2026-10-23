@@ -180,9 +180,31 @@ internal static class DiagnosticEnvironment
     {
         if (downloads.StartsWith(@"\\", StringComparison.Ordinal) || profile.Length == 0) return false;
         if (!string.Equals(System.IO.Path.TrimEndingDirectorySeparator(downloads), System.IO.Path.Combine(profile, "Downloads"), StringComparison.OrdinalIgnoreCase)) return false;
-        if (downloads.Split('\\').Any(part => CloudFolders.Any(cloud => part.StartsWith(cloud, StringComparison.OrdinalIgnoreCase)))) return false;
-        try { return new DriveInfo(System.IO.Path.GetPathRoot(downloads)!).DriveType == DriveType.Fixed; } catch (ArgumentException) { return false; }
+        // A junction or link (a Downloads redirected into OneDrive, say) is judged by where it really leads.
+        string real = FinalPath(downloads) ?? downloads;
+        foreach (string path in new[] { downloads, real }) {
+            if (path.StartsWith(@"\\", StringComparison.Ordinal)) return false;
+            if (path.Split('\\').Any(part => CloudFolders.Any(cloud => part.StartsWith(cloud, StringComparison.OrdinalIgnoreCase)))) return false;
+            try { if (new DriveInfo(System.IO.Path.GetPathRoot(path)!).DriveType != DriveType.Fixed) return false; } catch (ArgumentException) { return false; }
+        }
+        return true;
     }
+
+    /// The folder's final path with every junction and link on the way resolved, or null when it cannot be opened.
+    static string? FinalPath(string folder)
+    {
+        using var handle = CreateFile(folder, 0, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);
+        if (handle.IsInvalid) return null;
+        var path = new System.Text.StringBuilder(1024);
+        int length = GetFinalPathNameByHandle(handle, path, path.Capacity, 0);
+        if (length <= 0 || length >= path.Capacity) return null;
+        string result = path.ToString();
+        return result.StartsWith(@"\\?\UNC\", StringComparison.Ordinal) ? @"\\" + result[8..] : result.StartsWith(@"\\?\", StringComparison.Ordinal) ? result[4..] : result;
+    }
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern int GetFinalPathNameByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle file, System.Text.StringBuilder path, int length, uint flags);
 
     /// Writes the report to the reports folder and shows it selected in File Explorer. Returns the file name.
     internal static string Save(string report)

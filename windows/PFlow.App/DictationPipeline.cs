@@ -109,8 +109,8 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         } else InsertionLog.Record("live typing final: " + result);
         int index = store.History.FindIndex(x => x.Id == entry.Id);
         if (index >= 0) { store.History[index] = entry with { InsertionStatus = result }; store.Write("history.json", store.History); }
-        // Words typed without a check went in the way a person's typing would: that is a done take, not a failure.
-        bool inserted = result.StartsWith("Inserted", StringComparison.Ordinal) || result.StartsWith(InsertionTarget.Unchecked, StringComparison.Ordinal);
+        // Words typed or pasted without a check went in the way a person's typing would: a done take, not a failure.
+        bool inserted = result.StartsWith("Inserted", StringComparison.Ordinal) || InsertionTarget.WentInUnchecked(result);
         // A write that went out but could not be read back is nearly always in the field already (web
         // boxes read back late): no balloon and no card for it; the History status says to check.
         bool unconfirmed = result.StartsWith(InsertionTarget.Unconfirmed, StringComparison.Ordinal);

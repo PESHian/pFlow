@@ -7,11 +7,11 @@ apps icon, kept exactly as first published) and the Mac PeshMark. Handed whole t
 cropped and the gap between head and waves closed, so head and waves fill the square: the 32/40/48 px
 frames are the original artwork; at 16/20/24 px the head is the original and its two waves are
 redrawn as two clean arcs in the waves' own colour (the thin originals blur into one smudge there).
-TrayOnDark.ico and TrayOnLight.ico (the taskbar-theme choice in TrayIcon.cs) carry the same mark,
-which reads on both. Usage: tray-icons.py <Assets folder>   (needs Pillow)
+TrayOnLight.ico (a light taskbar) is the mark as is. TrayOnDark.ico (a dark taskbar) adds a thin light
+rim around the mark's outline, so the dark head does not sink into a dark taskbar. Usage: tray-icons.py <Assets folder>   (needs Pillow)
 """
 import io, math, struct, sys
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 assets = sys.argv[1]
 SIZES = [16, 20, 24, 32, 40, 48]
@@ -59,6 +59,21 @@ def small(side=320):
 
 big, little = large(), small()
 tray = {s: (little if s <= 24 else big).resize((s, s), Image.LANCZOS) for s in SIZES}
-write_ico(f'{assets}/TrayOnDark.ico', tray)
+RIM = (236, 236, 236)  # light grey: reads on a dark taskbar, not mistaken for the waves' lilac
+
+def rimmed(image):
+    """A one-pixel light ring just outside the head's outline (not around the ears or the waves, which are
+    already light), drawn under the mark."""
+    alpha = image.getchannel('A').point(lambda a: 255 if a > 96 else 0)
+    dark = Image.composite(image.convert('L').point(lambda v: 255 if v < 110 else 0), Image.new('L', image.size, 0), alpha)
+    near_head = dark.filter(ImageFilter.MaxFilter(5 if image.width < 32 else 7))
+    outside = Image.composite(Image.new('L', image.size, 0), alpha.filter(ImageFilter.MaxFilter(3)), alpha)
+    ring = Image.composite(outside, Image.new('L', image.size, 0), near_head)
+    out = Image.new('RGBA', image.size, RIM + (0,))
+    out.putalpha(ring.point(lambda a: 190 if a else 0))
+    out.alpha_composite(image)
+    return out
+
+write_ico(f'{assets}/TrayOnDark.ico', {s: rimmed(image) for s, image in tray.items()})
 write_ico(f'{assets}/TrayOnLight.ico', tray)
 print('wrote TrayOnDark.ico, TrayOnLight.ico from Pesh.ico')

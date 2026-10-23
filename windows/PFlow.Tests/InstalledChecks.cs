@@ -37,8 +37,20 @@ internal static class InstalledChecks
             && !InsertionPrompt.Needed("Insertion could not be confirmed; check the field before copying from History.", false)
             && !InsertionPrompt.Needed("Clipboard restore was blocked. Keep pFlow open and check your clipboard.", false)
             && !InsertionPrompt.Needed("Typed into the app; it did not let pFlow check the result. Look at the field before copying from History.", false)
+            && !InsertionPrompt.Needed("Pasted into the app; pFlow could not check it.", false) && !InsertionPrompt.Needed("Pasted into the app; pFlow could not check it. The app was busy, so your words are also still on the clipboard.", false)
             && !InsertionPrompt.Needed("Inserted", false) && !InsertionPrompt.Needed("Inserted as plain text; bold headings could not be applied safely.", false)
             && !InsertionPrompt.Needed("Inserted, but it could not be copied to the clipboard. Copy it from History.", false) && !InsertionPrompt.Needed("Kept as typed", true));
+        // W028: apps pFlow reads only around the caret (LibreOffice paragraphs, Scintilla text).
+        Check("shown text: the caret paragraph with the words in place, once more than before, counts as landed",
+            ShownText.Landed("Title\nFictional prefix.", "Title\nFictional prefix. Fictional words.", "Fictional prefix. Fictional words.")
+            && ShownText.Landed("Fictional prefix.", "Fictional prefix. Line one.\nLine two.", "Fictional prefix. Line one.\r\nLine two.")
+            && ShownText.Landed("A\r\nB", "A\r\nB\u00A0C", "B C"));
+        Check("shown text: missing, partial, changed or already-there words do not count",
+            !ShownText.Landed("Fictional prefix.", "Fictional prefix.", "Fictional prefix. Fictional words.")
+            && !ShownText.Landed("Fictional prefix.", "Fictional prefix. Fictional wor", "Fictional prefix. Fictional words.")
+            && !ShownText.Landed("Fictional prefix.", "Fictional prefix. fictional words.", "Fictional prefix. Fictional words.")
+            && !ShownText.Landed("Same words.\nSame words.", "Same words.\nSame words.", "Same words.")
+            && !ShownText.Landed("x", "x  ", "  ") && ShownText.Count("aaaa", "aa") == 2);
         Check("the card's reason line says each known outcome in plain words, no 'focus' or 'insertion' jargon",
             InsertionPrompt.Reason("Focus changed. Your text is in History.") == "You switched to another window before pFlow could type."
             && InsertionPrompt.Reason("Saved to History. Open History to copy your dictation.") == "pFlow can't type into that kind of box."

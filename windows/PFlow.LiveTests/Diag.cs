@@ -31,10 +31,13 @@ internal static partial class Program
     /// One Type-mode take as Program runs it: BeginTake, capture, typing begins before any pFlow window
     /// (or later, when Chromium's field becomes readable during the take: CaptureAgainSoon + BeginTypingLate),
     /// live updates reconciled, then the pipeline's finish with the take's LiveTyping, EndTake.
-    static async Task<TypeResult> TypeTake(string name, string audio, Whisper whisper, StateStore store, LocalTextModel textModel, LivePreview preview, Capsule capsule, IntPtr owner, string directory, string? expectApp = null)
+    /// `mode` Off: the same take with no live words (Program starts no live typing then).
+    static async Task<TypeResult> TypeTake(string name, string audio, Whisper whisper, StateStore store, LocalTextModel textModel, LivePreview preview, Capsule capsule, IntPtr owner, string directory, string? expectApp = null, string mode = LiveTextModes.TypeInApp)
     {
         var result = new TypeResult(); var recorder = Diagnostics.Recorder;
-        recorder.BeginTake(new DiagField("trigger", "hold"), new DiagField("key", store.Preferences.ActivationKey), new DiagField("liveText", LiveTextModes.TypeInApp));
+        // Program hides the card when a take ends; an Off take after a Type take starts with it hidden.
+        if (mode == LiveTextModes.Off) preview.Clear();
+        recorder.BeginTake(new DiagField("trigger", "hold"), new DiagField("key", store.Preferences.ActivationKey), new DiagField("liveText", mode));
         var target = InsertionTarget.Capture();
         // Never a window the check does not own: the take stops before anything is typed if focus is elsewhere.
         if (expectApp != null && !string.Equals(target.ApplicationName, expectApp, StringComparison.OrdinalIgnoreCase)) {
@@ -43,11 +46,13 @@ internal static partial class Program
         }
         InsertionLog.Record("take: app=" + target.LogName + " field=" + target.Kind + (target.CanInsert ? " insertable" : " not insertable: " + target.Refusal) + " live=" + LiveTextModes.TypeInApp);
         var slot = new LiveInlineSlot(); string session = name; bool typing = false;
-        var field = target.LiveField(out string why); result.FieldWhy = why;
-        if (field == null) recorder.Event("typing.field", new DiagField("result", "none"), new DiagField("why", why));
-        var refused = slot.Begin(session, field);
-        typing = refused == null; result.Refused = refused?.ToString();
-        if (refused != null) InsertionLog.Record("live typing not started: " + refused);
+        if (mode == LiveTextModes.TypeInApp) {
+            var field = target.LiveField(out string why); result.FieldWhy = why;
+            if (field == null) recorder.Event("typing.field", new DiagField("result", "none"), new DiagField("why", why));
+            var refused = slot.Begin(session, field);
+            typing = refused == null; result.Refused = refused?.ToString();
+            if (refused != null) InsertionLog.Record("live typing not started: " + refused);
+        }
         recorder.Event("capture.detail", DiagnosticEnvironment.Take(target));
         var clock = Stopwatch.StartNew(); int look = 0; int[] looks = [300, 1000, 2500, 5500];
         async Task During(TakeReport report, LiveRecognizer? live)
@@ -61,7 +66,7 @@ internal static partial class Program
             if (!target.SameWindow(again)) { InsertionLog.Record("take: focus left the window; placeholder kept"); look = looks.Length; return; }
             if (again.CanInsert && !again.Placeholder) {
                 target = again; InsertionLog.Record("take: field readable after " + wait + " ms: " + again.Kind); look = looks.Length;
-                if (typing) return;
+                if (typing || mode != LiveTextModes.TypeInApp) return;
                 var late = again.LiveField(out string lateWhy);
                 if (late == null) { recorder.Event("typing.field", new DiagField("result", "none"), new DiagField("stage", "field readable during the take"), new DiagField("why", lateWhy)); return; }
                 var lateRefused = slot.Begin(session, late);
@@ -69,7 +74,7 @@ internal static partial class Program
                 typing = true; result.LateBegin = true;
             } else InsertionLog.Record("take: still the placeholder after " + wait + " ms");
         }
-        result.Report = await FeedTake(name, audio, LiveTextModes.TypeInApp, false, whisper, store, preview, capsule, During,
+        result.Report = await FeedTake(name, audio, mode, false, whisper, store, preview, capsule, During,
             typed: text => { if (typing && slot.Reconcile(session, text) is LiveStop stop) { result.Stops.Add(stop); InsertionLog.Record("live: " + LiveInlineText.StoppedNote(stop)); } });
         result.Typed = typing && slot.Typed(session);
         InsertionLog.Record("live: windows=" + result.Report.Windows + " typed=" + result.Typed);

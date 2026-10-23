@@ -47,7 +47,15 @@ internal sealed class ClipboardLease : IDisposable
         } catch { Dispose(); throw; }
         finally { Native.CloseClipboard(); }
     }
-    void Open() { if (!Native.OpenClipboard(owner)) throw new InvalidOperationException("The clipboard is busy. Your text is in History."); }
+    /// Clipboard history, sync tools and remote-desktop helpers open the clipboard for a moment after every
+    /// change: a busy clipboard gets up to half a second before the take gives up.
+    void Open()
+    {
+        for (int attempt = 0; !Native.OpenClipboard(owner); attempt++) {
+            if (attempt >= 20) throw new InvalidOperationException("The clipboard is busy. Your text is in History.");
+            Thread.Sleep(25);
+        }
+    }
     static IntPtr Allocate(byte[] bytes)
     {
         var handle = Native.GlobalAlloc(2, (UIntPtr)bytes.Length);

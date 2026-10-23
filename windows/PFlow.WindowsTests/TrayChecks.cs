@@ -33,6 +33,16 @@ internal static partial class Program
             Check($"{(light ? "light" : "dark")} taskbar, {size} px: the mark's opaque box covers {covered} of {size} px across (at least 80%), with its sound waves ({waves} px)",
                 covered * 100 >= size * 80 && waves >= 2);
         }
+        // W028: the dark-taskbar icon has a light rim around the head; the light-taskbar one has none.
+        foreach (int dpi in new[] { 96, 144 }) {
+            int Rim(bool light) {
+                using var icon = TrayIcon.Load(dpi, light); using var bitmap = icon.ToBitmap(); int count = 0;
+                for (int y = 0; y < bitmap.Height; y++) for (int x = 0; x < bitmap.Width; x++) { var p = bitmap.GetPixel(x, y); if (p.A > 128 && p.R > 200 && p.G > 200 && p.B > 200 && Math.Abs(p.R - p.B) < 20) count++; }
+                return count;
+            }
+            int dark = Rim(false), light = Rim(true);
+            Check($"dark taskbar, {TrayIcon.SizeFor(dpi)} px: a light rim keeps the dark head readable ({dark} rim px; light-taskbar icon {light})", dark >= TrayIcon.SizeFor(dpi) && light <= 2);
+        }
         // The app, Start and Installed-apps icon is the original mark again, every frame (as first published).
         using (var original = System.Windows.Application.GetResourceStream(new Uri("pack://application:,,,/pFlow;component/Assets/Pesh.ico")).Stream)
             Check("Pesh.ico is the original talking-pig icon, byte for byte", Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(original)) == "ADD7F361CB15AA8AC2007D179AF97B828C8D79C6B06B5493A37BA1BB6BB6D5DA");

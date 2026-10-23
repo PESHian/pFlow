@@ -31,10 +31,10 @@ public static class InsertionPrompt
     ];
 
     /// Outcomes where the words were sent into the app: inserted and checked,
-    /// typed without a check, or pasted but not confirmed. The words are most
+    /// typed or pasted without a check, or pasted but not confirmed. The words are most
     /// likely there, so a card offering them again would have the person put
     /// them in twice.
-    static readonly string[] WentIn = ["Inserted", "Typed into the app", "Insertion could not be confirmed", "Clipboard restore was blocked"];
+    static readonly string[] WentIn = ["Inserted", "Typed into the app", "Pasted into the app", "Insertion could not be confirmed", "Clipboard restore was blocked"];
 
     /// True when a take's outcome needs the card: nothing was sent into the
     /// app. Never for words that went in, checked or not, nor for words typed live and kept.
