@@ -11,6 +11,7 @@ internal static partial class Program
     /// real size on a taskbar-coloured strip next to a 3x blow-up, to look at.
     static void NativeTray()
     {
+        _ = System.Windows.Application.Current ?? new System.Windows.Application { ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown }; // pack:// URIs need the application
         Check("frame by DPI: 16 at 100%, 20 at 125%, 24 at 150%, 32 at 200%, 40 at 250%, 48 at 300%, never beyond", TrayIcon.SizeFor(96) == 16 && TrayIcon.SizeFor(120) == 20 && TrayIcon.SizeFor(144) == 24
             && TrayIcon.SizeFor(192) == 32 && TrayIcon.SizeFor(240) == 40 && TrayIcon.SizeFor(288) == 48 && TrayIcon.SizeFor(384) == 48 && TrayIcon.SizeFor(72) == 16);
         Check("a light taskbar gets the dark head, a dark taskbar the light head", TrayIcon.FileFor(true) == "TrayOnLight.ico" && TrayIcon.FileFor(false) == "TrayOnDark.ico");
