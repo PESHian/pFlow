@@ -78,5 +78,79 @@ internal static partial class Program
             } finally { settings.Close(); }
             }
         } finally { Directory.Delete(root, true); }
+
+        // The outline follows the model in use, the line names a missing or damaged choice, the tiles do nothing
+        // during a take, and a file the worker refuses shows "Damaged · Download again" with its Download button
+        // while takes fall back to small. Small and turbo have files of their exact size here (fictional zeros).
+        // PFLOW_SHOTS writes speech-{normal,downloading,damaged,missing}-{theme}.png of the card.
+        string states = Path.Combine(Path.GetTempPath(), "pflow-speech-states-fictional-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(states);
+        try {
+            var small = SpeechModels.Small; var turbo = SpeechModels.Turbo; var medium = SpeechModels.Medium;
+            foreach (var model in new[] { small, turbo }) using (var file = new FileStream(Path.Combine(states, model.FileName), FileMode.Create)) file.SetLength(model.Bytes);
+            foreach (string theme in new[] { "light", "dark" }) {
+                var store = new StateStore(states); store.Preferences.Theme = theme; store.Preferences.SpeechModel = small.Id; store.SavePreferences();
+                bool dictating = false;
+                using var hook = new KeyboardHook(_ => { }) { Enabled = false };
+                var whisper = new Whisper(states, states) { ChosenId = () => store.Preferences.SpeechModel };
+                var settings = new SettingsWindow(store, whisper, new LocalTextModel(states), hook, () => { }, () => dictating) { ShowActivated = false, Width = 460, Height = 740 };
+                try {
+                    settings.Show(); settings.UpdateLayout(); Drain();
+                    string tag = theme + ": ";
+                    var tiles = Descendants<RadioButton>(settings).Where(r => r.GroupName == "SpeechModel").ToList();
+                    RadioButton Tile(SpeechModel m) => tiles.Single(t => (string)t.Tag == m.Id);
+                    var grid = (UniformGrid)Tile(small).Parent; var card = (Panel)grid.Parent; var note = (TextBlock)card.Children[card.Children.IndexOf(grid) + 1];
+                    DownloadControl Control(SpeechModel m) => Descendants<DownloadControl>(settings).Single(c => System.Windows.Automation.AutomationProperties.GetName(c) == m.Title + " download");
+                    string Line(SpeechModel m) => Control(m).Children.OfType<TextBlock>().Where(t => t.Visibility == Visibility.Visible).Select(t => t.Text).SingleOrDefault() ?? "";
+                    List<string> Buttons(SpeechModel m) => Descendants<Button>(Control(m)).Where(b => b.Visibility == Visibility.Visible).Select(b => (string)b.Content).ToList();
+                    string Saved() => new StateStore(states).Preferences.SpeechModel;
+                    bool Outlined(params SpeechModel[] on) => SpeechModels.All.All(m => Tile(m).IsChecked == on.Contains(m));
+                    // The 1 s refresh of the open window, as when the worker sets a file aside or a take ends.
+                    bool Within(Func<bool> condition) { for (var wait = System.Diagnostics.Stopwatch.StartNew(); wait.ElapsedMilliseconds < 4000; Thread.Sleep(50)) { Drain(); if (condition()) return true; } return false; }
+                    void Shot(string state) {
+                        if (Environment.GetEnvironmentVariable("PFLOW_SHOTS") is not { } shots) return;
+                        var page = Descendants<ScrollViewer>(settings).First(x => x.Content is StackPanel); var label = Descendants<TextBlock>(settings).First(t => t.Text == "Speech model");
+                        page.ScrollToVerticalOffset(page.VerticalOffset + label.TranslatePoint(new Point(0, 0), page).Y - 12); settings.UpdateLayout(); Drain();
+                        Shoot(settings, Path.Combine(shots, $"speech-{state}-{theme}.png"), theme == "light");
+                    }
+                    Check(tag + "normal: the model in use is outlined and named under the tiles; turbo Downloaded, medium offers Download",
+                        Outlined(small) && note.Text == $"In use: {small.Title} (488 MB). Recognition stays on this PC." && Control(turbo).State == DownloadState.Installed && Control(medium).State == DownloadState.Ready);
+                    Shot("normal");
+                    dictating = true; Tile(turbo).IsChecked = true; Drain();
+                    Check(tag + "during a take a downloaded tile changes nothing: the choice is not saved, the outline stays on the model in use and the line says why",
+                        Saved() == small.Id && whisper.InUse == small && Outlined(small) && note.Text == "Finish or cancel dictation first.");
+                    dictating = false;
+                    Check(tag + "after the take the line names the model in use again", Within(() => note.Text == whisper.ModelStatus) && Outlined(small));
+                    Control(medium).Show(DownloadState.Downloading, 200_000_000); settings.UpdateLayout(); Drain();
+                    Check(tag + "downloading: medium's row has the bar, its line and one Cancel", Buttons(medium).SequenceEqual(["Cancel"]) && Line(medium) == "Downloading… 200 MB of 539 MB" && Outlined(small));
+                    Shot("downloading");
+                    Control(medium).Show(DownloadState.Ready); Drain();
+                    Tile(turbo).IsChecked = true; Drain();
+                    Check(tag + "between takes a downloaded tile is chosen, saved and outlined", Saved() == turbo.Id && whisper.InUse == turbo && Outlined(turbo));
+                    whisper.MarkDamaged(turbo);
+                    Check(tag + "damaged: the open window shows 'Damaged · Download again' with the Download button, the outline moves to small and the line says so; the choice stays saved",
+                        Within(() => Control(turbo).State == DownloadState.Failed) && Line(turbo) == "Damaged · Download again" && Buttons(turbo).SequenceEqual(["Download (874 MB)"]) && Outlined(small)
+                        && note.Text == "Whisper large-v3-turbo is damaged; using Whisper small. Download it again." && Saved() == turbo.Id && whisper.InUse == small);
+                    Shot("damaged");
+                    Tile(turbo).IsChecked = true; Drain();
+                    Check(tag + "tapping the damaged tile keeps the choice and leaves the outline on small", Saved() == turbo.Id && Outlined(small));
+                    store.Preferences.SpeechModel = medium.Id; store.SavePreferences();
+                    Check(tag + "missing: a chosen model whose file is not here leaves the outline on small and the line says 'Whisper medium is missing; using Whisper small.'",
+                        Within(() => note.Text == "Whisper medium is missing; using Whisper small.") && Outlined(small) && Saved() == medium.Id);
+                    Shot("missing");
+                    Tile(medium).IsChecked = true; Drain();
+                    Check(tag + "tapping the missing tile never changes the saved choice and never outlines it", Saved() == medium.Id && Outlined(small));
+                } finally { settings.Close(); }
+            }
+            // The worker's own check at a start: a downloaded file that fails it is set aside and the start goes on with
+            // small. Here small's fictional file fails too, so the error that comes out names small, not the download.
+            {
+                Directory.CreateDirectory(Path.Combine(states, "engine")); File.WriteAllText(Path.Combine(states, "engine", "pflow-whisper.exe"), "fictional engine");
+                var whisper = new Whisper(states, states) { ChosenId = () => turbo.Id };
+                bool before = whisper.InUse == turbo && whisper.FilesPresent;
+                string? error = null; try { whisper.Prewarm().GetAwaiter().GetResult(); } catch (InvalidDataException rejected) when (SpeechModelRejected.Is(rejected)) { error = rejected.Message; }
+                Check($"a downloaded model that fails the worker's checksum is set aside and the start falls back to small ({error})", before && whisper.IsDamaged(turbo) && !whisper.Installed(turbo)
+                    && whisper.InUse == small && error?.StartsWith("The Whisper small model checksum did not match") == true && whisper.ModelStatus == "Whisper large-v3-turbo is damaged; using Whisper small. Download it again.");
+            }
+        } finally { Directory.Delete(states, true); }
     }
 }

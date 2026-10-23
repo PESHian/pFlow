@@ -105,6 +105,33 @@ internal static partial class Program
             } finally { server.Stop(); try { serving.Wait(2000); } catch (Exception) { } if (Directory.Exists(root)) Directory.Delete(root, true); }
         }
 
+        // Whisper.Download against a local server (fictional bytes): a wrong checksum and an oversized body leave
+        // no partial file and move nothing; a good file is moved into place, verified, and clears a damaged mark.
+        {
+            string root = Path.Combine(Path.GetTempPath(), "pflow-speech-download-fictional-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+            var good = new byte[3 * 1024 * 1024 + 17]; new Random(11).NextBytes(good);
+            var model = SpeechModels.Turbo with { Id = "fictional-download", FileName = "fictional-speech-model.bin", Sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(good)), Bytes = good.Length };
+            var whisper = new Whisper(root, root);
+            string? Fetch(byte[] body) {
+                using var server = new HttpListener(); int port = Random.Shared.Next(20000, 60000); server.Prefixes.Add($"http://127.0.0.1:{port}/"); server.Start();
+                var serving = Task.Run(async () => { var context = await server.GetContextAsync(); context.Response.ContentLength64 = body.Length; try { await context.Response.OutputStream.WriteAsync(body); } catch (Exception) { } finally { try { context.Response.Close(); } catch (Exception) { } } });
+                try { whisper.Download(model with { Url = $"http://127.0.0.1:{port}/fictional-speech-model.bin" }, new Progress<double>(), CancellationToken.None).GetAwaiter().GetResult(); return null; }
+                catch (InvalidDataException error) { return error.Message; }
+                finally { server.Stop(); try { serving.Wait(2000); } catch (Exception) { } }
+            }
+            string target = Path.Combine(root, model.FileName);
+            try {
+                var wrong = (byte[])good.Clone(); wrong[^1] ^= 0x5A;
+                string? refused = Fetch(wrong);
+                Check($"a download with the wrong checksum is refused, its temporary file deleted and nothing moved into place ({refused})", refused?.Contains("checksum did not match") == true && Directory.GetFiles(root).Length == 0 && !whisper.Installed(model));
+                refused = Fetch([.. good, .. new byte[2 * 1024 * 1024]]);
+                Check($"an oversized download is refused, its temporary file deleted and nothing moved into place ({refused})", refused == "Model download was larger than expected." && Directory.GetFiles(root).Length == 0 && !whisper.Installed(model));
+                whisper.MarkDamaged(model);
+                Check("a good download is moved into place with its exact bytes, leaves no temporary file and clears the damaged mark", Fetch(good) == null
+                    && File.ReadAllBytes(target).AsSpan().SequenceEqual(good) && Directory.GetFiles(root).Length == 1 && !whisper.IsDamaged(model) && whisper.Installed(model));
+            } finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        }
+
         // The model in use, by the file on this PC (fictional bytes, the name only).
         {
             string root = Path.Combine(Path.GetTempPath(), "pflow-models-fictional-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);

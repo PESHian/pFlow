@@ -8,6 +8,15 @@ internal readonly record struct SpeechMetrics(bool Reused, double Initialization
 /// The worker process was lost or went quiet (start, model load or a pass without progress).
 /// Not a worker-reported error: a fresh worker may well succeed, so the caller retries once.
 internal sealed class SpeechWorkerLost(string message, Exception? inner = null) : IOException(message, inner);
+/// A model file that failed its size or SHA-256 check at a worker start (a download damaged on disk) is an
+/// InvalidDataException marked here: the caller sets a downloaded model aside and runs on small rather than
+/// failing every take. Any other InvalidDataException (a bad setting, a protocol error) is not a damaged file.
+internal static class SpeechModelRejected
+{
+    const string Key = "pflow-speech-model-rejected";
+    internal static InvalidDataException Create(string message) { var error = new InvalidDataException(message); error.Data[Key] = true; return error; }
+    internal static bool Is(Exception error) => error is InvalidDataException && error.Data.Contains(Key);
+}
 
 // Anonymous pipes belong to this app and its child. There is no HTTP server or socket.
 internal sealed class SpeechWorker : IDisposable
@@ -80,14 +89,14 @@ internal sealed class SpeechWorker : IDisposable
     /// Size and SHA-256 of a model file, chunk by chunk; each chunk resets the stall limit.
     static async Task Verify(FileStream file, long bytes, string sha, string name, string remedy, CancellationTokenSource stall, CancellationToken token)
     {
-        if (file.Length != bytes) throw new InvalidDataException(name + " has the wrong size. " + remedy);
+        if (file.Length != bytes) throw SpeechModelRejected.Create(name + " has the wrong size. " + remedy);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var chunk = new byte[1024 * 1024]; int count;
         while ((count = await file.ReadAsync(chunk, token)) > 0) {
             hash.AppendData(chunk, 0, count); stall.CancelAfter(StallLimit);
             if (StartThrottle != null) await StartThrottle();
         }
-        if (!Convert.ToHexString(hash.GetHashAndReset()).Equals(sha, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException(name + " checksum did not match. " + remedy);
+        if (!Convert.ToHexString(hash.GetHashAndReset()).Equals(sha, StringComparison.OrdinalIgnoreCase)) throw SpeechModelRejected.Create(name + " checksum did not match. " + remedy);
     }
     static void WriteText(BinaryWriter writer, string value, int maximum)
     {

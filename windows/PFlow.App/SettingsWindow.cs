@@ -16,6 +16,8 @@ internal sealed partial class SettingsWindow : Window
     DownloadControl textDownload = null!;
     /// One download control per speech model that is not bundled, canceled with the window.
     readonly List<DownloadControl> speechDownloads = [];
+    /// Re-reads the speech model tiles and rows (a file set aside by the worker, a download elsewhere).
+    Action? refreshSpeechModels;
     readonly TextBlock modelStatus = Text("");
     readonly TextBlock processingTime = Text("Processing time appears here after your next dictation.");
     readonly ContentControl page = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
@@ -36,7 +38,7 @@ internal sealed partial class SettingsWindow : Window
         canvas.Children.Add(glow); canvas.Children.Add(blend); canvas.Children.Add(page); Content = canvas;
         home = Scroll(General()); ShowHome(); ApplyTheme(); SourceInitialized += (_, _) => ApplyTheme();
         processingTime.Text = ProcessingTimes.Read(store.DirectoryPath);
-        var timingRefresh = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(1), System.Windows.Threading.DispatcherPriority.Background, (_, _) => { if (IsVisible && !busy()) processingTime.Text = ProcessingTimes.Read(store.DirectoryPath); }, Dispatcher);
+        var timingRefresh = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(1), System.Windows.Threading.DispatcherPriority.Background, (_, _) => { if (IsVisible && !busy()) { processingTime.Text = ProcessingTimes.Read(store.DirectoryPath); refreshSpeechModels?.Invoke(); } }, Dispatcher);
         Closed += (_, _) => { textDownload?.Cancel(); foreach (var download in speechDownloads) download.Cancel(); timingRefresh.Stop(); };
     }
     static StackPanel Panel() => new() { Margin = new Thickness(20) };
@@ -228,29 +230,43 @@ internal sealed partial class SettingsWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(language, "Speech language");
         language.SelectionChanged += (_, _) => { if (language.SelectedValue is string value) { store.Preferences.Language = value; store.SavePreferences(); } };
         p.Children.Add(language);
-        // The speech model for the finished text: tiles like Live text, every model visible. The chosen
-        // tile has the accent outline and bright text; a downloaded one plain text; one not yet downloaded
-        // dimmed text and no outline, and tapping it goes to its Download row instead of choosing it.
+        // The speech model for the finished text: tiles like Live text, every model visible. The tile of the
+        // model in use has the accent outline and bright text; a downloaded one plain text; one not yet downloaded
+        // dimmed text and no outline, and tapping it goes to its Download row instead of choosing it. During a take
+        // no tile changes anything (the switch waits for the next one).
         // Each model that is a download has its row with its own control; the bundled one only says so.
         p.Children.Add(Text("Speech model"));
         var modelChoices = new System.Windows.Controls.Primitives.UniformGrid { Columns = 3, Margin = new Thickness(-5, 0, -5, 8) };
         var modelNote = Text(whisper.ModelStatus); modelNote.FontSize = 12; modelNote.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted");
-        var tiles = new Dictionary<string, RadioButton>(); var rows = new Dictionary<string, StackPanel>(); var titles = new Dictionary<string, TextBlock>();
-        void Looks() { foreach (var model in SpeechModels.All) SpeechTileLook(tiles[model.Id], tiles[model.Id].IsChecked == true, whisper.Installed(model)); modelNote.Text = whisper.ModelStatus; }
-        bool settling = false; // a tap on a not-downloaded tile is undone here; the undo's own events change nothing
+        var tiles = new Dictionary<string, RadioButton>(); var rows = new Dictionary<string, StackPanel>(); var titles = new Dictionary<string, TextBlock>(); var controls = new Dictionary<string, DownloadControl>();
+        bool settling = false; // the outline is put back here; the undo's own events change nothing
+        // The outline follows the model actually in use (never a missing file); a file the worker set aside
+        // shows "Damaged · Download again" with its Download button. `seen` keeps the 1 s refresh idle when nothing changed.
+        string seen = "";
+        string Seen() => whisper.ModelStatus + "|" + string.Join(",", SpeechModels.All.Select(m => whisper.Installed(m) + ":" + whisper.IsDamaged(m)));
+        void Looks() {
+            settling = true;
+            try { foreach (var model in SpeechModels.All) { bool installed = whisper.Installed(model), inUse = whisper.InUse.Id == model.Id && installed; tiles[model.Id].IsChecked = inUse; SpeechTileLook(tiles[model.Id], inUse, installed); } }
+            finally { settling = false; }
+            foreach (var (id, control) in controls) if (whisper.IsDamaged(SpeechModels.Resolve(id)) && control.State is DownloadState.Installed or DownloadState.Ready) control.Show(DownloadState.Failed, note: "Damaged · Download again");
+            modelNote.Text = whisper.ModelStatus; seen = Seen();
+        }
+        refreshSpeechModels = () => { if (Seen() != seen) Looks(); };
+        // A new choice or a finished download loads its worker now, between takes, so a take never waits for
+        // the switch (a take already running keeps its worker; the rows and tiles are closed to it anyway).
+        void LoadBetweenTakes() { if (!busy()) _ = Task.Run(async () => { try { await whisper.Prewarm(); } catch { /* The next take falls back or reports it; Settings shows the line. */ } }); }
         foreach (var model in SpeechModels.All) {
-            var option = Option(model.Id, model.Title, "SpeechModel", whisper.Chosen.Id == model.Id, "AppearanceChoice", () => { });
+            var option = Option(model.Id, model.Title, "SpeechModel", whisper.InUse.Id == model.Id, "AppearanceChoice", () => { });
             option.Content = new TextBlock { Text = model.Title, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, FontSize = 12 };
             option.Margin = new Thickness(5, 0, 5, 0); option.MinHeight = 52;
             option.Checked += (_, _) => {
                 if (settling) return;
-                if (whisper.Installed(model)) { store.Preferences.SpeechModel = model.Id; store.SavePreferences(); Looks(); return; }
-                // Not downloaded: the choice stays (the model in use keeps its outline), the row with its Download button comes into view and lights up.
-                settling = true;
-                try { option.IsChecked = false; if (whisper.Installed(whisper.InUse)) tiles[whisper.InUse.Id].IsChecked = true; Looks(); } finally { settling = false; }
-                rows[model.Id].BringIntoView(); HighlightRow(titles[model.Id]);
+                // Like the Download rows: nothing changes under a take; the line says why.
+                if (Blocked() is { } why) { Looks(); modelNote.Text = why; seen = ""; return; }
+                if (whisper.Installed(model)) { store.Preferences.SpeechModel = model.Id; store.SavePreferences(); Looks(); LoadBetweenTakes(); return; }
+                // Not downloaded: the saved choice never changes; the row with its Download button comes into view and lights up.
+                Looks(); rows[model.Id].BringIntoView(); HighlightRow(titles[model.Id]);
             };
-            option.Unchecked += (_, _) => { if (!settling) Looks(); };
             modelChoices.Children.Add(option); tiles[model.Id] = option;
         }
         p.Children.Add(modelChoices); p.Children.Add(modelNote);
@@ -258,7 +274,7 @@ internal sealed partial class SettingsWindow : Window
             var row = new StackPanel { Margin = new Thickness(0, 8, 0, 0) }; System.Windows.Automation.AutomationProperties.SetName(row, model.Title + " row"); rows[model.Id] = row;
             var title = Text(model.Bundled ? model.Title : model.Title + " · " + FileSize.Describe(model.Bytes)); title.FontWeight = FontWeights.SemiBold; title.Margin = new Thickness(0, 0, 0, 1); row.Children.Add(title); titles[model.Id] = title;
             var note = Text(model.Bundled ? "Included · " + FileSize.Describe(model.Bytes) : model.Note); note.FontSize = 12; note.Margin = new Thickness(0); note.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); row.Children.Add(note);
-            if (!model.Bundled) { var download = new DownloadControl(model.Title, model.Bytes, () => whisper.Installed(model), (progress, cancel) => whisper.Download(model, progress, cancel), Blocked, Looks); speechDownloads.Add(download); row.Children.Add(download); }
+            if (!model.Bundled) { var download = new DownloadControl(model.Title, model.Bytes, () => whisper.Installed(model), (progress, cancel) => whisper.Download(model, progress, cancel), Blocked, () => { Looks(); LoadBetweenTakes(); }); speechDownloads.Add(download); controls[model.Id] = download; row.Children.Add(download); }
             p.Children.Add(row);
         }
         Looks();
