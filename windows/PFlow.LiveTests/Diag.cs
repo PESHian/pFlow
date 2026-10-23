@@ -149,6 +149,9 @@ internal static partial class Program
         foreach (var p in Process.GetProcessesByName(browser == "chrome" ? "chrome" : "msedge")) { try { if (p.MainWindowTitle.Contains(page.Name)) p.CloseMainWindow(); } catch { } }
         await Task.Delay(800);
         try { File.Delete(page.Html); } catch { }
+        // The fictional browser profile goes too (each is tens of MB).
+        string profile = Path.Combine(root, (browser == "chrome" ? "chrome" : "edge") + "-fictional-profile-" + page.Name[^8..]);
+        for (int i = 0; i < 20 && Directory.Exists(profile); i++) { try { Directory.Delete(profile, true); } catch (IOException) { await Task.Delay(500); } catch (UnauthorizedAccessException) { await Task.Delay(500); } }
     }
 
     static (StateStore Store, Whisper Whisper, LocalTextModel Text, LivePreview Preview, Capsule Capsule, HwndSource Owner, string Directory) Rig(string label)
@@ -193,6 +196,13 @@ internal static partial class Program
                         if (variant == "password") {
                             Check(take + ": no live writes into a password field", r.Writes == 0 && !r.Typed);
                             Check(take + ": the password box got nothing it could see", shown == "len:0" || r.Status.StartsWith(InsertionTarget.Unchecked, StringComparison.Ordinal));
+                            continue;
+                        }
+                        if (temperature == "cold" && r.Refused != null && !r.LateBegin && r.Status.StartsWith(InsertionTarget.Unchecked, StringComparison.Ordinal)) {
+                            // A cold browser whose page tree never built during the take (its placeholder pane stayed to the end):
+                            // nothing could be read, so no live words; the finished words went in unchecked, as before 0.1.27.
+                            Console.WriteLine($"CHROME LIVE {take}: the placeholder pane never gave way during the take: no live typing possible (as in 0.1.26)");
+                            Check(take + ": with the pane never giving way, nothing was typed live and the finished words arrived once", r.Writes == 0 && Flat(shown).EndsWith(Flat(r.Final).Replace("\n", " "), StringComparison.Ordinal));
                             continue;
                         }
                         Check($"{take}: live words reached the field before the take ended ({r.Matched} writes read back, first at {r.FirstWriteMs:F0} ms)",
