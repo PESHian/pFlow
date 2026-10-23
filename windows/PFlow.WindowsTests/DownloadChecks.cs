@@ -130,10 +130,11 @@ internal static partial class Program
                 using var hook = new KeyboardHook(_ => { }) { Enabled = false };
                 var settings = new SettingsWindow(new StateStore(root), new Whisper(root), model, hook, () => { }, () => false) { ShowActivated = false };
                 settings.Show(); settings.UpdateLayout(); Drain();
-                bool noControl = !Descendants<DownloadControl>(settings).Any(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Text model download") && Descendants<DownloadControl>(settings).Count() == 1;
+                // No text model control; the speech models keep one control each.
+                bool noControl = !Descendants<DownloadControl>(settings).Any(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Text model download") && Descendants<DownloadControl>(settings).Count() == SpeechModels.All.Count;
                 bool reason = Descendants<TextBlock>(settings).Any(t => t.Text == LocalTextModel.UnsupportedReason);
                 settings.Close(); Drain();
-                Check("with the local model unsupported Settings shows the reason, only the Whisper download, and closes without an error", noControl && reason && !settings.IsVisible && !model.FilesPresent);
+                Check("with the local model unsupported Settings shows the reason, only the speech model downloads, and closes without an error", noControl && reason && !settings.IsVisible && !model.FilesPresent);
             } finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
         }
 
