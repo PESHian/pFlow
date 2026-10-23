@@ -15,12 +15,12 @@ using PFlow.Windows;
 // test-owned Edit box in a separate process (needs the signed-in desktop).
 internal static partial class Program
 {
-    static bool speedOnly, speedInsertOnly;
+    static bool speedOnly, speedInsertOnly, werOnly;
     static readonly Dictionary<string, string> speedOptions = [];
 
     static void SpeedArguments(string[] args)
     {
-        speedOnly = args.Contains("--speed"); speedInsertOnly = args.Contains("--speed-insert");
+        speedOnly = args.Contains("--speed"); speedInsertOnly = args.Contains("--speed-insert"); werOnly = args.Contains("--wer");
         foreach (string arg in args) if (arg.IndexOf('=') is > 0 and var at) speedOptions[arg[..at]] = arg[(at + 1)..];
     }
 
@@ -39,18 +39,51 @@ internal static partial class Program
         return (double)row[h.Length] / r.Length;
     }
 
+    /// model=<id> runs the finished text on that speech model: its file is taken from <root>\models.
+    static void ChooseModel(StateStore store, string directory)
+    {
+        if (SpeedOption("model", "") is not { Length: > 0 } modelId) return;
+        var chosen = SpeechModels.Resolve(modelId); if (chosen.Id != modelId) throw new Exception("unknown speech model " + modelId);
+        if (!chosen.Bundled) File.Copy(Path.Combine(root, "models", chosen.FileName), Path.Combine(directory, chosen.FileName));
+        store.Preferences.SpeechModel = chosen.Id;
+    }
+    /// --wer files=a.wav,b.wav [model=<id>] label=name: the finished-text pass alone (no live feed), one
+    /// warm pass per file after a prewarm: recognition time and word error rate against the fixture text.
+    static async Task Wer()
+    {
+        string directory = Path.Combine(root, "wer-fictional-" + Guid.NewGuid()); Directory.CreateDirectory(directory);
+        var store = new StateStore(directory); store.Preferences.Language = "en"; ChooseModel(store, directory);
+        await using var whisper = new Whisper(directory, PackageAssets) { ChosenId = () => store.Preferences.SpeechModel };
+        string label = SpeedOption("label", "run") + (SpeedOption("model", "") is { Length: > 0 } m ? "-" + m : "");
+        var rows = new List<Dictionary<string, object>>();
+        try {
+            var warm = Stopwatch.StartNew(); await whisper.Prewarm(); double prewarmMs = warm.Elapsed.TotalMilliseconds;
+            var timing = new Dictionary<string, double>();
+            var pipeline = new DictationPipeline(store, whisper, new LocalTextModel(directory, PackageAssets)) { Timing = (name, ms) => timing[name] = ms };
+            foreach (string audio in SpeedOption("files", "short-1.wav").Split(',')) {
+                double seconds = (new FileInfo(Path.Combine(root, audio)).Length - 44) / 32000.0; timing.Clear();
+                var clock = Stopwatch.StartNew();
+                var prepared = await pipeline.Prepare(Path.Combine(root, audio), seconds, directory, (_, _) => { }, CancellationToken.None);
+                string reference = Reference(audio);
+                rows.Add(new() { ["label"] = label, ["model"] = whisper.InUse.Id, ["file"] = audio, ["audioMs"] = Math.Round(seconds * 1000), ["prewarmMs"] = Math.Round(prewarmMs),
+                    ["recognitionMs"] = Math.Round(timing.GetValueOrDefault("recognitionMs", -1)), ["totalMs"] = Math.Round(clock.Elapsed.TotalMilliseconds),
+                    ["audioContext"] = whisper.LastMetrics.AudioContext, ["final"] = prepared.Text, ["wordErrorRate"] = Math.Round(WordErrorRate(prepared.Text, reference), 4),
+                    ["referenceWords"] = Words(reference).Split(' ', StringSplitOptions.RemoveEmptyEntries).Length });
+                Console.WriteLine("WER " + JsonSerializer.Serialize(rows[^1]));
+                Check(audio + " finished text is not empty", !string.IsNullOrWhiteSpace(prepared.Text));
+            }
+        } finally {
+            File.WriteAllText(Path.Combine(root, $"wer-{label}-{DateTime.UtcNow:yyyyMMddHHmmss}.json"), JsonSerializer.Serialize(rows, new JsonSerializerOptions { WriteIndented = true }));
+            Directory.Delete(directory, true);
+        }
+    }
     static string Reference(string audio) => File.ReadAllText(Path.ChangeExtension(Path.Combine(root, audio), ".txt")).Trim();
 
     static async Task Speed()
     {
         string directory = Path.Combine(root, "speed-fictional-" + Guid.NewGuid()); Directory.CreateDirectory(directory);
         var store = new StateStore(directory); store.Preferences.Language = "en";
-        // model=<id> runs the finished text on that speech model: its file is taken from <root>\models.
-        if (SpeedOption("model", "") is { Length: > 0 } modelId) {
-            var chosen = SpeechModels.Resolve(modelId); if (chosen.Id != modelId) throw new Exception("unknown speech model " + modelId);
-            if (!chosen.Bundled) File.Copy(Path.Combine(root, "models", chosen.FileName), Path.Combine(directory, chosen.FileName));
-            store.Preferences.SpeechModel = chosen.Id;
-        }
+        ChooseModel(store, directory);
         await using var whisper = new Whisper(directory, PackageAssets) { ChosenId = () => store.Preferences.SpeechModel };
         var capsule = new Capsule(store); var preview = new LivePreview(store);
         string label = SpeedOption("label", "run") + (SpeedOption("model", "") is { Length: > 0 } m ? "-" + m : "");
