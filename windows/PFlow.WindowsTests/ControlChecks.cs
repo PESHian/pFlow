@@ -80,9 +80,13 @@ internal static partial class Program
                 Check("timing readout is present without starting microphone", Descendants<TextBlock>(settings).Any(x => x.Text == ProcessingTimes.Read(root)) && !hook.Enabled);
             } finally { settings.Close(); }
             Check("missing timing record gives clear next-use message", ProcessingTimes.Read(root).Contains("next dictation"));
-            store.Write("last-processing-times.json",new { totalAfterReleaseMs=8650,recognitionMs=600,cleanupMs=8000,insertionMs=20,transcript="Fictional private marker never shown" });
+            store.Write("last-processing-times.json",new { totalAfterReleaseMs=650,recognitionMs=600,insertionMs=20,transcript="Fictional private marker never shown" });
             string timing = ProcessingTimes.Read(root);
-            Check("readout separates speech and AI without exposing transcript", timing.Contains("Speech:") && timing.Contains("AI cleanup:") && timing.Contains("Insertion:") && !timing.Contains("marker"));
+            Check("readout separates speech and insertion without exposing transcript", timing.Contains("Speech: 0.6 s") && timing.Contains("Insertion: 0.0 s") && !timing.Contains("marker"));
+            // A record written by 0.1.24 with the removed AI cleanup stage: its numbers are left off the line.
+            store.Write("last-processing-times.json",new { totalAfterReleaseMs=8650,recognitionMs=600,cleanupMs=8000,cleanupOutcome=1,insertionMs=20 });
+            string old = ProcessingTimes.Read(root);
+            Check("an old record's AI cleanup numbers are not shown", old.Contains("Speech: 0.6 s") && old.Contains("Insertion: 0.0 s") && !old.Contains("cleanup", StringComparison.OrdinalIgnoreCase) && !old.Contains("8.0 s"));
             File.WriteAllText(Path.Combine(root,"last-processing-times.json"),"[]");
             Check("invalid timing record cannot break Settings", ProcessingTimes.Read(root) == "Processing time is unavailable.");
             File.WriteAllText(Path.Combine(root,"last-processing-times.json"),new string('x',16385));

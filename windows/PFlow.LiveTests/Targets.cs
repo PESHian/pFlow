@@ -247,7 +247,7 @@ internal static partial class Program
         try {
             var store = new StateStore(directory); await using var whisper = new Whisper(directory); var model = new LocalTextModel(directory);
             var pipeline = new DictationPipeline(store, whisper, model);
-            var prepared = new DictationPipeline.Prepared("Fictional card words.", null, 3, false, false, false);
+            var prepared = new DictationPipeline.Prepared("Fictional card words.", null, 3, false);
             var results = new List<DictationPipeline.Result>(); uint clipboard = Native.GetClipboardSequenceNumber();
             for (int i = 0; i < 3; i++) results.Add(await pipeline.Deliver(prepared, 1.0, new UnreachableTarget(), IntPtr.Zero, (_, _) => { }, CancellationToken.None));
             Check("the card is offered on every take (3 of 3), with the words and the plain reason", results.All(r => r.Prompt is { } p && p.Text == "Fictional card words." && p.Reason == InsertionTarget.Unreachable));

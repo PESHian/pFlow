@@ -6,12 +6,9 @@ namespace PFlow.Windows;
 // Read only the existing numeric record. Never read transcripts or app names.
 internal static class ProcessingTimes
 {
-    /// The cleanup number alone cannot say whether the words changed; this does.
-    static string Outcome(double? code) => code switch {
-        (double)CleanupOutcome.Applied => " (used)", (double)CleanupOutcome.Rejected => " (changed the words, so not used)",
-        (double)CleanupOutcome.TimedOut => " (took too long, not used)", (double)CleanupOutcome.Failed => " (engine failed, not used)",
-        (double)CleanupOutcome.Skipped => " (nothing to clean)", (double)CleanupOutcome.Partial => " (partly used)",
-        (double)CleanupOutcome.RejectedSymbols => " (changed punctuation inside a number, so not used)", _ => "" };
+    /// The stages named on the line. A record from before W025 may carry cleanupMs and cleanupOutcome
+    /// from the removed AI cleanup; they are left out.
+    static readonly (string Key, string Label)[] Stages = [("recognitionMs", "Speech"), ("reportMs", "Report"), ("insertionMs", "Insertion")];
     public static string Read(string directory)
     {
         string file = Path.Combine(directory, "last-processing-times.json");
@@ -24,10 +21,7 @@ internal static class ProcessingTimes
             string Seconds(double ms) => (ms / 1000).ToString("0.0", CultureInfo.CurrentCulture) + " s";
             if (Number("totalAfterReleaseMs") is not { } total) return "Processing time is unavailable.";
             var stages = new List<string>();
-            foreach (var (key, label) in new[] { ("recognitionMs", "Speech"), ("cleanupMs", "AI cleanup"), ("reportMs", "Report"), ("insertionMs", "Insertion") })
-                if (Number(key) is { } ms) stages.Add(label + ": " + Seconds(ms) + (key == "cleanupMs" ? Outcome(Number("cleanupOutcome")) : ""));
-            if (Number("cleanupMs") == null && Number("cleanupOutcome") == (double)CleanupOutcome.NotRun) stages.Add("AI cleanup: not run (model not installed)");
-            if (Number("cleanupMs") == null && Number("cleanupOutcome") == (double)CleanupOutcome.LocalAIOff) stages.Add("AI cleanup: not run (local text model off)");
+            foreach (var (key, label) in Stages) if (Number(key) is { } ms) stages.Add(label + ": " + Seconds(ms));
             return "Last dictation: " + Seconds(total) + (stages.Count == 0 ? "." : ".\n" + string.Join(" · ", stages));
         } catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or InvalidOperationException or FormatException) {
             return "Processing time is unavailable.";

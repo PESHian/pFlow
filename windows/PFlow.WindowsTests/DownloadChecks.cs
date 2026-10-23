@@ -64,11 +64,11 @@ internal static partial class Program
                     var textControl = controls.Single(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Text model download");
                     var speechControl = controls.Single(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Whisper model download");
                     var textCard = (StackPanel)textControl.Parent; var speechCard = (StackPanel)speechControl.Parent;
-                    Check(tag + "the text model control is in the Local intelligence card, the Whisper one in Speech recognition, each bar under its own button",
-                        textCard != speechCard && Descendants<CheckBox>(textCard).Any(c => (string)c.Content == "AI cleanup (slower, English)") && Descendants<ComboBox>(speechCard).Any(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Speech language")
+                    Check(tag + "the text model control is in the Report templates card, the Whisper one in Speech recognition, each bar under its own button",
+                        textCard != speechCard && Descendants<CheckBox>(textCard).Any(c => (string)c.Content == "Use the local text model for report templates") && Descendants<ComboBox>(speechCard).Any(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Speech language")
                         && Descendants<ProgressBar>(textControl).Count() == 1 && Descendants<ProgressBar>(speechControl).Count() == 1 && !Descendants<ProgressBar>(textCard).Except(Descendants<ProgressBar>(textControl)).Any());
-                    Check(tag + "before any download each card shows one Download button and no Cancel", Descendants<Button>(textCard).Count(b => b.IsVisible && b.Content is string s && s.StartsWith("Download")) == 1
-                        && Descendants<Button>(speechCard).Count(b => b.IsVisible && b.Content is string s && s.StartsWith("Download")) == 1 && !Descendants<Button>(settings).Any(b => b.IsVisible && b.Content as string == "Cancel")
+                    Check(tag + "before any download the text card shows one Download button, the speech card one per model, and no Cancel", Descendants<Button>(textCard).Count(b => b.IsVisible && b.Content is string s && s.StartsWith("Download")) == 1
+                        && Descendants<Button>(speechCard).Count(b => b.IsVisible && b.Content is string s && s.StartsWith("Download")) == SpeechModels.All.Count && !Descendants<Button>(settings).Any(b => b.IsVisible && b.Content as string == "Cancel")
                         && !Descendants<Button>(settings).Any(b => b.IsVisible && b.Content as string == "Cancel download"));
                     Check(tag + "the Settings line says no model is in use yet and the button carries the model's size", Descendants<TextBlock>(textCard).Any(t => t.IsVisible && t.Text == "Local AI is unavailable until its model is installed. Plain dictation still works.")
                         && Descendants<Button>(textCard).Any(b => b.IsVisible && b.Content as string == $"Download ({FileSize.Describe(LocalTextModel.Current.Size)})") && Descendants<Button>(speechCard).Any(b => b.IsVisible && b.Content as string == "Download (488 MB)"));
@@ -76,7 +76,7 @@ internal static partial class Program
                     var bar = Descendants<ProgressBar>(textControl).Single(); var button = Descendants<Button>(textControl).Single(b => b.IsVisible);
                     var barAt = bar.TranslatePoint(new Point(0, 0), settings); var lineAt = textControl.Children.OfType<TextBlock>().Single(t => t.IsVisible).TranslatePoint(new Point(0, 0), settings);
                     var cardAt = textCard.TranslatePoint(new Point(0, 0), settings); var nextCard = speechCard.TranslatePoint(new Point(0, 0), settings);
-                    Check(tag + "while downloading the bar and the line sit inside the Local intelligence card, above the next card", bar.IsVisible && barAt.Y > cardAt.Y && lineAt.Y > barAt.Y && lineAt.Y + 19 <= nextCard.Y && (string)button.Content == "Cancel");
+                    Check(tag + "while downloading the bar and the line sit inside the Report templates card, above the next card", bar.IsVisible && barAt.Y > cardAt.Y && lineAt.Y > barAt.Y && lineAt.Y + 19 <= nextCard.Y && (string)button.Content == "Cancel");
                     if (shots != null) {
                         textControl.BringIntoView(); settings.UpdateLayout(); Drain();
                         var content = (FrameworkElement)settings.Content;
@@ -105,7 +105,7 @@ internal static partial class Program
             } finally { server.Stop(); try { serving.Wait(2000); } catch (Exception) { } if (Directory.Exists(root)) Directory.Delete(root, true); }
         }
 
-        // The model in use, by the file on this PC (fictional bytes, the name only), and its cut-off.
+        // The model in use, by the file on this PC (fictional bytes, the name only).
         {
             string root = Path.Combine(Path.GetTempPath(), "pflow-models-fictional-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
             try {
@@ -113,7 +113,6 @@ internal static partial class Program
                 Check("no model file: nothing in use and the Settings line says so", model.InUse == null && !model.CurrentInstalled && model.Status.StartsWith("Local AI is unavailable") && model.ModelPath.EndsWith(LocalTextModel.Current.FileName));
                 File.WriteAllText(Path.Combine(root, LocalTextModel.Current.FileName), "fictional");
                 Check("with the file: the model is in use, named with its size on the Settings line", model.InUse == LocalTextModel.Current && model.CurrentInstalled && model.Status == "Text model in use: Qwen3-4B (2.5 GB). Processing stays on this PC.");
-                Check("the cut-off is 15 s + 0.3 s a word between 20 and 90 s", model.Budget(13) == TimeSpan.FromSeconds(20) && model.Budget(60) == TimeSpan.FromSeconds(33) && model.Budget(100) == TimeSpan.FromSeconds(45) && model.Budget(286) == TimeSpan.FromSeconds(90));
                 Check("the engine's threads follow the core rule for this PC", LocalTextModel.Threads >= 2 && LocalTextModel.Threads <= 8 && LocalTextModel.Threads == Native.EngineThreads(Native.CoreClasses()) && Native.CoreClasses().Count <= Environment.ProcessorCount);
             } finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
         }
@@ -146,7 +145,7 @@ internal static partial class Program
             using var server = new HttpListener(); int port = Random.Shared.Next(20000, 60000); server.Prefixes.Add($"http://127.0.0.1:{port}/"); server.Start();
             var serving = Task.Run(async () => { var context = await server.GetContextAsync(); context.Response.ContentLength64 = bytes.Length; await context.Response.OutputStream.WriteAsync(bytes); context.Response.Close(); });
             try {
-                var fictional = new TextModelFile("Fictional", "fictional-model.gguf", $"http://127.0.0.1:{port}/fictional-model.gguf", sha, bytes.Length, 15, .3, 20);
+                var fictional = new TextModelFile("Fictional", "fictional-model.gguf", $"http://127.0.0.1:{port}/fictional-model.gguf", sha, bytes.Length);
                 var model = new LocalTextModel(root, root) { Model = fictional, Source = fictional.Url };
                 File.WriteAllText(Path.Combine(root, "fictional-model.gguf." + Guid.NewGuid() + ".download"), "stale"); File.WriteAllText(Path.Combine(root, "other.download"), "x"); File.WriteAllText(Path.Combine(root, "fictional-model.gguf.notaguid.download"), "x");
                 Check("the sweep removes only our own stale partial download", model.SweepPartials() == 1 && Directory.GetFiles(root).Length == 2 && File.Exists(Path.Combine(root, "other.download")));

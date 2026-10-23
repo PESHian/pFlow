@@ -9,6 +9,13 @@ internal static class SpeechChecks
     public static void Run()
     {
         passed = 0;
+        Check("speech models: small is the bundled default; an unknown or missing choice resolves to it", SpeechModels.Resolve(null) == SpeechModels.Small && SpeechModels.Resolve("nothing") == SpeechModels.Small
+            && SpeechModels.All[0] == SpeechModels.Small && SpeechModels.All.Count(m => m.Bundled) == 1 && new Preferences().SpeechModel == SpeechModels.Small.Id);
+        Check("every speech model has its own id and file, a pinned URL to the one revision, a 64-hex SHA-256 and a size", SpeechModels.All.Select(m => m.Id).Distinct().Count() == SpeechModels.All.Count
+            && SpeechModels.All.Select(m => m.FileName).Distinct().Count() == SpeechModels.All.Count && SpeechModels.All.All(m => m.Url == "https://huggingface.co/ggerganov/whisper.cpp/resolve/" + SpeechModels.Revision + "/" + m.FileName
+            && m.Sha.Length == 64 && m.Sha.All(Uri.IsHexDigit) && m.Bytes > 100_000_000 && m.Note.Length > 0 && m.Title.StartsWith("Whisper ")));
+        Check("each chosen model resolves to itself", SpeechModels.All.All(m => SpeechModels.Resolve(m.Id) == m));
+        Check("the live-words model is not one of the choices", SpeechModels.All.All(m => m.FileName != LiveSpeechModel.FileName));
         Check("Settings names the architecture and the speech engine in use", SpeechEngine.Describe("X64", SpeechEngine.Avx2) == "x64, fast speech engine (AVX2)"
             && SpeechEngine.Describe("X64", SpeechEngine.Baseline) == "x64, standard speech engine (no AVX2)" && SpeechEngine.Describe("Arm64", SpeechEngine.Baseline) == "ARM64 speech engine"
             && SpeechEngine.Describe("X86", SpeechEngine.Baseline) == "x86 (32-bit) speech engine");

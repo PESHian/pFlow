@@ -54,8 +54,9 @@ public sealed class Preferences
     public bool Sounds { get; set; } = true;
     public bool Paragraphs { get; set; } = true;
     public bool UseLocalAI { get; set; } = true;
+    /// Rule-based cleanup (fillers, capitals, spacing). The AI cleanup switch that was here until
+    /// 0.1.24 (useAICleanup) is gone; a saved file that still has it is read without it.
     public bool Cleanup { get; set; } = true;
-    public bool UseAICleanup { get; set; }
     public string Theme { get; set; } = "dark";
     public string Palette { get; set; } = "pesh";
     public string Accent { get; set; } = "FF9DC4";
@@ -63,6 +64,8 @@ public sealed class Preferences
     public string WaveBlend { get; set; } = "3DFF85";
     public string Waveform { get; set; } = "wave";
     public string Language { get; set; } = "en";
+    /// The speech model for the finished text (SpeechModels), read when a take starts; small when unknown.
+    public string SpeechModel { get; set; } = SpeechModels.Small.Id;
     /// Live text choice, read once when a take starts. Same saved values as the Mac app.
     public string LiveTextMode { get; set; } = LiveTextModes.Off;
     public int CapsulePositionVersion { get; set; }

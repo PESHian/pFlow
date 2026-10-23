@@ -5,9 +5,6 @@ namespace PFlow.Windows;
 
 internal sealed class Whisper : IAsyncDisposable
 {
-    public const string ModelUrl = "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.bin";
-    public const string ModelSha = "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b";
-    public const long ModelBytes = 487601967;
     readonly string root;
     readonly string assets;
     readonly SemaphoreSlim modelLock = new(1);
@@ -19,8 +16,23 @@ internal sealed class Whisper : IAsyncDisposable
     internal double WorkerLoadMs => worker?.LoadMs ?? 0;
     /// Progress frames the current worker sent during finished-text passes.
     internal int WorkerHeartbeats => worker?.Heartbeats ?? 0;
-    string DownloadPath => System.IO.Path.Combine(root, "ggml-small.bin");
-    public string ModelPath => File.Exists(DownloadPath) ? DownloadPath : System.IO.Path.Combine(assets, "models", "ggml-small.bin");
+    /// The saved choice (Preferences.SpeechModel); the app wires it, the checks keep small.
+    internal Func<string?> ChosenId { get; init; } = () => SpeechModels.Small.Id;
+    public SpeechModel Chosen => SpeechModels.Resolve(ChosenId());
+    /// The model the next finished-text pass runs: the chosen one when its file is on this PC,
+    /// else small (a choice whose download was removed never stops dictation).
+    public SpeechModel InUse => Installed(Chosen) ? Chosen : SpeechModels.Small;
+    /// A model's file: the download in pFlow's folder when there is one, else the package's copy for the bundled model.
+    public string PathFor(SpeechModel model)
+    {
+        string download = System.IO.Path.Combine(root, model.FileName);
+        return File.Exists(download) || !model.Bundled ? download : System.IO.Path.Combine(assets, "models", model.FileName);
+    }
+    /// The file is there with the model's exact size (the hash is checked when the worker starts).
+    public bool Installed(SpeechModel model) => File.Exists(PathFor(model)) && new FileInfo(PathFor(model)).Length == model.Bytes;
+    public string ModelPath => PathFor(InUse);
+    /// For Settings, under the model tiles.
+    public string ModelStatus => $"In use: {InUse.Title} ({FileSize.Describe(InUse.Bytes)}). Recognition stays on this PC.";
     /// The small live-words model next to the main model, or null when it is not installed (then live
     /// windows run on the main model and Settings says so). Checked by size and hash when the worker starts.
     public string? LiveModelPath { get { string path = System.IO.Path.Combine(assets, "models", LiveSpeechModel.FileName); return File.Exists(path) ? path : null; } }
@@ -30,42 +42,46 @@ internal sealed class Whisper : IAsyncDisposable
     /// The AVX2 build on x64 processors that have it, else the baseline build (one rule: SpeechEngine.Choose).
     public string Executable => System.IO.Path.Combine(assets, "engine", SpeechEngine.Choose(
         RuntimeInformation.ProcessArchitecture == Architecture.X64, Native.Avx2Ready, name => File.Exists(System.IO.Path.Combine(assets, "engine", name))));
-    public bool ModelPresent => File.Exists(ModelPath);
-    /// Removes partial downloads of the speech model left in pFlow's folder by an earlier run.
-    public int SweepPartials() => PartialDownloads.Sweep(root, System.IO.Path.GetFileName(DownloadPath));
-    public bool FilesPresent => File.Exists(ModelPath) && File.Exists(Executable);
+    public bool ModelPresent => Installed(SpeechModels.Small);
+    /// Removes partial downloads of any speech model left in pFlow's folder by an earlier run.
+    public int SweepPartials() => SpeechModels.All.Sum(model => PartialDownloads.Sweep(root, model.FileName));
+    public bool FilesPresent => Installed(InUse) && File.Exists(Executable);
     /// For Settings: "x64, fast speech engine (AVX2)" and the like (one rule: SpeechEngine.Describe).
     public string EngineDescription => SpeechEngine.Describe(RuntimeInformation.ProcessArchitecture.ToString(), System.IO.Path.GetFileName(Executable), LiveModelReady);
     public Whisper(string root, string? assetsRoot = null) { this.root = root; assets = assetsRoot ?? AppContext.BaseDirectory; }
-    public async Task Verify(string path, CancellationToken cancel)
+    public async Task Verify(string path, SpeechModel model, CancellationToken cancel)
     {
-        if (new FileInfo(path).Length != ModelBytes) throw new InvalidDataException("The Whisper model has the wrong size. Download it again in Settings.");
+        if (new FileInfo(path).Length != model.Bytes) throw new InvalidDataException($"The {model.Title} model has the wrong size. Download it again in Settings.");
         await using var stream = File.OpenRead(path);
         var digest = await SHA256.HashDataAsync(stream, cancel);
-        if (!Convert.ToHexString(digest).Equals(ModelSha, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The Whisper model checksum did not match. Download it again in Settings.");
+        if (!Convert.ToHexString(digest).Equals(model.Sha, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"The {model.Title} model checksum did not match. Download it again in Settings.");
     }
-    public async Task Download(IProgress<double> progress, CancellationToken cancel)
+    /// The bundled model again (a package whose copy is missing or damaged).
+    public Task Download(IProgress<double> progress, CancellationToken cancel) => Download(SpeechModels.Small, progress, cancel);
+    /// One pinned file, size-bounded, hashed before it is moved into place; the same for every model.
+    public async Task Download(SpeechModel model, IProgress<double> progress, CancellationToken cancel)
     {
-        await modelLock.WaitAsync(cancel); string temp = PartialDownloads.TempPath(root, System.IO.Path.GetFileName(DownloadPath));
+        await modelLock.WaitAsync(cancel); string target = System.IO.Path.Combine(root, model.FileName), temp = PartialDownloads.TempPath(root, model.FileName);
         try {
             using var client = new HttpClient { Timeout = TimeSpan.FromHours(1) };
-            using var response = await client.GetAsync(ModelUrl, HttpCompletionOption.ResponseHeadersRead, cancel); response.EnsureSuccessStatusCode();
+            using var response = await client.GetAsync(model.Url, HttpCompletionOption.ResponseHeadersRead, cancel); response.EnsureSuccessStatusCode();
             await using (var source = await response.Content.ReadAsStreamAsync(cancel))
-            await using (var target = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
+            await using (var file = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
                 var bytes = new byte[1024 * 1024]; long total = 0; int count;
                 while ((count = await source.ReadAsync(bytes, cancel)) > 0) {
-                    total += count; if (total > ModelBytes) throw new InvalidDataException("Model download was larger than expected.");
-                    await target.WriteAsync(bytes.AsMemory(0, count), cancel); progress.Report((double)total / ModelBytes);
+                    total += count; if (total > model.Bytes) throw new InvalidDataException("Model download was larger than expected.");
+                    await file.WriteAsync(bytes.AsMemory(0, count), cancel); progress.Report((double)total / model.Bytes);
                 }
             }
-            await Verify(temp, cancel); ResetWorker(); File.Move(temp, DownloadPath, true);
+            await Verify(temp, model, cancel); ResetWorker(); File.Move(temp, target, true);
         } finally { if (File.Exists(temp)) File.Delete(temp); modelLock.Release(); }
     }
     void ResetWorker() { worker?.Dispose(); worker = null; }
+    /// A live worker holding the chosen model is kept; a change of model in Settings starts a fresh one.
     async Task EnsureWorker(CancellationToken cancel)
     {
-        if (worker != null && !worker.Exited) return;
-        ResetWorker(); worker = await SpeechWorker.Start(Executable, ModelPath, LiveModelPath, cancel);
+        if (worker != null && !worker.Exited && worker.ModelPath == ModelPath) return;
+        ResetWorker(); worker = await SpeechWorker.Start(Executable, ModelPath, InUse, LiveModelPath, cancel);
     }
     internal async Task Prewarm(CancellationToken cancel = default)
     {

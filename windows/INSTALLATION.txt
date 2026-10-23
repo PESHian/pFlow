@@ -2,14 +2,14 @@ pFlow by Pesh: Windows and Mac installation
 
 WINDOWS: x64 (Intel/AMD), ARM64, or x86 (32-bit)
 
-Use pFlow-Setup-0.1.24-testing.exe. One file installs the right build (x64,
+Use pFlow-Setup-0.1.25-testing.exe. One file installs the right build (x64,
 ARM64 or x86) for your Windows user account. No administrator password, no
 .NET installation and no architecture choice is needed.
 Windows 11 and Windows 10 version 1607 or later are required. Older Windows
 cannot run the included .NET 10 runtime. Microsoft's supported Windows 10
 editions are LTSC/Enterprise; Windows 10/older hardware is not fully tested here.
 
-1. Download pFlow-Setup-0.1.24-testing.exe from https://github.com/PESHian/pFlow/releases
+1. Download pFlow-Setup-0.1.25-testing.exe from https://github.com/PESHian/pFlow/releases
 2. Double-click it. This test build is not signed, so Windows may show
    "Windows protected your PC": click "More info", then "Run anyway".
 3. If pFlow is already running, Setup asks to close it, then asks whether you
@@ -32,9 +32,10 @@ editions are LTSC/Enterprise; Windows 10/older hardware is not fully tested here
 
 Whisper, its verified speech model, and the .NET runtime are included. Recording
 and transcription work offline. A separate optional 2.5 GB text model can be
-downloaded in pFlow Settings on 64-bit Windows for AI cleanup and report sections.
-That optional AI feature is unavailable on 32-bit Windows; dictation, basic
-cleanup, dictionary, and full-narrative templates remain available.
+downloaded in pFlow Settings on 64-bit Windows for report templates with their
+own sections. That optional feature is unavailable on 32-bit Windows; dictation,
+cleanup, dictionary, and full-narrative templates remain available. Two larger
+speech models can be downloaded next to Whisper small in Settings.
 
 The app is unsigned. Updates preserve settings and History outside the app.
 The installer retains a previous application folder. Never run a single EXE
@@ -65,9 +66,8 @@ interface. The picker times out clearly when it receives no usable key.
 SETTINGS AND PROCESSING TIME
 
 On/off controls show their state in words and with a moving thumb. Settings
-shows the last dictation time, split into Speech, AI cleanup, Report, and
-Insertion when those stages ran. The timing record has no dictated words.
-AI cleanup remains optional and keeps your saved choice.
+shows the last dictation time, split into Speech, Report, and Insertion when
+those stages ran. The timing record has no dictated words.
 
 FUTURE UPDATES
 

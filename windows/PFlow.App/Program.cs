@@ -31,7 +31,6 @@ internal sealed partial class Program : Application
     string? sessionDirectory;
     Phase phase = Phase.Idle;
     bool quitting;
-    readonly CleanupNotice cleanupNotice = new();
     readonly OperationGate operations = new();
     long sessionId;
     readonly Mutex single = new(true, "Local\\pFlow-by-Pesh-Windows", out _);
@@ -55,7 +54,7 @@ internal sealed partial class Program : Application
             StaleCopies.RepointRunKey(); StaleCopies.ListenForNewerCopy(() => Dispatcher.InvokeAsync(Quit));
             StaleCopies.ListenForOpenSettings(() => Dispatcher.InvokeAsync(OpenSettings)); StaleCopies.ListenForUninstall(() => Dispatcher.InvokeAsync(QuitForUninstall));
             _ = Task.Run(Uninstaller.Register);
-            store = new StateStore(directory); whisper = new Whisper(directory);
+            store = new StateStore(directory); whisper = new Whisper(directory) { ChosenId = () => store.Preferences.SpeechModel };
             InsertionLog.Path = Path.Combine(directory, "insertion.log");
             textModel = new LocalTextModel(directory);
             _ = Task.Run(async () => { try { await whisper.Prewarm(); } catch { /* Recording retries and reports a load error when needed. */ } });
@@ -79,23 +78,23 @@ internal sealed partial class Program : Application
             enabled.CheckedChanged += (_, _) => { store.Preferences.Enabled = keyboard.Enabled = enabled.Checked; store.SavePreferences(); if (!enabled.Checked) Cancel(); };
             menu.Items.Add(enabled); menu.Items.Add(TrayMenu.Cancel, null, (_, _) => Dispatcher.Invoke(Cancel));
             menu.Items.Add(TrayMenu.Quit, null, (_, _) => Dispatcher.Invoke(Quit));
-            trayIcon = PeshIcon();
+            trayIcon = TrayIcon.Current();
             tray = new Forms.NotifyIcon { Icon = trayIcon, Text = "pFlow by Pesh", Visible = true, ContextMenuStrip = menu };
+            // The frame follows the taskbar: a DPI or theme change picks the icon again.
+            Microsoft.Win32.SystemEvents.DisplaySettingsChanged += (_, _) => Dispatcher.BeginInvoke(RefreshTrayIcon);
+            Microsoft.Win32.SystemEvents.UserPreferenceChanged += (_, _) => Dispatcher.BeginInvoke(RefreshTrayIcon);
             tray.DoubleClick += (_, _) => Dispatcher.Invoke(OpenSettings);
             if (args.Contains("--settings")) OpenSettings();
             // Once per start: where pFlow is and how to dictate. Goes away on its own.
             prompt.ShowNotice(StartNotice.Body(KeyLabels.Name(ActivationKeys.Resolve(store.Preferences.ActivationKey))), StartNotice.Settings, TimeSpan.FromSeconds(12));
         } catch (Exception error) { MessageBox.Show(error.Message, "pFlow could not start"); Quit(); }
     }
-    static System.Drawing.Icon PeshIcon()
+    void RefreshTrayIcon()
     {
-        var resource = GetResourceStream(new Uri("pack://application:,,,/pFlow;component/Assets/PeshMark.png"));
-        using var stream = resource.Stream; using var bitmap = new System.Drawing.Bitmap(stream);
-        IntPtr handle = bitmap.GetHicon();
-        try { using var icon = System.Drawing.Icon.FromHandle(handle); return (System.Drawing.Icon)icon.Clone(); }
-        finally { DestroyIcon(handle); }
+        if (tray == null || quitting) return;
+        var fresh = TrayIcon.Current(); var old = trayIcon;
+        tray.Icon = trayIcon = fresh; old?.Dispose();
     }
-    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr icon);
     void ToggleRecording()
     {
         if (!store.Preferences.Enabled) { Notify("Turn on Dictation enabled in the tray menu first."); return; }
@@ -227,8 +226,7 @@ internal sealed partial class Program : Application
             InsertionLog.Record("take done: " + seconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " s, status=" + result.Status);
             // Words that did not go in are shown in the card to copy; the card says why, so no balloon then.
             if (result.Prompt is { } offer) prompt.ShowWords(offer.Text, offer.Reason, capsule.Handle);
-            else if (result.Notice != null && cleanupNotice.Allow(result.NoticeIsCleanup)) Notify(result.Notice);
-            else if (result.Notice != null) InsertionLog.Record("cleanup not used (balloon already shown this start): " + result.CleanupIssue);
+            else if (result.Notice != null) Notify(result.Notice);
         } catch (OperationCanceledException) { InsertionLog.Record("take canceled"); Set(Phase.Canceled); }
         catch (Exception error) { InsertionLog.Record("take failed: " + InsertionLog.Reason(error)); Failure(error); }
         finally {

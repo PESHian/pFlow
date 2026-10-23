@@ -14,6 +14,8 @@ internal sealed partial class SettingsWindow : Window
     readonly Action? checkUpdates;
     Action? cancelKeySelection;
     DownloadControl textDownload = null!, whisperDownload = null!;
+    /// One download control per speech model that is not bundled, canceled with the window.
+    readonly List<DownloadControl> speechDownloads = [];
     readonly TextBlock modelStatus = Text("");
     readonly TextBlock processingTime = Text("Processing time appears here after your next dictation.");
     readonly ContentControl page = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
@@ -35,7 +37,7 @@ internal sealed partial class SettingsWindow : Window
         home = Scroll(General()); ShowHome(); ApplyTheme(); SourceInitialized += (_, _) => ApplyTheme();
         processingTime.Text = ProcessingTimes.Read(store.DirectoryPath);
         var timingRefresh = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(1), System.Windows.Threading.DispatcherPriority.Background, (_, _) => { if (IsVisible && !busy()) processingTime.Text = ProcessingTimes.Read(store.DirectoryPath); }, Dispatcher);
-        Closed += (_, _) => { textDownload?.Cancel(); whisperDownload?.Cancel(); timingRefresh.Stop(); };
+        Closed += (_, _) => { textDownload?.Cancel(); whisperDownload?.Cancel(); foreach (var download in speechDownloads) download.Cancel(); timingRefresh.Stop(); };
     }
     static StackPanel Panel() => new() { Margin = new Thickness(20) };
     static TextBlock Text(string value) => new() { Text = value, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 5), LineHeight = 19 };
@@ -64,7 +66,12 @@ internal sealed partial class SettingsWindow : Window
             if (parent is ScrollViewer page && ScrollViewer.GetPanningMode(page) != PanningMode.None) return page;
         return null;
     }
-    internal static ScrollViewer Scroll(UIElement content) => Pannable(new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = content });
+    /// A page: scrolls by pixel (SmoothScroll) with the wheel, by touch with Pannable.
+    internal static ScrollViewer Scroll(UIElement content)
+    {
+        var page = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = content };
+        SmoothScroll.Attach(page); return Pannable(page);
+    }
     /// History is built fresh each time it opens, so it always shows the latest takes.
     internal void OpenHistoryPage() => ShowPage("View history", History, false);
     void ShowHome() { cancelKeySelection?.Invoke(); page.Content = home; }
@@ -205,11 +212,11 @@ internal sealed partial class SettingsWindow : Window
         Check(p, "Quiet start and stop sounds", store.Preferences.Sounds, x => store.Preferences.Sounds = x);
         Check(p, "Group long narrations into paragraphs", store.Preferences.Paragraphs, x => store.Preferences.Paragraphs = x);
         Check(p, "Clean up dictation (English)", store.Preferences.Cleanup, x => store.Preferences.Cleanup = x);
-        p = Section(root, "Local intelligence");
+        p.Children.Add(Text("Cleanup removes filler words and fixes capitals and spacing right away. Other languages keep their recognized words."));
+        p = Section(root, "Report templates (optional)");
         if (textModel.Supported) {
-        Check(p, "Use the local text model for reports and optional AI cleanup", store.Preferences.UseLocalAI, x => store.Preferences.UseLocalAI = x);
-        Check(p, "AI cleanup (slower, English)", store.Preferences.UseAICleanup, x => store.Preferences.UseAICleanup = x);
-        p.Children.Add(Text("English cleanup removes filler words immediately. Other languages keep their recognized words. AI cleanup is optional and English only: the local text model adds sentences, commas and capitals and keeps every word and number as spoken; it can take about as long as the recording. When it cannot finish, your words are kept as recognized and the processing line below says so. Reports use your sentences."));
+        Check(p, "Use the local text model for report templates", store.Preferences.UseLocalAI, x => store.Preferences.UseLocalAI = x);
+        p.Children.Add(Text("A report template with its own sections uses the local text model to sort your sentences into them; it keeps every word as spoken. Plain dictation and full narrative templates never use it."));
         modelStatus.Text = textModel.Status; p.Children.Add(modelStatus);
         textDownload = new DownloadControl("Text model", LocalTextModel.Current.Size, () => textModel.CurrentInstalled, textModel.Download, Blocked, () => modelStatus.Text = textModel.Status); p.Children.Add(textDownload);
         } else p.Children.Add(Text(LocalTextModel.UnsupportedReason));
@@ -221,9 +228,33 @@ internal sealed partial class SettingsWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(language, "Speech language");
         language.SelectionChanged += (_, _) => { if (language.SelectedValue is string value) { store.Preferences.Language = value; store.SavePreferences(); } };
         p.Children.Add(language);
+        // The speech model for the finished text: tiles like Live text, every model visible; a tile can be
+        // chosen once its file is here. Each model that is a download has its row with its own control.
+        p.Children.Add(Text("Speech model"));
+        var modelChoices = new System.Windows.Controls.Primitives.UniformGrid { Columns = 3, Margin = new Thickness(-5, 0, -5, 8) };
+        var modelNote = Text(whisper.ModelStatus); modelNote.FontSize = 12; modelNote.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted");
+        var tiles = new Dictionary<string, RadioButton>();
+        foreach (var model in SpeechModels.All) {
+            var option = Option(model.Id, model.Title, "SpeechModel", whisper.Chosen.Id == model.Id, "AppearanceChoice", () => {
+                store.Preferences.SpeechModel = model.Id; store.SavePreferences(); modelNote.Text = whisper.ModelStatus;
+            });
+            option.Content = new TextBlock { Text = model.Title, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, FontSize = 12, FontWeight = FontWeights.SemiBold };
+            option.Margin = new Thickness(5, 0, 5, 0); option.MinHeight = 52; option.IsEnabled = whisper.Installed(model);
+            modelChoices.Children.Add(option); tiles[model.Id] = option;
+        }
+        p.Children.Add(modelChoices); p.Children.Add(modelNote);
+        foreach (var model in SpeechModels.All) {
+            var row = new StackPanel { Margin = new Thickness(0, 8, 0, 0) }; System.Windows.Automation.AutomationProperties.SetName(row, model.Title + " row");
+            var title = Text(model.Title + " · " + FileSize.Describe(model.Bytes)); title.FontWeight = FontWeights.SemiBold; title.Margin = new Thickness(0, 0, 0, 1); row.Children.Add(title);
+            var note = Text(model.Note); note.FontSize = 12; note.Margin = new Thickness(0); note.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); row.Children.Add(note);
+            var tile = tiles[model.Id];
+            void Done() { tile.IsEnabled = whisper.Installed(model); modelNote.Text = whisper.ModelStatus; }
+            if (model.Bundled) { whisperDownload = new DownloadControl("Whisper model", model.Bytes, () => whisper.ModelPresent, whisper.Download, Blocked, Done); row.Children.Add(whisperDownload); }
+            else { var download = new DownloadControl(model.Title, model.Bytes, () => whisper.Installed(model), (progress, cancel) => whisper.Download(model, progress, cancel), Blocked, Done); speechDownloads.Add(download); row.Children.Add(download); }
+            p.Children.Add(row);
+        }
         p.Children.Add(processingTime);
         p.Children.Add(Text($"Microphone devices: {WaveRecorder.waveInGetNumDevs()}. Windows microphone access must allow desktop apps."));
-        whisperDownload = new DownloadControl("Whisper model", Whisper.ModelBytes, () => whisper.ModelPresent, whisper.Download, Blocked); p.Children.Add(whisperDownload);
         p = Section(root, "General");
         using (var run = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run"))
             Check(p, "Launch pFlow when I sign in", run?.GetValue("pFlow by Pesh") != null, SetStartup);

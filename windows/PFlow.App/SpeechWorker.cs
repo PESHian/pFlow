@@ -17,6 +17,8 @@ internal sealed class SpeechWorker : IDisposable
     readonly Process process;
     readonly Stream input, output;
     internal bool Exited => process.HasExited;
+    /// The model file this worker loaded (the chosen speech model at its start).
+    internal string ModelPath { get; private set; } = "";
     internal int Id => process.Id;
     internal double LoadMs { get; private set; }
     /// True when this worker runs live windows on the small live model.
@@ -40,7 +42,7 @@ internal sealed class SpeechWorker : IDisposable
     /// (a chunk hashed, a frame from the worker), and only `StallLimit` without any progress ends it. A slow
     /// disk or a virus scanner reading the file makes a start slow, not stuck. `liveModel` (null when the
     /// file is not installed) is checked the same way; a damaged one is left out, never blocking dictation.
-    internal static async Task<SpeechWorker> Start(string executable, string model, string? liveModel, CancellationToken cancel)
+    internal static async Task<SpeechWorker> Start(string executable, string model, SpeechModel file, string? liveModel, CancellationToken cancel)
     {
         if (FailNextStarts > 0) { FailNextStarts--; throw new SpeechWorkerLost(Stalled); }
         LiveModelRejected = false;
@@ -50,7 +52,7 @@ internal sealed class SpeechWorker : IDisposable
         using var stall = CancellationTokenSource.CreateLinkedTokenSource(cancel); stall.CancelAfter(StallLimit);
         var token = stall.Token;
         try {
-            await Verify(lease, Whisper.ModelBytes, Whisper.ModelSha, "The Whisper model", "Download it again in Settings.", stall, token);
+            await Verify(lease, file.Bytes, file.Sha, "The " + file.Title + " model", "Download it again in Settings.", stall, token);
             if (liveModel != null) {
                 // The live model only speeds up live words: a damaged one is left out (Settings says so) and
                 // the finished text is never held up by it.
@@ -58,7 +60,7 @@ internal sealed class SpeechWorker : IDisposable
                 catch (Exception error) when (error is InvalidDataException or IOException or UnauthorizedAccessException) { liveLease?.Dispose(); liveLease = null; liveModel = null; LiveModelRejected = true; }
             }
             var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
-            worker = new(lease, liveLease, Process.Start(info) ?? throw new SpeechWorkerLost("The speech engine could not start."));
+            worker = new(lease, liveLease, Process.Start(info) ?? throw new SpeechWorkerLost("The speech engine could not start.")) { ModelPath = model };
             using var kill = token.Register(worker.Abort);
             int finalThreads = SpeechThreads.Final(LogicalProcessors), liveThreads = SpeechThreads.Live(LogicalProcessors);
             await worker.Write(LiveWorkerProtocol.EncodeHello(finalThreads, liveThreads, model, liveModel), token);

@@ -45,9 +45,15 @@ internal static partial class Program
     {
         string directory = Path.Combine(root, "speed-fictional-" + Guid.NewGuid()); Directory.CreateDirectory(directory);
         var store = new StateStore(directory); store.Preferences.Language = "en";
-        await using var whisper = new Whisper(directory, PackageAssets);
+        // model=<id> runs the finished text on that speech model: its file is taken from <root>\models.
+        if (SpeedOption("model", "") is { Length: > 0 } modelId) {
+            var chosen = SpeechModels.Resolve(modelId); if (chosen.Id != modelId) throw new Exception("unknown speech model " + modelId);
+            if (!chosen.Bundled) File.Copy(Path.Combine(root, "models", chosen.FileName), Path.Combine(directory, chosen.FileName));
+            store.Preferences.SpeechModel = chosen.Id;
+        }
+        await using var whisper = new Whisper(directory, PackageAssets) { ChosenId = () => store.Preferences.SpeechModel };
         var capsule = new Capsule(store); var preview = new LivePreview(store);
-        string label = SpeedOption("label", "run");
+        string label = SpeedOption("label", "run") + (SpeedOption("model", "") is { Length: > 0 } m ? "-" + m : "");
         var rows = new List<Dictionary<string, object>>();
         try {
             // cpus=N stands in for a computer with N logical processors: the worker is sized for N (final and live thread
@@ -73,7 +79,7 @@ internal static partial class Program
                 var gaps = report.Updates.Where(u => u.Ms <= report.AudioEndMs).Zip(report.Updates.Skip(1).Where(u => u.Ms <= report.AudioEndMs), (a, b) => b.Ms - a.Ms).OrderBy(x => x).ToList();
                 string reference = Reference(audio);
                 rows.Add(new() {
-                    ["label"] = label, ["file"] = audio, ["mode"] = report.Mode, ["take"] = take, ["cold"] = take == 1, ["prewarmMs"] = Math.Round(prewarmMs),
+                    ["label"] = label, ["model"] = whisper.InUse.Id, ["file"] = audio, ["mode"] = report.Mode, ["take"] = take, ["cold"] = take == 1, ["prewarmMs"] = Math.Round(prewarmMs),
                     ["audioMs"] = Math.Round(report.AudioMs), ["firstWordsMs"] = Math.Round(report.FirstUpdateMs), ["updatesBeforeEnd"] = report.UpdatesBeforeEnd,
                     ["medianGapMs"] = gaps.Count > 0 ? Math.Round(gaps[gaps.Count / 2]) : -1, ["windows"] = report.Windows,
                     ["liveStopMs"] = Math.Round(report.StopMs), ["recognitionMs"] = Math.Round(timing.GetValueOrDefault("recognitionMs", -1)),

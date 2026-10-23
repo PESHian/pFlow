@@ -30,6 +30,13 @@
 constexpr uint32_t kHello = 0x32574650, kWhole = 0x31514650, kLive = 0x31534650, kCancel = 0x31434650; // PFW2 PFQ1 PFS1 PFC1
 constexpr uint32_t kVersion = 4, kLiveResult = 4, kLiveError = 5, kProgress = 6;
 constexpr uint32_t kMaxLiveSamples = 30 * 16000, kMaxSegments = 512;
+// The finished-text audio context: the full 1500 frames, as the Mac app decodes. A measurement
+// build (-DPFLOW_SHORT_AUDIO_CTX) keeps the pre-W025 shortened rule to compare against.
+#ifdef PFLOW_SHORT_AUDIO_CTX
+#define PFLOW_FINAL_AUDIO_CTX(count) ((count) <= 8 * 16000 ? 512 : (count) <= 18 * 16000 ? 1024 : 0)
+#else
+#define PFLOW_FINAL_AUDIO_CTX(count) 0
+#endif
 constexpr size_t kMaxSegmentText = 4096, kMaxLiveText = 256 * 1024;
 
 static void need(void * data, size_t size) { if (size && fread(data, 1, size, stdin) != size) throw std::runtime_error("Input closed"); }
@@ -204,14 +211,18 @@ static void transcribe_file(whisper_context * ctx, int threads, const Job & job)
     if (bytes.empty() || !read_audio_data(bytes.data(), bytes.size(), samples, stereo, false) || samples.empty()) {
         put(3); put(std::string("The recording could not be read.")); fflush(stdout); return;
     }
-    auto params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
-    params.n_threads = threads; params.greedy.best_of = 1;
+    // The finished text is decoded the way the Mac app's final pass is (whisper-cli's defaults in
+    // whisper.cpp 1.9.5): beam search 5, best of 5, temperature fallback, the full 30 s audio
+    // context. W025 measured the earlier greedy pass with a shortened audio context (512 frames
+    // under 8 s, 1024 under 18 s) against this on the fictional speed fixtures; the numbers are in
+    // the ledger. The learned terms still go in as the prompt (the Mac sends none).
+    auto params = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
+    params.n_threads = threads;
     params.no_context = true; // Never carry another dictation's tokens into this one.
     params.language = language.c_str(); params.detect_language = false;
     params.print_special = params.print_progress = params.print_realtime = params.print_timestamps = false;
     params.initial_prompt = prompt.c_str();
-    // All samples fit, with at least two seconds of padding. Long clips keep the full window.
-    params.audio_ctx = samples.size() <= 8 * 16000 ? 512 : samples.size() <= 18 * 16000 ? 1024 : 0;
+    params.audio_ctx = PFLOW_FINAL_AUDIO_CTX(samples.size());
     params.abort_callback = progress_beat;
     auto start = Clock::now(); last_progress = start;
     whisper_state * state = final_state_for(ctx, params.audio_ctx);
