@@ -80,11 +80,14 @@ internal sealed class InsertionTarget : IInsertionTarget
         try { return element.Current.FrameworkId == "Chrome" && element.Current.ControlType == ControlType.Pane; }
         catch (Exception error) when (error is ElementNotAvailableException or COMException) { return false; }
     }
-    /// "ControlType/class/framework". A web page's class names are the site's own text, so for
-    /// Chromium (browsers, Electron apps) the class is never recorded.
+    /// "ControlType/class/framework". Only known classes are named (PrivateLog.ClassLabel); a web page's
+    /// class names are the site's own text, so for Chromium (browsers, Electron apps) none is recorded.
     static string Describe(AutomationElement e)
     {
-        try { var c = e.Current; return c.ControlType.ProgrammaticName.Replace("ControlType.", "") + "/" + (c.FrameworkId == "Chrome" ? "-" : c.ClassName) + "/" + c.FrameworkId; }
+        try {
+            var c = e.Current; string framework = c.FrameworkId is "Win32" or "WPF" or "XAML" or "WinForm" or "Chrome" or "DirectUI" ? c.FrameworkId : "other";
+            return c.ControlType.ProgrammaticName.Replace("ControlType.", "") + "/" + (framework == "Chrome" ? "-" : PrivateLog.ClassLabel(c.ClassName)) + "/" + framework;
+        }
         catch (Exception error) when (error is ElementNotAvailableException or COMException) { return "unavailable"; }
     }
     /// Only the classic Win32 providers set a field's whole value in place
@@ -144,7 +147,7 @@ internal sealed class InsertionTarget : IInsertionTarget
         IntPtr control = LiveTextField.FocusedControl(foreground);
         return [new("app", LogName), new("appIntegrity", DiagnosticEnvironment.IntegrityName(LiveTextField.Integrity(processId))),
             new("pflowIntegrity", DiagnosticEnvironment.IntegrityName(LiveTextField.Integrity(0))), new("field", Kind),
-            new("focusedControl", control == IntPtr.Zero ? "none" : LiveTextField.BaseClass(control)), new("patterns", patterns), new("password", password),
+            new("focusedControl", control == IntPtr.Zero ? "none" : PrivateLog.ClassLabel(LiveTextField.BaseClass(control))), new("patterns", patterns), new("password", password),
             new("keyboardFocusable", focusable), new("readable", readable), new("placeholder", placeholder), new("refusal", Refusal),
             new("keyboardLayout", DiagnosticEnvironment.ForegroundLayout(foreground))];
     }

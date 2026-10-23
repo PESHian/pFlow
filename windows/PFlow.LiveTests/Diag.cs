@@ -197,7 +197,8 @@ internal static partial class Program
                         }
                         await Task.Delay(600);
                         string title = Title(page.Window), shown = title.Length > page.Name.Length + 3 ? title[(page.Name.Length + 3)..] : "";
-                        string expected = variant == "password" ? "" : Flat(Flat(before.Length > page.Name.Length + 3 ? before[(page.Name.Length + 3)..] : "") + " " + r.Final);
+                        string beforeShown = before.Length > page.Name.Length + 3 ? before[(page.Name.Length + 3)..] : "";
+                        string expected = variant == "password" ? "" : Flat(Flat(beforeShown) + " " + r.Final);
                         bool exact = variant != "password" && Flat(shown) == expected;
                         // New copies of the finished text's start: this take's, once (a warm take's field already holds the cold take's words).
                         int copies = r.Final.Length > 20 ? Occurrences(Flat(shown), Flat(r.Final)[..20]) - Occurrences(Flat(before), Flat(r.Final)[..20]) : -1;
@@ -216,8 +217,12 @@ internal static partial class Program
                         }
                         Check($"{take}: live words reached the field before the take ended ({r.Matched} writes read back, first at {r.FirstWriteMs:F0} ms)",
                             r.Matched > 0 && r.FirstWriteMs > 0 && r.FirstWriteMs < r.Report.AudioEndMs);
-                        Check($"{take}: every live write read back right, and typing never stopped", r.Matched == r.Writes && r.Stops.Count == 0);
-                        Check($"{take}: the finished text is in the field exactly once, after the prefix ({r.Status})", r.Status == "Inserted" && exact && copies == 1);
+                        Check($"{take}: every live write read back right, and typing stopped only for a revised word", r.Matched == r.Writes && r.Stops.All(stop => stop == LiveStop.Revised));
+                        // Append only: the finished text is added when it starts with exactly the typed words; otherwise the field keeps the
+                        // typed words, nothing is added or removed, and the Copy card offers the finished text.
+                        if (r.Status == "Inserted") Check($"{take}: the finished text is in the field exactly once, after the prefix", exact && copies == 1);
+                        else Check($"{take}: the finished text did not start with the typed words: the field keeps them, no duplicate, Copy card ({r.Status})",
+                            r.Status.StartsWith("Live typing stopped because", StringComparison.Ordinal) && copies <= 1 && Flat(shown).StartsWith(Flat(beforeShown), StringComparison.Ordinal) && Flat(shown).Length > Flat(beforeShown).Length);
                     }
                 } finally { await ClosePage(browser, page); }
             }
@@ -309,7 +314,7 @@ internal static partial class Program
                     string Shown() { string t = Title(page.Window); int bar = t.IndexOf(" | ", StringComparison.Ordinal), pw = t.LastIndexOf(" | pw len:", StringComparison.Ordinal); return bar < 0 ? "" : pw > bar ? t[(bar + 3)..pw] : t[(bar + 3)..]; }
                     async Task<(LiveInlineSlot Slot, string Before)> Begin(string take)
                     {
-                        LiveKeyField.BeforeSend = null;
+                        LiveKeyField.BeforeSend = null; LiveKeyField.AfterLookup = null;
                         for (int i = 0; i < 5 && Native.GetForegroundWindow() != page.Window; i++) { Front(page.Window); await Task.Delay(300); }
                         // A click in the page's text box, then Ctrl+End: the caret at the end of its text, as a person would put it.
                         var bodyField = Find("Fictional body"); var box = bodyField.Current.BoundingRectangle;
@@ -347,42 +352,61 @@ internal static partial class Program
                     // 1. Another window comes to the front just before the key batch.
                     {
                         var (slot, before) = await Begin("away");
-                        LiveKeyField.BeforeSend = _ => { Front(noteWindow); Thread.Sleep(300); };
+                        LiveKeyField.BeforeSend = () => { Front(noteWindow); Thread.Sleep(300); };
                         var stop = slot.Reconcile("away", "harbor lights glow over");
                         stop ??= slot.Reconcile("away", "harbor lights glow over water");
                         LiveKeyField.BeforeSend = null; await Task.Delay(500);
                         Check($"another window in front: no key reaches it, typing stops ({stop})", Read(edit) == noteBefore && stop != null && Shown() == before);
                     }
-                    // 1b. The same during a revision: between Shift+Left and the typed words.
+                    // 1b. The window is switched during the slow UI Automation lookup, after the field checks passed:
+                    // the fast checks run last, so no key goes to the window now in front.
                     {
-                        var (slot, before) = await Begin("away-revise");
-                        int batches = 0; IntPtr sawFront = IntPtr.Zero;
-                        LiveKeyField.BeforeSend = batch => { batches = Math.Max(batches, batch); if (batch == 2) { Front(noteWindow); Thread.Sleep(300); sawFront = Native.GetForegroundWindow(); } };
-                        // "harbor lights" typed live; the finished text "Harbor lights glow." revises pFlow's own words from the "h":
-                        // Shift+Left over "harbor lights" (batch 1), then the typed replacement (batch 2).
-                        var (final, finalStop) = slot.Finalize("away-revise", "Harbor lights glow.");
-                        LiveStop? stop = final == LiveFinal.Kept ? finalStop : null;
-                        LiveKeyField.BeforeSend = null; await Task.Delay(500);
-                        Console.WriteLine($"GUARD away-revise: batches={batches} foreground at batch 2={(sawFront == noteWindow ? "Notepad" : sawFront == page.Window ? "Edge" : "other")} notepad changed={Read(edit) != noteBefore} stop={stop} guard={Diagnostics.Recorder.Report([]).Split('\n').LastOrDefault(l => l.Contains("typing.guard"))?.Trim()}");
+                        var (slot, before) = await Begin("away-lookup");
+                        IntPtr sawFront = IntPtr.Zero;
+                        LiveKeyField.AfterLookup = () => { Front(noteWindow); Thread.Sleep(300); sawFront = Native.GetForegroundWindow(); };
+                        var stop = slot.Reconcile("away-lookup", "harbor lights glow over");
+                        stop ??= slot.Reconcile("away-lookup", "harbor lights glow over water");
+                        LiveKeyField.AfterLookup = null; await Task.Delay(500);
+                        Console.WriteLine($"GUARD away-lookup: front after the lookup={(sawFront == noteWindow ? "Notepad" : "other")} notepad changed={Read(edit) != noteBefore} stop={stop}");
                         // Positive control: a key sent the same way now does reach Notepad (then it is taken out again).
                         Front(noteWindow); await Task.Delay(300); Native.Send(Native.UnicodeText("Z")); await Task.Delay(400);
                         bool probe = Read(edit) != noteBefore; if (probe) { Native.Send(Native.Key(0x08), Native.Key(0x08, true)); await Task.Delay(300); }
-                        Console.WriteLine($"GUARD away-revise probe: a key sent to the front window lands in Notepad={probe}");
                         Check("positive control: a key sent to Notepad in front does land there (so 'no key reached it' means something)", probe);
-                        Check($"another window in front mid-revision: the guard ran at the key batch after Shift+Left, no key reaches the other window, typing stops ({stop})",
-                            batches >= 2 && sawFront == noteWindow && Read(edit) == noteBefore && stop != null && Flat(Shown()) == Flat(before));
+                        Check($"a window switched during the field lookup gets no key, typing stops ({stop})", sawFront == noteWindow && Read(edit) == noteBefore && stop != null && Flat(Shown()) == Flat(before));
                     }
-                    // 3. The person types just before pFlow's batch: no mixing inside a word, typing stops.
+                    // 1c. Recognition revises a word pFlow already typed: live typing ends with no key at all (no
+                    // selection, no Backspace); at the end, finished text that starts with exactly the typed words is
+                    // only appended, anything else leaves the field as it is (the Copy card offers the text).
+                    {
+                        var (slot, before) = await Begin("revised");
+                        var stop = slot.Reconcile("revised", "harbor lighthouse keeper waves");
+                        stop ??= slot.Reconcile("revised", "harbor lighthouse keeper waves again");
+                        await Task.Delay(400);
+                        var sel = ((TextPattern)AutomationElement.FocusedElement.GetCurrentPattern(TextPattern.Pattern)).GetSelection();
+                        bool caret = sel.Length == 1 && sel[0].GetText(-1).Length == 0;
+                        Check($"a revised word ends live typing with nothing sent: field unchanged, no selection ({stop})", stop == LiveStop.Revised && Shown() == before && caret);
+                        var (final, finalStop) = slot.Finalize("revised", "Harbor lighthouse keeper waves.");
+                        await Task.Delay(400);
+                        Check($"finished text that does not start with the typed words leaves the field as it is ({final}, {finalStop})", final == LiveFinal.Kept && Shown() == before);
+                    }
+                    {
+                        var (slot, before) = await Begin("revised-append");
+                        var stop = slot.Reconcile("revised-append", "harbor lighthouse keeper");
+                        var (final, _) = slot.Finalize("revised-append", "harbor lights glow tonight.");
+                        await Task.Delay(400);
+                        Check($"finished text that starts with exactly the typed words is appended after them ({stop}, {final})", stop == LiveStop.Revised && final == LiveFinal.Applied && Flat(Shown()) == Flat(before + " glow tonight."));
+                    }
+                    // 3. The person presses a real key (a letter, held down) between pFlow's checks: the last, fast check
+                    // sees it, typing stops, and pFlow's batch never mixes with the person's typing.
                     {
                         var (slot, before) = await Begin("person");
-                        LiveKeyField.BeforeSend = _ => { Native.Send(Native.UnicodeText(" QQ")); Thread.Sleep(300); };
+                        LiveKeyField.AfterLookup = () => { Native.Send(Native.Key(0x51)); Thread.Sleep(200); };
                         var stop = slot.Reconcile("person", "harbor lights glow over");
                         stop ??= slot.Reconcile("person", "harbor lights glow over water");
-                        LiveKeyField.BeforeSend = null; await Task.Delay(800);
+                        LiveKeyField.AfterLookup = null; Native.Send(Native.Key(0x51, true)); await Task.Delay(800);
                         string after = Flat(Shown());
                         Console.WriteLine($"GUARD person: stop={stop} shown=[{after[Math.Max(0, after.Length - 40)..]}]");
-                        Check($"the person typing: typing stops ({stop}) and the field holds their keys then pFlow's whole batch, nothing interleaved", stop != null
-                            && after.StartsWith(Flat(before + " QQ"), StringComparison.Ordinal) && WholeWords(after[Flat(before + " QQ").Length..].Trim(), "glow over water"));
+                        Check($"the person typing: typing stops ({stop}) and the field holds only their key, no pFlow words after it", stop != null && after == Flat(before + "q"));
                         Check("the person typing: nothing more is typed for the take", slot.Reconcile("person", "harbor lights glow over water and more words") == null && Flat(Shown()) == after);
                     }
                     // 2. A password box on the same page takes focus just before the key batch.
@@ -390,7 +414,7 @@ internal static partial class Program
                         var (slot, before) = await Begin("password");
                         var secret = Find("Fictional secret");
                         bool secretFocused = false;
-                        LiveKeyField.BeforeSend = _ => { try { secret.SetFocus(); } catch (InvalidOperationException) { Native.Send(Native.Key(0x09), Native.Key(0x09, true)); } Thread.Sleep(300);
+                        LiveKeyField.BeforeSend = () => { try { secret.SetFocus(); } catch (InvalidOperationException) { Native.Send(Native.Key(0x09), Native.Key(0x09, true)); } Thread.Sleep(300);
                             try { secretFocused = AutomationElement.FocusedElement.Current.IsPassword; } catch (Exception) { } };
                         var stop = slot.Reconcile("password", "harbor lights glow over");
                         stop ??= slot.Reconcile("password", "harbor lights glow over water");
@@ -409,14 +433,15 @@ internal static partial class Program
                         IntPtr japanese = LoadKeyboardLayout("00000411", 0);
                         uint thread = Native.GetWindowThreadProcessId(page.Window, out _);
                         var (slot, before) = await Begin("ime");
-                        LiveKeyField.BeforeSend = _ => { PostMessage(page.Window, 0x0050, IntPtr.Zero, japanese); Thread.Sleep(500); };
+                        LiveKeyField.BeforeSend = () => { PostMessage(page.Window, 0x0050, IntPtr.Zero, japanese); Thread.Sleep(500); };
                         var stop = slot.Reconcile("ime", "harbor lights glow over");
                         stop ??= slot.Reconcile("ime", "harbor lights glow over water");
                         LiveKeyField.BeforeSend = null;
                         bool switched = (GetKeyboardLayout(thread).ToInt64() & 0xFFFF) == 0x0411;
                         Console.WriteLine($"GUARD ime: layout switched={switched} stop={stop}");
-                        if (!switched) Console.WriteLine("GUARD ime NOT RUN: Edge did not take the Japanese layout");
-                        else {
+                        // Not switching is a failure, never a NOT RUN.
+                        Check("Edge took the Japanese layout for the check", switched);
+                        {
                             Check($"a composing input language: typing stops ({stop}) with nothing typed", stop != null && Shown() == before);
                             var target = InsertionTarget.Capture(); target.LiveField(out string why);
                             Check($"a composing input language at take start: no key typing ({why})", why.Contains("input method"));
@@ -425,7 +450,7 @@ internal static partial class Program
                         // The Japanese layout leaves the session's list again.
                         UnloadKeyboardLayout(japanese);
                     }
-                } finally { LiveKeyField.BeforeSend = null; await ClosePage("edge", page); }
+                } finally { LiveKeyField.BeforeSend = null; LiveKeyField.AfterLookup = null; await ClosePage("edge", page); }
             }
         } finally { await CloseOurNotepadTab(notepad, noteName); try { Directory.Delete(directory, true); } catch (IOException) { } }
     }
@@ -439,8 +464,12 @@ internal static partial class Program
     {
         string directory = Path.Combine(root, "report-button-fictional-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);
         var (desktop, place) = DiagnosticEnvironment.ReportFolder();
-        Console.WriteLine($"REPORT folder: {place} (OneDrive-synced: {DiagnosticEnvironment.Synced(desktop)})");
-        Check("the report folder is never a OneDrive-synced folder", !DiagnosticEnvironment.Synced(desktop));
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        Console.WriteLine($"REPORT folder: {place}");
+        Check("reports go to the ordinary local Downloads folder or pFlow's own Reports folder", place == "pFlow's Reports folder" || DiagnosticEnvironment.LocalDownloads(desktop, profile));
+        Check("Downloads under OneDrive, Dropbox, a network share or moved elsewhere is not used", !DiagnosticEnvironment.LocalDownloads(Path.Combine(profile, "OneDrive", "Downloads"), profile)
+            && !DiagnosticEnvironment.LocalDownloads(@"\\fictional-server\share\Downloads", profile) && !DiagnosticEnvironment.LocalDownloads(@"D:\Elsewhere\Downloads", profile)
+            && !DiagnosticEnvironment.LocalDownloads(Path.Combine(profile, "Dropbox", "Downloads"), profile));
         Directory.CreateDirectory(desktop);
         var explorersBefore = Explorers();
         try {

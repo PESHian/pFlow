@@ -206,9 +206,12 @@ public static class Diagnostics
     public static DiagnosticRecorder Recorder { get; set; } = new();
 }
 
-/// Input languages whose input methods compose text before it is committed (Japanese, Chinese, Korean):
-/// typed characters may be swallowed into a composition, so pFlow does not type live with keys then.
+/// Input languages whose input methods compose text before it is committed: Chinese, Japanese, Korean,
+/// Vietnamese and the Indic languages (Hindi, Bengali, Punjabi, Gujarati, Odia, Tamil, Telugu, Kannada,
+/// Malayalam, Assamese, Marathi, Sanskrit, Konkani, Sinhala, Nepali). Typed characters may be swallowed
+/// into a composition, so pFlow does not type live with keys then.
 public static class InputLanguages
 {
-    public static bool Composes(int languageId) => (languageId & 0x3FF) is 0x04 or 0x11 or 0x12;
+    static readonly HashSet<int> Composing = [0x04, 0x11, 0x12, 0x2A, 0x39, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F, 0x57, 0x5B, 0x61];
+    public static bool Composes(int languageId) => Composing.Contains(languageId & 0x3FF);
 }

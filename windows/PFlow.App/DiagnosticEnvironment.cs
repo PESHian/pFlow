@@ -160,22 +160,29 @@ internal static class DiagnosticEnvironment
 
     internal static string ForegroundLayout(IntPtr window) => Layout(GetKeyboardLayout(Native.GetWindowThreadProcessId(window, out _)));
 
-    /// Where reports go: the Downloads folder, unless OneDrive (or another cloud folder) holds it, where a
-    /// report would upload by itself; then pFlow's own Reports folder. Returns the folder and how
-    /// Settings names it.
+    /// Where reports go: the Downloads folder only when it is the ordinary local one (the user's own
+    /// profile folder on a fixed local disk, not moved, not under OneDrive, Dropbox, iCloud, Google Drive
+    /// or Box, not on a network share), so a saved report never uploads by itself; otherwise pFlow's own
+    /// %LOCALAPPDATA%\pFlow\Reports. Returns the folder and how Settings names it.
     internal static (string Folder, string Label) ReportFolder()
     {
         string? downloads = null;
         try { if (SHGetKnownFolderPath(new Guid("374DE290-123F-4565-9164-39C4925E467B"), 0, IntPtr.Zero, out var raw) == 0) { downloads = Marshal.PtrToStringUni(raw); Marshal.FreeCoTaskMem(raw); } }
         catch (Exception error) when (error is EntryPointNotFoundException or COMException) { }
-        if (downloads != null && Directory.Exists(downloads) && !Synced(downloads)) return (downloads, "your Downloads folder");
+        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (downloads != null && LocalDownloads(downloads, profile)) return (downloads, "your Downloads folder");
         return (System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "pFlow", "Reports"), "pFlow's Reports folder");
     }
 
-    /// A folder inside OneDrive (personal or work), which uploads what is saved there.
-    internal static bool Synced(string folder) =>
-        new[] { "OneDrive", "OneDriveConsumer", "OneDriveCommercial" }.Select(name => Environment.GetEnvironmentVariable(name)).Any(root => !string.IsNullOrEmpty(root) && folder.StartsWith(root.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase))
-        || folder.Split('\\').Any(part => part.StartsWith("OneDrive", StringComparison.OrdinalIgnoreCase));
+    static readonly string[] CloudFolders = ["OneDrive", "Dropbox", "iCloudDrive", "iCloud Drive", "Google Drive", "GoogleDrive", "Box", "Box Sync", "My Drive"];
+    /// `downloads` is exactly <profile>\Downloads, on a fixed local drive, with no cloud folder on the way.
+    internal static bool LocalDownloads(string downloads, string profile)
+    {
+        if (downloads.StartsWith(@"\\", StringComparison.Ordinal) || profile.Length == 0) return false;
+        if (!string.Equals(System.IO.Path.TrimEndingDirectorySeparator(downloads), System.IO.Path.Combine(profile, "Downloads"), StringComparison.OrdinalIgnoreCase)) return false;
+        if (downloads.Split('\\').Any(part => CloudFolders.Any(cloud => part.StartsWith(cloud, StringComparison.OrdinalIgnoreCase)))) return false;
+        try { return new DriveInfo(System.IO.Path.GetPathRoot(downloads)!).DriveType == DriveType.Fixed; } catch (ArgumentException) { return false; }
+    }
 
     /// Writes the report to the reports folder and shows it selected in File Explorer. Returns the file name.
     internal static string Save(string report)

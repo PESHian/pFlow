@@ -33,11 +33,11 @@ internal sealed class LiveTextField : ILiveTextField
     {
         try {
             IntPtr control = FocusedControl(window);
-            why = control == IntPtr.Zero ? "no focused window control" : element.Current.NativeWindowHandle != control.ToInt32() ? "the focused element is not the focused control (" + BaseClass(control) + ")" : "ok";
+            why = control == IntPtr.Zero ? "no focused window control" : element.Current.NativeWindowHandle != control.ToInt32() ? "the focused element is not the focused control (" + PrivateLog.ClassLabel(BaseClass(control)) + ")" : "ok";
             if (why != "ok") return null;
             string kind = BaseClass(control);
             bool rich = Rich.Contains(kind, StringComparer.OrdinalIgnoreCase);
-            if (!rich && !Plain.Contains(kind, StringComparer.OrdinalIgnoreCase)) { why = "control class " + kind + " is not an edit or rich edit"; return null; }
+            if (!rich && !Plain.Contains(kind, StringComparer.OrdinalIgnoreCase)) { why = "control class " + PrivateLog.ClassLabel(kind) + " is not an edit or rich edit"; return null; }
             return new LiveTextField(element, window, control, rich, TargetAboveUs(process));
         } catch (ElementNotAvailableException) { why = "field went away"; return null; }
         catch (COMException) { why = "field went away"; return null; }

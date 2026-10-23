@@ -21,7 +21,7 @@ public sealed record LiveFieldState(long App, string Element, bool Secure, bool 
 
 /// Why live typing did not start or stopped for the take. The names match the
 /// fixtures' `beginResult` and `reason` strings in lower case.
-public enum LiveStop { Unsupported, Permission, App, Focus, Secure, Text, Caret, Uncertain }
+public enum LiveStop { Unsupported, Permission, App, Focus, Secure, Text, Caret, Uncertain, Revised }
 
 /// One decision of the ownership rules: write nothing, make one write, or stop.
 public abstract record LiveStep
@@ -236,6 +236,24 @@ public sealed class LiveInlineOwnership
         return LiveStep.None;
     }
 
+    /// An append-only field (typed characters) cannot take back what pFlow typed: when the recognizer
+    /// revises a word already typed, live typing ends for the take and the planned write is dropped.
+    public LiveStep Halt(LiveStop reason) { pending = null; return Stop(reason); }
+
+    /// The end of a take in an append-only field: the finished text goes in only as an addition right after
+    /// exactly what pFlow typed, in a field still exactly as pFlow left it, and never with a line break.
+    /// Anything else keeps what is there (Stopped). A take stopped only because a word was revised may
+    /// still end this way. None means the typed words already are the finished text.
+    public LiveStep FinalizeAppend(string text, LiveFieldState state)
+    {
+        if (pending != null) return Stop(LiveStop.Uncertain);
+        if (Stopped is LiveStop stopped && stopped != LiveStop.Revised) return new LiveStep.Stopped(stopped);
+        if (Check(state) is LiveStop reason) return Stop(reason);
+        string target = Spaced(text);
+        if (target.IndexOfAny(['\r', '\n']) >= 0 || !target.StartsWith(Owned, StringComparison.Ordinal)) return Stop(LiveStop.Revised);
+        return Plan(text, target);
+    }
+
     LiveStep Stop(LiveStop reason)
     {
         Stopped = reason;
@@ -281,9 +299,10 @@ public interface ILiveTextField
     /// False while a write cannot be made safely right now (a key the person holds would change
     /// typed characters); the update is skipped, nothing is written and typing goes on.
     bool ReadyToWrite => true;
-    /// False for a field typed into with keys: line breaks are typed as spaces while words come live, and
-    /// finished text with line breaks takes pFlow's live words back out and goes in the normal way.
-    bool KeepsLineBreaks => true;
+    /// True for a field typed into with keys: pFlow only ever adds characters at the caret after its own
+    /// words. A revised word ends live typing; the finished text is added only when it starts with exactly
+    /// what was typed; nothing typed is ever taken back out.
+    bool AppendOnly => false;
 }
 
 public enum LiveFinal { Applied, NotTyped, Kept }
@@ -324,18 +343,21 @@ public sealed class LiveInlineSession
         var state = field.State();
         var step = ownership.Update(LineBreaks(transcript), state);
         if (step is LiveStep.Nothing) Recorder.Detail("typing.none", new DiagField("words", DiagnosticRecorder.Words(transcript)));
+        // Append-only: a write that would change pFlow's own typed words ends live typing instead; no key is sent.
+        if (field.AppendOnly && step is LiveStep.Write revision && (revision.Range.Length > 0 || revision.Select != null)) step = ownership.Halt(LiveStop.Revised);
         return Perform(step, state, "live");
     }
 
     public (LiveFinal Result, LiveStop? Stop) Finalize(string text)
     {
         if (ownership.Stopped != null && !ownership.Touched) return (LiveFinal.NotTyped, null);
-        // A field typed with keys never gets Enter from pFlow: finished text with line breaks goes in the
-        // normal way, after pFlow's live words are taken back out exactly.
-        if (!field.KeepsLineBreaks && text.IndexOfAny(['\r', '\n']) >= 0) {
-            var (back, stop) = Cancel();
-            Recorder.Event("typing.final", new DiagField("result", back == LiveCancel.Left ? "kept" : "handed to the normal insert"), new DiagField("why", "finished text has line breaks"), new DiagField("removed", back.ToString()));
-            return back == LiveCancel.Left ? (LiveFinal.Kept, stop) : (LiveFinal.NotTyped, null);
+        if (field.AppendOnly) {
+            // Nothing typed: the finished text goes in the normal, checked way.
+            if (!ownership.Touched) return (LiveFinal.NotTyped, null);
+            var now = field.State();
+            var appended = Perform(ownership.FinalizeAppend(text.Replace("\r\n", "\n").Replace('\r', '\n'), now), now, "final") is LiveStop kept ? (LiveFinal.Kept, kept) : (LiveFinal.Applied, (LiveStop?)null);
+            Recorder.Event("typing.final", new DiagField("result", appended.Item1.ToString()), new DiagField("stop", appended.Item2?.ToString()), new DiagField("mode", "append only"), new DiagField("chars", text.Length));
+            return appended;
         }
         if (!field.ReadyToWrite) {
             if (!ownership.Touched) return (LiveFinal.NotTyped, null);
@@ -351,6 +373,8 @@ public sealed class LiveInlineSession
     public (LiveCancel Result, LiveStop? Stop) Cancel()
     {
         if (!ownership.Touched) return (LiveCancel.NothingTyped, null);
+        // Append-only: what pFlow typed is never taken back out with keys; it stays and the person is told.
+        if (field.AppendOnly) { Recorder.Event("typing.cancel", new DiagField("result", "left (append only)")); return (LiveCancel.Left, null); }
         var state = field.State();
         return Perform(ownership.Cancel(state), state, "cancel") is LiveStop stop ? (LiveCancel.Left, stop) : (LiveCancel.Removed, null);
     }
@@ -460,6 +484,7 @@ public static class LiveInlineText
         LiveStop.Secure => "Stopped: password field",
         LiveStop.Text => "Stopped: text changed",
         LiveStop.Caret => "Stopped: cursor moved",
+        LiveStop.Revised => "Stopped: words changed",
         _ => "Stopped: couldn't check"
     };
 
@@ -471,6 +496,7 @@ public static class LiveInlineText
         LiveStop.Secure => "a password field took over",
         LiveStop.Text => "the text changed",
         LiveStop.Caret => "the cursor moved",
+        LiveStop.Revised => "the words changed after pFlow typed them",
         _ => "pFlow couldn't check what it typed"
     } + ". The finished text is in History.";
 

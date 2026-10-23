@@ -18,15 +18,49 @@ internal static class DiagnosticChecks
         public string LineBreak => keys ? " " : "\r\n";
         public string Method => keys ? "keys" : "range write";
         public bool ReadyToWrite => !Held;
-        public bool KeepsLineBreaks => !keys;
+        public bool AppendOnly => keys;
+        public readonly List<TextSpan> Ranges = [];
         public LiveFieldState State() => new(7, LiveFieldState.Target, false, true, Value, Caret);
         public bool CanWriteRanges() => true;
         public bool Replace(TextSpan range, string text)
         {
+            Ranges.Add(range);
             if (DropNext) { DropNext = false; text = text[..(text.Length / 2)]; }
             Value = Value[..range.Start] + text + Value[range.End..]; Caret = new(range.Start + text.Length, 0); return true;
         }
         public bool Select(TextSpan range) { Caret = range; return true; }
+    }
+
+    /// Append-only fields (typed keys): a revised word stops live typing with no write; the end appends only
+    /// when the finished text starts with exactly the typed words; a cancel never removes anything.
+    static void AppendOnly()
+    {
+        {
+            var field = new Field("Note: ", keys: true); var slot = new LiveInlineSlot();
+            slot.Begin("a", field); slot.Reconcile("a", "harbor lights"); slot.Reconcile("a", "harbor lights glow");
+            var stop = slot.Reconcile("a", "harbor lighthouse keeper");
+            Check("append only: a word already typed being revised stops live typing with no write", stop == LiveStop.Revised && field.Value == "Note: harbor lights" && field.Ranges.Count == 1);
+            Check("append only: nothing more is typed for the take", slot.Reconcile("a", "harbor lights glow over the water") == null && field.Value == "Note: harbor lights");
+            var final = slot.Finalize("a", "harbor lights glow tonight.");
+            Check("append only: finished text starting with the typed words is appended after them", final.Result == LiveFinal.Applied && field.Value == "Note: harbor lights glow tonight." && field.Ranges.All(r => r.Length == 0));
+        }
+        {
+            var field = new Field("Note: ", keys: true); var slot = new LiveInlineSlot();
+            slot.Begin("b", field); slot.Reconcile("b", "harbor lights"); slot.Reconcile("b", "harbor lights glow");
+            var final = slot.Finalize("b", "Harbor lights glow.");
+            Check("append only: finished text that differs from the typed words leaves the field as it is (Copy card)", final.Result == LiveFinal.Kept && final.Stop == LiveStop.Revised && field.Value == "Note: harbor lights" && field.Ranges.Count == 1);
+        }
+        {
+            var field = new Field("Note: ", keys: true); var slot = new LiveInlineSlot();
+            slot.Begin("c", field); slot.Reconcile("c", "harbor lights"); slot.Reconcile("c", "harbor lights glow");
+            var cancel = slot.Cancel("c");
+            Check("append only: a cancel never removes the typed words", cancel.Result == LiveCancel.Left && field.Value == "Note: harbor lights" && field.Ranges.Count == 1);
+        }
+        {
+            var field = new Field("Note: ", keys: true); var slot = new LiveInlineSlot();
+            slot.Begin("d", field);
+            Check("append only: with nothing typed, the finished text goes in the normal way", slot.Finalize("d", "Harbor lights.").Result == LiveFinal.NotTyped && field.Ranges.Count == 0);
+        }
     }
 
     public static void Run()
@@ -82,7 +116,9 @@ internal static class DiagnosticChecks
             web.Held = false; webSlot.Reconcile("t2", "Tessaly copper kettle"); webSlot.Reconcile("t2", "Tessaly copper kettle lid");
             Check("keys typing resumes once the key is up", web.Value == "Tessaly copper kettle");
             var handed = webSlot.Finalize("t2", "Tessaly copper kettle.\nSecond line.");
-            Check("finished text with a line break takes pFlow's words back out and goes in the normal way", handed.Result == LiveFinal.NotTyped && web.Value == "");
+            Check("append only: finished text with a line break leaves the typed words and adds nothing (Copy card)", handed.Result == LiveFinal.Kept && web.Value == "Tessaly copper kettle");
+            Check("append only: no write ever replaced or removed characters", web.Ranges.All(range => range.Length == 0));
+            AppendOnly();
             recorder.EndTake(new DiagField("result", "Inserted"));
 
             string report = recorder.Report([new DiagField("cpu.name", "Fictional Core 5 125U"), new DiagField("pflow.installedIn", path)]);
@@ -92,7 +128,7 @@ internal static class DiagnosticChecks
                 stop == LiveStop.Uncertain && report.Contains("typing.stop reason=Uncertain stage=live writeAccepted=yes") && report.Contains("firstDifferenceAt="));
             Check("the report keeps every live window with its verdict", report.Split('\n').Count(l => l.Contains(" live.window ")) == 3 && report.Contains("tookMs=7000 limitMs=6000 slow=yes slowInARow=1"));
             Check("the report keeps each write with its method, size and read-back", report.Contains("typing.write stage=live method=\"range write\"") && report.Contains("readBackMatches=no") && report.Contains("method=keys"));
-            Check("the report says a held key paused typing and the line-break hand-back", report.Contains("typing.wait") && report.Contains("handed to the normal insert"));
+            Check("the report says a held key paused typing and the line-break hand-back", report.Contains("typing.wait") && report.Contains("mode=\"append only\""));
             Check("the take's summary counts its steps in insertion.log", compact.Any(l => l.StartsWith("diag take 1 ") && l.Contains("take.end") && l.Contains("live.window=3") && l.Contains("typing.write=")));
             Check("insertion.log gets the decisions, not every window", compact.Any(l => l.Contains("typing.stop")) && !compact.Any(l => l.Contains(" live.window ")));
             Check("no fixture word appears in the report or the log lines", !fixture.Any(word => everything.Contains(word, StringComparison.OrdinalIgnoreCase)));
