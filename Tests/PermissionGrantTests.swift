@@ -81,7 +81,9 @@ struct PermissionGrantTests {
         var blocked = false
         log.suspend = { if !blocked { blocked = true; _ = await iterator.next() } }
         async let first: Void = permissions.grantAccessibility(steps: log.steps(trusted: false))
-        await Task.yield()
+        // The row reset runs off the main actor now, so give the first press
+        // a few turns to reach its prompt before the second press lands.
+        for _ in 0..<20 where log.prompts == 0 { await Task.yield() }
         await permissions.grantAccessibility(steps: log.steps(trusted: false))
         #expect((log.resets, log.prompts) == (1, 1), "the second press must not reset and prompt again")
         gate.continuation.finish()

@@ -37,6 +37,14 @@ final class HUDController: HUDControlling {
             model.copied = true
         }
         model.onClose = { [weak self] in self?.hide(after: 0) }
+        remeasure()
+    }
+
+    /// The card grew or shrank (whole text, reason line, Grant row): measure
+    /// it again so the panel fits its content and stays on the screen.
+    private func remeasure() {
+        guard model.livePreview, let panel, panel.isVisible else { return }
+        panel.reposition(avoidingCaret: true)
     }
 
     // Built ahead of time: creating it on first use rendered an unlaid-out window for a frame — a flicker before "Listening" appeared.
@@ -110,11 +118,15 @@ final class HUDController: HUDControlling {
     }
 
     func setReason(_ reason: String?) {
+        guard model.reason != reason else { return }
         model.reason = reason
+        remeasure()
     }
 
     func setNeedsAccessibility(_ on: Bool) {
+        guard model.needsAccessibility != on else { return }
         model.needsAccessibility = on
+        remeasure()
     }
 
     func setLivePreview(_ on: Bool) {

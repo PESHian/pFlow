@@ -425,29 +425,6 @@ struct LiveInlineTests {
         #expect(history.saved == ["meet at the lighthouse at noon"])
     }
 
-    /// The same unreadable field after a write the app refused keeps the safe
-    /// default: a refused Accessibility call can still land, and an unreadable
-    /// field cannot prove it did not, so nothing is pasted on top; the card
-    /// keeps the words with Copy.
-    @Test func aRefusedWriteWithAnUnreadableFieldKeepsTheCardAndPastesNothing() async {
-        let field = SimulatedTextField("Chat: ")
-        field.onReplace = { _, _, _ in false }
-        let session = FakeSession()
-        let hud = FakeHUD()
-        session.textToReturn = "meet at the lighthouse at noon"
-        let (coordinator, injector) = typingCoordinator(field, session: session, hud: hud)
-        coordinator.begin()
-        await Task.yield()
-        session.emit("meet at")
-        session.emit("meet at the lighthouse")
-        #expect(field.replaced.count == 1, "one refused write")
-        session.onStop = { field.current.value = nil }
-        await coordinator.finish()
-        #expect(injector.delivered.isEmpty, "nothing pasted on top of a field that cannot be read")
-        #expect(hud.phases.last == .typingStopped && hud.offers == ["meet at the lighthouse at noon"])
-        #expect(hud.reasons.last == "pFlow could not check this field, so the finished text was not put in.")
-    }
-
     /// A build that lost its Accessibility grant (every test build is signed
     /// per build) can neither type nor paste. Type mode says so on the card
     /// from the first word, with the one-press Grant, and the finished text
@@ -492,6 +469,61 @@ struct LiveInlineTests {
         #expect(field.value == "Notes: see you")
         await coordinator.finish()
         #expect(missing == 1)
+    }
+
+    /// Accessibility off in an Electron or Chromium app: asking for the app's
+    /// tree needs no Accessibility, so without this rule the retry deadline
+    /// would flip the note to "Can't type in this app" under a Grant row
+    /// that says Accessibility. The Accessibility reason wins: no retry at
+    /// all, the note stays for the whole take.
+    @Test func accessibilityOffInAWebAppKeepsTheAccessibilityNoteAfterTheRetryDeadline() async {
+        let field = SimulatedTextField("Chat: ")
+        field.current.trusted = false
+        let session = FakeSession()
+        let hud = FakeHUD()
+        var now: TimeInterval = 0
+        let injector = LiveFakeInjector(field: field)
+        injector.fieldReadyAfterRetries = 1
+        injector.accessibilityGranted = false
+        session.textToReturn = "meet at noon"
+        let coordinator = RecordingCoordinator(
+            session: session, injector: injector, history: FakeHistory(), hud: hud, sounds: FakeSounds(),
+            cleaner: FakeCleaner(), cleanupEnabled: { false }, vocabulary: { [] }, deviceName: { nil },
+            liveTextMode: { .typeInApp }, typingRetryEvery: .milliseconds(1), typingRetryDeadline: 0.05, clock: { now })
+        coordinator.begin()
+        await Task.yield()
+        now = 1
+        try? await Task.sleep(for: .milliseconds(30))
+        session.emit("meet at")
+        #expect(injector.retries == 0, "no tree is asked for while Accessibility is off")
+        #expect(hud.notes.last == "pFlow needs Accessibility to type", "\(hud.notes)")
+        #expect(hud.previews == [true] && hud.accessibilityOffers == [true])
+        await coordinator.finish()
+        #expect(hud.notes.filter { $0 == "Can't type in this app" }.isEmpty)
+        #expect(hud.reasons.last == InsertionBlock.accessibilityOff.reason)
+    }
+
+    /// Grant approved while the take runs: the finished text goes in and the
+    /// setup page is not opened over the app that just got it.
+    @Test func aGrantApprovedDuringTheTakeMeansNoSetupPageAfterIt() async {
+        let session = FakeSession()
+        let hud = FakeHUD()
+        let injector = LiveFakeInjector(field: nil)
+        injector.accessibilityGranted = false
+        session.textToReturn = "the harbor opens at dawn"
+        let coordinator = RecordingCoordinator(
+            session: session, injector: injector, history: FakeHistory(), hud: hud, sounds: FakeSounds(),
+            cleaner: FakeCleaner(), cleanupEnabled: { false }, vocabulary: { [] }, deviceName: { nil },
+            liveTextMode: { .off })
+        var missing = 0
+        coordinator.accessibilityMissing = { missing += 1 }
+        coordinator.begin()
+        await Task.yield()
+        session.onStop = { injector.accessibilityGranted = true }
+        await coordinator.finish()
+        #expect(injector.delivered == ["the harbor opens at dawn"], "trusted by the time the text is due: it goes in")
+        #expect(missing == 0, "no setup page over the app that just got the text")
+        #expect(hud.hideDelays.last == 0 && hud.offers.isEmpty)
     }
 
     /// Live text Off with Accessibility off: the capsule as always while

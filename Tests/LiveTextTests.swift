@@ -389,6 +389,33 @@ struct LiveTextTests {
         #expect(hud.model.reason == nil && hud.model.copyOffer == nil)
     }
 
+    /// The panel is measured again when the card's content changes after it
+    /// is on screen: the whole text and the Grant row make it taller, and it
+    /// stays inside the screen. The capsule keeps 96x26 in every phase.
+    @Test func panelGrowsWithTheCopyCardAndStaysOnScreen() throws {
+        let hud = HUDController(pasteboard: NSPasteboard(name: .init("pflow.panel.tests.\(UUID().uuidString)")))
+        hud.show(device: nil, livePreview: false)
+        let panel = try #require(hud.panelForTesting)
+        hud.setPhase(.copied)
+        panel.reposition()
+        #expect(panel.frame.size == NSSize(width: RecordingHUDView.capsuleSize.width, height: RecordingHUDView.capsuleSize.height),
+                "the capsule is one size in every phase: \(panel.frame.size)")
+        hud.setLivePreview(true)
+        hud.setPhase(.savedToHistory)
+        let card = panel.frame.height
+        hud.setReason(InsertionBlock.accessibilityOff.reason)
+        hud.setNeedsAccessibility(true)
+        let withGrant = panel.frame.height
+        #expect(withGrant > card + 20, "the reason line and the Grant row add height: \(card) → \(withGrant)")
+        let words = (1...600).map { "word\($0)" }.joined(separator: " ")
+        hud.offerCopy(words)
+        let withText = panel.frame.height
+        #expect(withText > withGrant + 60, "the whole text adds height: \(withGrant) → \(withText)")
+        let screen = try #require(panel.screen)
+        #expect(screen.visibleFrame.contains(panel.frame), "\(panel.frame) in \(screen.visibleFrame)")
+        hud.hide(after: 0)
+    }
+
     @Test func cardKeepsOneSizeWhileWordsGrowAndShowsTheNoteInItsHeader() throws {
         var heights: [CGFloat] = []
         for words in ["", "Seven", "The lighthouse keeper counted seven blue kites over the quiet harbor, then waved goodbye to the pelicans and walked home along the sea wall, where the orchard lanterns glowed."] {

@@ -43,7 +43,7 @@ final class PermissionsManager {
         /// Clears pFlow's own Accessibility row. A row from an earlier build
         /// shows as ticked in System Settings while this build is not trusted,
         /// and while any row exists Apple's prompt will not show again.
-        var resetOwnRow: () -> Void
+        var resetOwnRow: () async -> Void
         /// Starts watching for Apple's prompt; the closure it returns answers
         /// whether a prompt window has appeared since the watch began.
         var watchForPrompt: () -> () -> Bool
@@ -61,7 +61,7 @@ final class PermissionsManager {
     /// nothing more is opened; a prompt that shows up later is left alone.
     static func grantAccessibility(_ steps: AccessibilityGrantSteps) async -> AccessibilityGrantOutcome {
         if steps.isTrusted() { return .alreadyTrusted }
-        steps.resetOwnRow()
+        await steps.resetOwnRow()
         let promptAppeared = steps.watchForPrompt()
         steps.prompt()
         for _ in 0..<promptWaits {
@@ -103,7 +103,7 @@ final class PermissionsManager {
     private var liveAccessibilitySteps: AccessibilityGrantSteps {
         AccessibilityGrantSteps(
             isTrusted: { AXIsProcessTrusted() },
-            resetOwnRow: { Self.resetOwnAccessibilityRow() },
+            resetOwnRow: { await Self.resetOwnAccessibilityRow() },
             watchForPrompt: { Self.watchForAccessibilityPrompt() },
             prompt: { Self.promptForAccessibility() },
             openSettings: { Self.openPrivacyPane(.accessibility) },
@@ -268,20 +268,24 @@ final class PermissionsManager {
     /// carry one stable requirement (scripts/mac_release.py), but a row made
     /// by an older build stays ticked in System Settings while this build is
     /// not trusted. `tccutil` clears only pFlow's own row and needs no admin.
-    private static func resetOwnAccessibilityRow() {
+    /// Runs off the main actor: a press of Grant during a take must not
+    /// stop the waveform or the live words while tccutil finishes.
+    private static func resetOwnAccessibilityRow() async {
         guard let bundleID = Bundle.main.bundleIdentifier else { return }
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
-        task.arguments = ["reset", "Accessibility", bundleID]
-        do {
-            try task.run()
-            task.waitUntilExit()
-            if task.terminationStatus != 0 {
-                NSLog("pFlow: tccutil reset exited \(task.terminationStatus)")
+        await Task.detached(priority: .userInitiated) {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+            task.arguments = ["reset", "Accessibility", bundleID]
+            do {
+                try task.run()
+                task.waitUntilExit()
+                if task.terminationStatus != 0 {
+                    NSLog("pFlow: tccutil reset exited \(task.terminationStatus)")
+                }
+            } catch {
+                NSLog("pFlow: tccutil reset failed: \(error.localizedDescription)")
             }
-        } catch {
-            NSLog("pFlow: tccutil reset failed: \(error.localizedDescription)")
-        }
+        }.value
     }
 
     private static func promptForAccessibility() {

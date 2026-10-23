@@ -13,8 +13,11 @@ enum InsertionBlock: Equatable {
     case appChanged
     case fieldChanged
     case textChanged
-    /// A key was still held, or the take was cancelled, when the paste was due.
+    case caretMoved
+    /// A key was still held when the paste was due.
     case interrupted
+    /// The take was cancelled while the paste was waiting.
+    case cancelled
     case clipboard
     case nothingToInsert
     /// Live typing wrote into the field and then stopped for this reason.
@@ -27,7 +30,9 @@ enum InsertionBlock: Equatable {
         case .appChanged: return "You switched windows, so the text was not put in."
         case .fieldChanged: return "Can't reach this field, so the text was not put in."
         case .textChanged: return "The text in the field changed, so the words were not put in."
+        case .caretMoved: return "The cursor moved, so the text was not put in."
         case .interrupted: return "A key was still held down, so the text was not put in."
+        case .cancelled: return "The take was cancelled before the text could go in."
         case .clipboard: return "The clipboard could not be used, so the text was not put in."
         case .nothingToInsert: return "There was no text to put in."
         case .typingStopped(let stop): return stop.cardReason
@@ -147,7 +152,7 @@ final class TextInjector: TextInjecting {
         if let originalValue, attribute(focused, kAXValueAttribute) as? String != originalValue { return .textChanged }
         if let originalSelection {
             guard let current = selection(focused), current.location == originalSelection.location,
-                  current.length == originalSelection.length else { return .textChanged }
+                  current.length == originalSelection.length else { return .caretMoved }
         }
         return nil
     }
@@ -257,7 +262,8 @@ final class TextInjector: TextInjecting {
         if let block = targetBlock() { return unavailable(block) }
         await waitForModifiersToClear()
         let held: NSEvent.ModifierFlags = [.command, .shift, .option, .control, .function]
-        guard !Task.isCancelled, NSEvent.modifierFlags.intersection(held).isEmpty else { return unavailable(.interrupted) }
+        guard !Task.isCancelled else { return unavailable(.cancelled) }
+        guard NSEvent.modifierFlags.intersection(held).isEmpty else { return unavailable(.interrupted) }
         guard !SecureInput.isEnabled else { return unavailable(.secureInput, .blockedBySecureInput(SecureInput.holderName())) }
         if let block = targetBlock() { return unavailable(block) }
 
@@ -281,7 +287,7 @@ final class TextInjector: TextInjecting {
         }
         try? await Task.sleep(nanoseconds: UInt64(Self.prePasteDelay * 1_000_000_000))
         let owned = PasteboardSnapshot.isOwned(pasteboard, change: change, session: sessionID)
-        let lateBlock: InsertionBlock? = Task.isCancelled ? .interrupted
+        let lateBlock: InsertionBlock? = Task.isCancelled ? .cancelled
             : SecureInput.isEnabled ? .secureInput
             : targetBlock() ?? (owned ? nil : .clipboard)
         if let lateBlock {

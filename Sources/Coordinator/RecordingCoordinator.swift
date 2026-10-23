@@ -82,9 +82,19 @@ final class RecordingCoordinator {
         self.take = take
         transcript.begin(session: take)
         // Checked before pFlow shows anything, against the field just captured.
+        // Checked fresh every take, never cached: a grant made since the
+        // last take counts now. Off, the Accessibility reason wins over
+        // everything else: no live typing is tried, no Electron tree is
+        // asked for (that would end in "Can't type in this app" while the
+        // Grant row still says Accessibility), and the card shows the
+        // words with the note and the Grant button from the first word.
         var liveNote: String?
         typingLive = false
-        if takeLiveTextMode == .typeInApp {
+        takeAccessibilityOff = !injector.accessibilityGranted
+        if takeAccessibilityOff {
+            NSLog("pFlow: Accessibility is off for this build; words cannot be typed or pasted this take")
+        }
+        if takeLiveTextMode == .typeInApp, !takeAccessibilityOff {
             switch injector.beginLive(session: take) {
             case .typing:
                 typingLive = true
@@ -97,13 +107,6 @@ final class RecordingCoordinator {
             case .preview(let stop):
                 liveNote = stop.previewNote
             }
-        }
-        // Checked fresh every take, never cached: a grant made since the
-        // last take counts now. Off, the words show on the card with the
-        // reason and the Grant button; the final text ends on the Copy card.
-        takeAccessibilityOff = !injector.accessibilityGranted
-        if takeAccessibilityOff {
-            NSLog("pFlow: Accessibility is off for this build; words cannot be typed or pasted this take")
         }
         let accessibilityCard = takeAccessibilityOff && takeLiveTextMode.showsPreview
         if accessibilityCard { liveNote = Self.needsAccessibilityNote }
@@ -479,9 +482,13 @@ final class RecordingCoordinator {
         state = .idle
     }
 
+    /// After a take that started without Accessibility: only if it is still
+    /// off now. A grant approved during the take needs no setup page, and
+    /// pFlow must not come to the front over an app it just pasted into.
     private func noteAccessibilityIfMissing() {
         guard takeAccessibilityOff else { return }
         takeAccessibilityOff = false
+        guard !injector.accessibilityGranted else { return }
         accessibilityMissing?()
     }
 
