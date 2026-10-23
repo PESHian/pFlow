@@ -32,13 +32,18 @@ internal static partial class Program
             File.WriteAllText(Path.Combine(root, turbo.FileName + "." + Guid.NewGuid() + ".download"), "partial");
             Check("a partial download of any speech model is swept", whisper.SweepPartials() == 1 && Directory.GetFiles(root, "*.download").Length == 0);
 
-            // Settings: tiles, rows and the saved choice.
-            var store = new StateStore(root);
+            // Settings: tiles, rows and the saved choice, in both themes; PFLOW_SHOTS writes speech-models-{theme}.png of the card.
+            foreach (string theme in new[] { "dark", "light" }) {
+            var store = new StateStore(root); store.Preferences.Theme = theme; store.Preferences.SpeechModel = SpeechModels.Small.Id; store.SavePreferences();
             using var hook = new KeyboardHook(_ => { }) { Enabled = false };
             var picked = new Whisper(root, root) { ChosenId = () => store.Preferences.SpeechModel };
             var settings = new SettingsWindow(store, picked, new LocalTextModel(root), hook, () => { }, () => false) { ShowActivated = false, Width = 460, Height = 740 };
             try {
                 settings.Show(); settings.UpdateLayout(); Drain();
+                if (Environment.GetEnvironmentVariable("PFLOW_SHOTS") is { } shots) {
+                    Descendants<TextBlock>(settings).First(t => t.Text == "Speech model").BringIntoView(); settings.UpdateLayout(); Drain();
+                    Shoot(settings, Path.Combine(shots, $"speech-models-{theme}.png"), theme == "light");
+                }
                 var tiles = Descendants<RadioButton>(settings).Where(r => r.GroupName == "SpeechModel").ToList();
                 Check("every speech model is a visible tile, in the catalogue's order", tiles.Select(t => (string)t.Tag).SequenceEqual(SpeechModels.All.Select(m => m.Id)) && tiles.All(t => t.IsVisible));
                 Check("small is the chosen tile; only the model with its file here can be chosen", tiles.Single(t => (string)t.Tag == SpeechModels.Small.Id).IsChecked == true
@@ -53,6 +58,7 @@ internal static partial class Program
                 Check("choosing a tile saves the choice and the line under the tiles names the model in use", new StateStore(root).Preferences.SpeechModel == turbo.Id && picked.InUse == turbo
                     && Descendants<TextBlock>(settings).Any(t => t.Text == picked.ModelStatus && t.Text.Contains(turbo.Title)));
             } finally { settings.Close(); }
+            }
         } finally { Directory.Delete(root, true); }
     }
 }
