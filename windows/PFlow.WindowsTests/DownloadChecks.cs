@@ -62,17 +62,17 @@ internal static partial class Program
                     string tag = $"{theme} {width:F0}: ";
                     var controls = Descendants<DownloadControl>(settings).ToList();
                     var textControl = controls.Single(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Text model download");
-                    var speechControl = controls.Single(c => System.Windows.Automation.AutomationProperties.GetName(c) == SpeechModels.Turbo.Title + " download");
-                    var textCard = CardAround(textControl); var speechCard = CardAround(speechControl);
-                    Check(tag + "the text model control is in the Report templates card, the Whisper one in Speech recognition, each bar under its own button",
-                        textCard != speechCard && Descendants<CheckBox>(textCard).Any(c => (string)c.Content == "Use the local text model for report templates") && Descendants<ComboBox>(speechCard).Any(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Speech language")
-                        && Descendants<ProgressBar>(textControl).Count() == 1 && Descendants<ProgressBar>(speechControl).Count() == 1 && !Descendants<ProgressBar>(textCard).Except(Descendants<ProgressBar>(textControl)).Any());
-                    Check(tag + "before any download the text card shows one Download button, the speech card one per model, and no Cancel", Descendants<Button>(textCard).Count(b => b.IsVisible && b.Content is string s && s.StartsWith("Download")) == 1
-                        && Descendants<Button>(speechCard).Count(b => b.IsVisible && b.Content is string s && s.StartsWith("Download")) == SpeechModels.All.Count(m => !m.Bundled) && !Descendants<Button>(settings).Any(b => b.IsVisible && b.Content as string == "Cancel")
+                    var language = Descendants<ComboBox>(settings).Single(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Speech language");
+                    var textCard = CardAround(textControl); var speechCard = CardAround(language);
+                    Check(tag + "the text model control is in the Report templates card with its bar under its button; Speech recognition names Whisper small and has no download",
+                        textCard != speechCard && Descendants<CheckBox>(textCard).Any(c => (string)c.Content == "Use the local text model for report templates") && Descendants<TextBlock>(speechCard).Any(t => t.IsVisible && t.Text == SpeechModels.SettingsLine)
+                        && Descendants<ProgressBar>(textControl).Count() == 1 && !Descendants<DownloadControl>(speechCard).Any() && controls.Count == 1 && !Descendants<ProgressBar>(textCard).Except(Descendants<ProgressBar>(textControl)).Any());
+                    Check(tag + "before any download Settings shows one Download button, the text model's, and no Cancel", Descendants<Button>(textCard).Count(b => b.IsVisible && b.Content is string s && s.StartsWith("Download")) == 1
+                        && Descendants<Button>(settings).Count(b => b.IsVisible && b.Content is string s && s.StartsWith("Download")) == 1 && !Descendants<Button>(settings).Any(b => b.IsVisible && b.Content as string == "Cancel")
                         && !Descendants<Button>(settings).Any(b => b.IsVisible && b.Content as string == "Cancel download"));
                     Check(tag + "the Settings line says no model is in use yet and the button carries the model's size", Descendants<TextBlock>(textCard).Any(t => t.IsVisible && t.Text == "Local AI is unavailable until its model is installed. Plain dictation still works.")
-                        && Descendants<Button>(textCard).Any(b => b.IsVisible && b.Content as string == $"Download ({FileSize.Describe(LocalTextModel.Current.Size)})") && Descendants<Button>(speechCard).Any(b => b.IsVisible && b.Content as string == $"Download ({FileSize.Describe(SpeechModels.Turbo.Bytes)})") && !Descendants<Button>(speechCard).Any(b => b.IsVisible && b.Content as string == "Download (488 MB)"));
-                    textControl.Show(DownloadState.Downloading, 120_000_000); speechControl.Show(DownloadState.Downloading, 61_000_000); settings.UpdateLayout(); Drain();
+                        && Descendants<Button>(textCard).Any(b => b.IsVisible && b.Content as string == $"Download ({FileSize.Describe(LocalTextModel.Current.Size)})"));
+                    textControl.Show(DownloadState.Downloading, 120_000_000); settings.UpdateLayout(); Drain();
                     var bar = Descendants<ProgressBar>(textControl).Single(); var button = Descendants<Button>(textControl).Single(b => b.IsVisible);
                     var barAt = bar.TranslatePoint(new Point(0, 0), settings); var lineAt = textControl.Children.OfType<TextBlock>().Single(t => t.IsVisible).TranslatePoint(new Point(0, 0), settings);
                     var cardAt = textCard.TranslatePoint(new Point(0, 0), settings); var nextCard = speechCard.TranslatePoint(new Point(0, 0), settings);
@@ -105,33 +105,6 @@ internal static partial class Program
             } finally { server.Stop(); try { serving.Wait(2000); } catch (Exception) { } if (Directory.Exists(root)) Directory.Delete(root, true); }
         }
 
-        // Whisper.Download against a local server (fictional bytes): a wrong checksum and an oversized body leave
-        // no partial file and move nothing; a good file is moved into place, verified, and clears a damaged mark.
-        {
-            string root = Path.Combine(Path.GetTempPath(), "pflow-speech-download-fictional-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
-            var good = new byte[3 * 1024 * 1024 + 17]; new Random(11).NextBytes(good);
-            var model = SpeechModels.Turbo with { Id = "fictional-download", FileName = "fictional-speech-model.bin", Sha = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(good)), Bytes = good.Length };
-            var whisper = new Whisper(root, root);
-            string? Fetch(byte[] body) {
-                using var server = new HttpListener(); int port = Random.Shared.Next(20000, 60000); server.Prefixes.Add($"http://127.0.0.1:{port}/"); server.Start();
-                var serving = Task.Run(async () => { var context = await server.GetContextAsync(); context.Response.ContentLength64 = body.Length; try { await context.Response.OutputStream.WriteAsync(body); } catch (Exception) { } finally { try { context.Response.Close(); } catch (Exception) { } } });
-                try { whisper.Download(model with { Url = $"http://127.0.0.1:{port}/fictional-speech-model.bin" }, new Progress<double>(), CancellationToken.None).GetAwaiter().GetResult(); return null; }
-                catch (InvalidDataException error) { return error.Message; }
-                finally { server.Stop(); try { serving.Wait(2000); } catch (Exception) { } }
-            }
-            string target = Path.Combine(root, model.FileName);
-            try {
-                var wrong = (byte[])good.Clone(); wrong[^1] ^= 0x5A;
-                string? refused = Fetch(wrong);
-                Check($"a download with the wrong checksum is refused, its temporary file deleted and nothing moved into place ({refused})", refused?.Contains("checksum did not match") == true && Directory.GetFiles(root).Length == 0 && !whisper.Installed(model));
-                refused = Fetch([.. good, .. new byte[2 * 1024 * 1024]]);
-                Check($"an oversized download is refused, its temporary file deleted and nothing moved into place ({refused})", refused == "Model download was larger than expected." && Directory.GetFiles(root).Length == 0 && !whisper.Installed(model));
-                whisper.MarkDamaged(model);
-                Check("a good download is moved into place with its exact bytes, leaves no temporary file and clears the damaged mark", Fetch(good) == null
-                    && File.ReadAllBytes(target).AsSpan().SequenceEqual(good) && Directory.GetFiles(root).Length == 1 && !whisper.IsDamaged(model) && whisper.Installed(model));
-            } finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
-        }
-
         // The model in use, by the file on this PC (fictional bytes, the name only).
         {
             string root = Path.Combine(Path.GetTempPath(), "pflow-models-fictional-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
@@ -157,11 +130,11 @@ internal static partial class Program
                 using var hook = new KeyboardHook(_ => { }) { Enabled = false };
                 var settings = new SettingsWindow(new StateStore(root), new Whisper(root), model, hook, () => { }, () => false) { ShowActivated = false };
                 settings.Show(); settings.UpdateLayout(); Drain();
-                // No text model control; the speech models keep one control each.
-                bool noControl = !Descendants<DownloadControl>(settings).Any(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Text model download") && Descendants<DownloadControl>(settings).Count() == SpeechModels.All.Count(m => !m.Bundled);
+                // No text model control, and no other download either (the speech model is included).
+                bool noControl = !Descendants<DownloadControl>(settings).Any(c => System.Windows.Automation.AutomationProperties.GetName(c) == "Text model download") && !Descendants<DownloadControl>(settings).Any();
                 bool reason = Descendants<TextBlock>(settings).Any(t => t.Text == LocalTextModel.UnsupportedReason);
                 settings.Close(); Drain();
-                Check("with the local model unsupported Settings shows the reason, only the speech model downloads, and closes without an error", noControl && reason && !settings.IsVisible && !model.FilesPresent);
+                Check("with the local model unsupported Settings shows the reason, no download at all, and closes without an error", noControl && reason && !settings.IsVisible && !model.FilesPresent);
             } finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
         }
 

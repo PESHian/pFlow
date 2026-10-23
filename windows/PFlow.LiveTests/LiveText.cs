@@ -95,8 +95,6 @@ internal static partial class Program
         return report;
     }
 
-    /// Progress reported on the download's own thread (no synchronization context to wait for).
-    sealed class Reported(Action<double> on) : IProgress<double> { public void Report(double value) => on(value); }
 
     static void Print(TakeReport report)
     {
@@ -150,40 +148,6 @@ internal static partial class Program
                     Check(name + " preview cleared after the take", !preview.IsVisible && preview.Shown == "");
                 }
                 reports.Add(report);
-            }
-            // A take while a speech model downloads (a local server trickling fictional bytes, never finishing): the
-            // download holds no recognition lock, so the take shows live words and finishes on the model in use in
-            // its normal time. When the download held the lock, this take waited in "Transcribing" until it ended.
-            {
-                var hold = reports[0];
-                using var server = new System.Net.HttpListener(); int port = Random.Shared.Next(20000, 60000); server.Prefixes.Add($"http://127.0.0.1:{port}/"); server.Start();
-                using var stopServing = new CancellationTokenSource();
-                const long claimed = 64L * 1024 * 1024;
-                var serving = Task.Run(async () => {
-                    var context = await server.GetContextAsync(); context.Response.ContentLength64 = claimed;
-                    try { var chunk = new byte[16 * 1024]; while (!stopServing.IsCancellationRequested) { await context.Response.OutputStream.WriteAsync(chunk); await context.Response.OutputStream.FlushAsync(); await Task.Delay(200); } }
-                    catch (Exception) { } finally { try { context.Response.Abort(); } catch (Exception) { } }
-                });
-                var trickle = SpeechModels.Turbo with { Id = "fictional-trickle", FileName = "fictional-trickle-model.bin", Url = $"http://127.0.0.1:{port}/fictional-trickle-model.bin", Bytes = claimed };
-                using var cancelDownload = new CancellationTokenSource(); var receiving = new TaskCompletionSource();
-                var download = Task.Run(() => whisper.Download(trickle, new Reported(_ => receiving.TrySetResult()), cancelDownload.Token));
-                bool started = await Task.WhenAny(receiving.Task, Task.Delay(15000)) == receiving.Task;
-                var during = await FeedTake("during a download", "latency-long.wav", LiveTextModes.TypeInApp, false, whisper, store, preview, capsule);
-                capsule.Set(PFlow.Core.Phase.Processing); preview.Finishing();
-                cancelDownload.CancelAfter(TimeSpan.FromSeconds(60)); // a take stuck behind the download still ends the check
-                var final = Stopwatch.StartNew();
-                var prepared = await pipeline.Prepare(Path.Combine(root, "latency-long.wav"), during.AudioMs / 1000, directory, (_, _) => { }, CancellationToken.None);
-                during.FinalMs = final.Elapsed.TotalMilliseconds; during.Final = prepared.Text; Print(during);
-                bool stillDownloading = !download.IsCompleted;
-                capsule.Set(PFlow.Core.Phase.Inserted); preview.Clear();
-                cancelDownload.Cancel(); stopServing.Cancel();
-                bool canceled = false; try { await download; } catch (OperationCanceledException) { canceled = true; }
-                server.Stop(); try { await serving.WaitAsync(TimeSpan.FromSeconds(2)); } catch (Exception) { }
-                Console.WriteLine($"LIVE during download: first words {during.FirstUpdateMs:F0}ms, final {during.FinalMs:F0}ms (hold without a download {hold.FinalMs:F0}ms), download still running {stillDownloading}");
-                Check($"a take during a speech-model download shows live words and finishes on the model in use in its normal time (first {during.FirstUpdateMs:F0} ms, final {during.FinalMs:F0} ms vs {hold.FinalMs:F0} ms)",
-                    started && stillDownloading && during.UpdatesBeforeEnd >= 3 && during.FirstUpdateMs > 0 && during.FirstUpdateMs < 4000 && during.FinalMs <= hold.FinalMs * 2 + 3000
-                    && Words(prepared.Text).EndsWith(Words("to its owner")) && whisper.LastMetrics.Reused);
-                Check("the download canceled after the take leaves no partial file and nothing in place", canceled && !Directory.EnumerateFiles(directory, "fictional-trickle-model.bin*").Any());
             }
             var on = reports[1]; var off = reports[2];
             Console.WriteLine($"LIVE cpu same narration: on={on.CpuSeconds:F1}s off={off.CpuSeconds:F1}s ({on.CpuSeconds / on.AudioMs * 100000:F0}% vs {off.CpuSeconds / off.AudioMs * 100000:F0}% of one core); peak worker on={on.PeakWorkerBytes / 1048576}MB off={off.PeakWorkerBytes / 1048576}MB; final on={on.FinalMs:F0}ms off={off.FinalMs:F0}ms");

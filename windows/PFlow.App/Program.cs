@@ -54,11 +54,12 @@ internal sealed partial class Program : Application
             StaleCopies.RepointRunKey(); StaleCopies.ListenForNewerCopy(() => Dispatcher.InvokeAsync(Quit));
             StaleCopies.ListenForOpenSettings(() => Dispatcher.InvokeAsync(OpenSettings)); StaleCopies.ListenForUninstall(() => Dispatcher.InvokeAsync(QuitForUninstall));
             _ = Task.Run(Uninstaller.Register);
-            store = new StateStore(directory); whisper = new Whisper(directory) { ChosenId = () => store.Preferences.SpeechModel };
+            store = new StateStore(directory); whisper = new Whisper(directory);
             InsertionLog.Path = Path.Combine(directory, "insertion.log");
             textModel = new LocalTextModel(directory);
+            // The speech models 0.1.25 could download are gone in 0.1.26: their files are deleted before the worker starts.
+            try { whisper.RemoveRetiredModels(); whisper.SweepPartials(); textModel.SweepPartials(); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
             _ = Task.Run(async () => { try { await whisper.Prewarm(); } catch { /* Recording retries and reports a load error when needed. */ } });
-            try { whisper.SweepPartials(); textModel.SweepPartials(); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
             _ = Task.Run(async () => { try { await textModel.Prewarm(); } catch { /* The next take verifies the file and reports it. */ } });
             // Only our abandoned private recording folders are removed. History/settings remain.
             foreach (var stale in Directory.EnumerateDirectories(directory, "recording-*")) Directory.Delete(stale, true);
@@ -124,7 +125,7 @@ internal sealed partial class Program : Application
     }
     /// Typing in the app ended for this take. The note is kept for the take's
     /// status; the recording control stays, and the finished words go in at the end.
-    void ShowCard(string note) => preview.SetNote(note);
+    void ShowCard(string note) { preview.SetNote(note); InsertionLog.Record("live: " + note); }
     /// The words typed live for this take, as the pipeline finishes it.
     LiveTyping? TypingFor(string? session) => session == null ? null
         : new LiveTyping(text => typing.Finalize(session, text), () => typing.Typed(session), () => typing.Cancel(session));
@@ -178,6 +179,7 @@ internal sealed partial class Program : Application
                         // Checked against the field just captured, before any pFlow window shows.
                         var refused = typing.Begin(recognizer.SessionName, target.LiveField());
                         if (refused == null) typingSession = recognizer.SessionName;
+                        else InsertionLog.Record("live typing not started: " + refused);
                         preview.SetNote(refused is LiveStop stop ? LiveInlineText.PreviewNote(stop) : target.TypingNote);
                     }
                     card = LiveTextModes.ShowsCard(mode, typingSession != null);
@@ -218,6 +220,8 @@ internal sealed partial class Program : Application
                 // Live windows end before the final pass, so it never waits behind them.
                 stop.Restart(); liveWords = await takeLive.Stop(); timing["liveStopMs"] = stop.Elapsed.TotalMilliseconds;
                 timing["liveWindows"] = takeLive.Session.Inferences;
+                // Type mode: whether live words reached the app (the note says why when they stopped).
+                InsertionLog.Record("live: windows=" + takeLive.Session.Inferences + " typed=" + (takeTyping != null && typing.Typed(takeTyping)));
             }
             if (seconds < 0.3) { CancelTyping(takeTyping); Set(Phase.Canceled); return; }
             Cue(false);

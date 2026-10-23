@@ -8,7 +8,7 @@ using System.Windows.Media;
 internal static partial class Program
 {
     /// Settings pages scroll by pixel in proportion to the wheel's delta (SmoothScroll): a notch is
-    /// 48 px, a touchpad's quarter notch 12 px, and a box under the pointer takes the wheel only while
+    /// 48 px (gliding there), a touchpad's quarter notch 12 px, and a box under the pointer takes the wheel only while
     /// it can still move that way. The scripted scroll prints its frame numbers.
     static void NativeScroll()
     {
@@ -16,6 +16,21 @@ internal static partial class Program
         var frames = ScrollFrames(true);
         Check("40 touchpad events of a quarter notch move the page 480 px, not 1920", Math.Abs(frames.SmallMoved - 480) < 1);
         Check("10 notches move the page 480 px", Math.Abs(frames.NotchMoved - 480) < 1);
+        // One notch glides instead of jumping: right after the event the page has not moved the whole notch;
+        // once the glide's frames have run it has. A touchpad delta moves at once.
+        {
+            var filler = new StackPanel(); for (int i = 0; i < 200; i++) filler.Children.Add(new TextBlock { Text = "filler " + i });
+            var glidePage = SettingsWindow.Scroll(filler); var glideWindow = new Window { Width = 300, Height = 240, Content = glidePage, ShowActivated = false };
+            try {
+                glideWindow.Show(); glideWindow.UpdateLayout(); Drain();
+                SmoothScroll.Wheel(glidePage, -120); glidePage.UpdateLayout(); double right = glidePage.VerticalOffset; bool gliding = SmoothScroll.Gliding(glidePage);
+                for (var wait = System.Diagnostics.Stopwatch.StartNew(); SmoothScroll.Gliding(glidePage) && wait.ElapsedMilliseconds < 3000;) { Drain(); System.Threading.Thread.Sleep(5); }
+                glidePage.UpdateLayout();
+                Check($"a notch glides: {right:F0} px at once, {glidePage.VerticalOffset:F0} px when it lands", gliding && right < 48 && Math.Abs(glidePage.VerticalOffset - 48) < 1);
+                double at = glidePage.VerticalOffset; SmoothScroll.Wheel(glidePage, -30); glidePage.UpdateLayout();
+                Check("a touchpad's quarter notch moves 12 px at once, with no glide", Math.Abs(glidePage.VerticalOffset - at - 12) < 1 && !SmoothScroll.Gliding(glidePage));
+            } finally { glideWindow.Close(); }
+        }
         // The target rule on a page with a short and a long text box under the pointer.
         var shortBox = new TextBox { Text = "one line", Height = 60, AcceptsReturn = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
         var longBox = new TextBox { Text = string.Join("\n", Enumerable.Range(1, 80).Select(i => "fictional line " + i)), Height = 60, AcceptsReturn = true, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };

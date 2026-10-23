@@ -39,22 +39,14 @@ internal static partial class Program
         return (double)row[h.Length] / r.Length;
     }
 
-    /// model=<id> runs the finished text on that speech model: its file is taken from <root>\models.
-    static void ChooseModel(StateStore store, string directory)
-    {
-        if (SpeedOption("model", "") is not { Length: > 0 } modelId) return;
-        var chosen = SpeechModels.Resolve(modelId); if (chosen.Id != modelId) throw new Exception("unknown speech model " + modelId);
-        if (!chosen.Bundled) File.Copy(Path.Combine(root, "models", chosen.FileName), Path.Combine(directory, chosen.FileName));
-        store.Preferences.SpeechModel = chosen.Id;
-    }
     /// --wer files=a.wav,b.wav [model=<id>] label=name: the finished-text pass alone (no live feed), one
     /// warm pass per file after a prewarm: recognition time and word error rate against the fixture text.
     static async Task Wer()
     {
         string directory = Path.Combine(root, "wer-fictional-" + Guid.NewGuid()); Directory.CreateDirectory(directory);
-        var store = new StateStore(directory); store.Preferences.Language = "en"; ChooseModel(store, directory);
-        var whisper = new Whisper(directory, PackageAssets) { ChosenId = () => store.Preferences.SpeechModel };
-        string label = SpeedOption("label", "run") + (SpeedOption("model", "") is { Length: > 0 } m ? "-" + m : "");
+        var store = new StateStore(directory); store.Preferences.Language = "en";
+        var whisper = new Whisper(directory, PackageAssets);
+        string label = SpeedOption("label", "run");
         var rows = new List<Dictionary<string, object>>();
         try {
             var warm = Stopwatch.StartNew(); await whisper.Prewarm(); double prewarmMs = warm.Elapsed.TotalMilliseconds;
@@ -65,7 +57,7 @@ internal static partial class Program
                 var clock = Stopwatch.StartNew();
                 var prepared = await pipeline.Prepare(Path.Combine(root, audio), seconds, directory, (_, _) => { }, CancellationToken.None);
                 string reference = Reference(audio);
-                rows.Add(new() { ["label"] = label, ["model"] = whisper.InUse.Id, ["file"] = audio, ["audioMs"] = Math.Round(seconds * 1000), ["prewarmMs"] = Math.Round(prewarmMs),
+                rows.Add(new() { ["label"] = label, ["model"] = "small", ["file"] = audio, ["audioMs"] = Math.Round(seconds * 1000), ["prewarmMs"] = Math.Round(prewarmMs),
                     ["recognitionMs"] = Math.Round(timing.GetValueOrDefault("recognitionMs", -1)), ["totalMs"] = Math.Round(clock.Elapsed.TotalMilliseconds),
                     ["audioContext"] = whisper.LastMetrics.AudioContext, ["final"] = prepared.Text, ["wordErrorRate"] = Math.Round(WordErrorRate(prepared.Text, reference), 4),
                     ["referenceWords"] = Words(reference).Split(' ', StringSplitOptions.RemoveEmptyEntries).Length });
@@ -84,10 +76,9 @@ internal static partial class Program
     {
         string directory = Path.Combine(root, "speed-fictional-" + Guid.NewGuid()); Directory.CreateDirectory(directory);
         var store = new StateStore(directory); store.Preferences.Language = "en";
-        ChooseModel(store, directory);
-        await using var whisper = new Whisper(directory, PackageAssets) { ChosenId = () => store.Preferences.SpeechModel };
+        await using var whisper = new Whisper(directory, PackageAssets);
         var capsule = new Capsule(store); var preview = new LivePreview(store);
-        string label = SpeedOption("label", "run") + (SpeedOption("model", "") is { Length: > 0 } m ? "-" + m : "");
+        string label = SpeedOption("label", "run");
         var rows = new List<Dictionary<string, object>>();
         try {
             // cpus=N stands in for a computer with N logical processors: the worker is sized for N (final and live thread
@@ -113,7 +104,7 @@ internal static partial class Program
                 var gaps = report.Updates.Where(u => u.Ms <= report.AudioEndMs).Zip(report.Updates.Skip(1).Where(u => u.Ms <= report.AudioEndMs), (a, b) => b.Ms - a.Ms).OrderBy(x => x).ToList();
                 string reference = Reference(audio);
                 rows.Add(new() {
-                    ["label"] = label, ["model"] = whisper.InUse.Id, ["file"] = audio, ["mode"] = report.Mode, ["take"] = take, ["cold"] = take == 1, ["prewarmMs"] = Math.Round(prewarmMs),
+                    ["label"] = label, ["model"] = "small", ["file"] = audio, ["mode"] = report.Mode, ["take"] = take, ["cold"] = take == 1, ["prewarmMs"] = Math.Round(prewarmMs),
                     ["audioMs"] = Math.Round(report.AudioMs), ["firstWordsMs"] = Math.Round(report.FirstUpdateMs), ["updatesBeforeEnd"] = report.UpdatesBeforeEnd,
                     ["medianGapMs"] = gaps.Count > 0 ? Math.Round(gaps[gaps.Count / 2]) : -1, ["windows"] = report.Windows,
                     ["liveStopMs"] = Math.Round(report.StopMs), ["recognitionMs"] = Math.Round(timing.GetValueOrDefault("recognitionMs", -1)),

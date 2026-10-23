@@ -64,9 +64,10 @@ internal static partial class Program
         waveCaptureOnly = args.Contains("--wave-capture-only"); waveformsOnly = args.Contains("--waveforms-only") || waveCaptureOnly; payloadSpacingOnly = args.Contains("--payload-spacing-only"); payloadOnly = args.Contains("--payload-only") || payloadSpacingOnly;
         finalPriorityOnly = args.Contains("--final-priority"); touchScrollOnly = args.Contains("--touch-scroll"); touchCapsuleOnly = args.Contains("--touch-capsule"); chromiumOnly = args.Contains("--chromium-fields"); chromiumColdOnly = args.Contains("--chromium-cold");
         SpeedArguments(args);
+        scrollFramesOnly = args.Contains("--scroll-frames"); ownerStateOnly = args.Contains("--owner-state");
         liveTextOnly = args.Contains("--live-text-only"); liveFocusOnly = args.Contains("--live-focus-only"); inlineOnly = args.Contains("--inline-only"); inlineElevatedOnly = args.Contains("--inline-elevated");
         workerSafetyOnly = args.Contains("--worker-safety-only"); extendedLatencyOnly = args.Contains("--extended-latency-only"); insertionLatencyOnly = args.Contains("--insertion-latency-only"); warmLatencyOnly = args.Contains("--warm-latency-only"); speechOnly = args.Contains("--speech-only");
-        if (statisticsOnly || templateCatalogOnly || appearanceOnly || appearanceRenderOnly || appearanceColorsOnly || fallbackOnly || settingsOnly || capsuleOnly || compactOnly || compactFixOnly || waveformsOnly || payloadOnly || liveTextOnly || liveFocusOnly || inlineOnly || inlineElevatedOnly || speedOnly || speedInsertOnly || werOnly || finalPriorityOnly || touchScrollOnly || touchCapsuleOnly || chromiumOnly || chromiumColdOnly) _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        if (scrollFramesOnly || ownerStateOnly || statisticsOnly || templateCatalogOnly || appearanceOnly || appearanceRenderOnly || appearanceColorsOnly || fallbackOnly || settingsOnly || capsuleOnly || compactOnly || compactFixOnly || waveformsOnly || payloadOnly || liveTextOnly || liveFocusOnly || inlineOnly || inlineElevatedOnly || speedOnly || speedInsertOnly || werOnly || finalPriorityOnly || touchScrollOnly || touchCapsuleOnly || chromiumOnly || chromiumColdOnly) _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
         if (waveformsOnly) {
             var application = Application.Current;
@@ -167,6 +168,8 @@ internal static partial class Program
         if (liveTextOnly) { await LiveText(); return; }
         if (liveFocusOnly) { await LiveFocus(); return; }
         if (inlineOnly) { await Inline(); return; }
+        if (scrollFramesOnly) { await ScrollFramesRun(); return; }
+        if (ownerStateOnly) { await OwnerState(); return; }
         if (inlineElevatedOnly) { await InlineElevated(); return; }
         if (statisticsOnly) { await StatisticsPage(); return; }
         if (templateCatalogOnly) { await CustomTemplates(); return; }

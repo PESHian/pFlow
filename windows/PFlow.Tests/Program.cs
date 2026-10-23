@@ -16,6 +16,7 @@ if (args.Contains("--hotkeys-only")) return;
 await LiveTextChecks.Run();
 LiveInlineChecks.Run();
 SpeechChecks.Run();
+ScrollGlideChecks.Run();
 InstalledChecks.Run();
 int passed = 0;
 void Check(string name, bool condition) { if (!condition) throw new Exception("FAIL: " + name); passed++; Console.WriteLine("PASS: " + name); }
@@ -226,6 +227,14 @@ try {
  Check("a saved AI cleanup choice is dropped silently and the other choices survive", migrated.Preferences.Language == "es" && migrated.Preferences.Cleanup && !migrated.Preferences.Paragraphs);
  migrated.SavePreferences();
  Check("the saved file no longer carries the AI cleanup switch", !File.ReadAllText(Path.Combine(directory, "settings.json")).Contains("useAICleanup", StringComparison.OrdinalIgnoreCase));
+// A settings file from 0.1.25 with large-v3-turbo or medium chosen: read without complaint (every take runs on small), the choice gone after the next save.
+foreach (string retired in new[] { "large-v3-turbo-q8_0", "medium-q5_0" }) {
+    File.WriteAllText(Path.Combine(directory, "settings.json"), "{\"language\":\"es\",\"liveTextMode\":\"type\",\"speechModel\":\"" + retired + "\",\"paragraphs\":false}");
+    var fromTurbo = new StateStore(directory);
+    Check("a saved " + retired + " choice is dropped silently and the other choices survive", fromTurbo.Preferences.Language == "es" && fromTurbo.Preferences.LiveTextMode == LiveTextModes.TypeInApp && !fromTurbo.Preferences.Paragraphs);
+    fromTurbo.SavePreferences();
+    Check("the saved file no longer carries the " + retired + " choice", !File.ReadAllText(Path.Combine(directory, "settings.json")).Contains("speechModel", StringComparison.OrdinalIgnoreCase));
+}
  File.WriteAllText(Path.Combine(directory, "settings.json"), "{\"language\":\"auto\"}");
  Check("legacy auto becomes English preset", new StateStore(directory).Preferences.Language == "en");
 } finally { Directory.Delete(directory, true); }

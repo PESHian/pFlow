@@ -1,5 +1,3 @@
-using System.Net.Http;
-using System.Security.Cryptography;
 
 namespace PFlow.Windows;
 
@@ -16,31 +14,9 @@ internal sealed class Whisper : IAsyncDisposable
     internal double WorkerLoadMs => worker?.LoadMs ?? 0;
     /// Progress frames the current worker sent during finished-text passes.
     internal int WorkerHeartbeats => worker?.Heartbeats ?? 0;
-    /// The saved choice (Preferences.SpeechModel); the app wires it, the checks keep small.
-    internal Func<string?> ChosenId { get; init; } = () => SpeechModels.Small.Id;
-    public SpeechModel Chosen => SpeechModels.Resolve(ChosenId());
-    /// The model the next finished-text pass runs: the chosen one when its file is on this PC,
-    /// else small (a choice whose download was removed never stops dictation).
-    public SpeechModel InUse => Installed(Chosen) ? Chosen : SpeechModels.Small;
-    /// Models whose file failed the worker's size or hash check at a start: set aside until downloaded again.
-    /// Read by Settings on its own thread, written by a worker start or a download: guarded by its own lock.
-    readonly HashSet<string> damaged = [];
-    public bool IsDamaged(SpeechModel model) { lock (damaged) return damaged.Contains(model.Id); }
-    /// One rule for a file the worker refused: Settings shows "Damaged · Download again" and takes run on small.
-    internal void MarkDamaged(SpeechModel model) { lock (damaged) damaged.Add(model.Id); InsertionLog.Record("speech model set aside (size or checksum): " + model.FileName); }
-    void ClearDamaged(SpeechModel model) { lock (damaged) damaged.Remove(model.Id); }
-    /// A model's file: the download in pFlow's folder when there is one, else the package's copy for the bundled model.
-    public string PathFor(SpeechModel model)
-    {
-        string download = System.IO.Path.Combine(root, model.FileName);
-        return File.Exists(download) || !model.Bundled ? download : System.IO.Path.Combine(assets, "models", model.FileName);
-    }
-    /// The file is there with the model's exact size (the hash is checked when the worker starts).
-    public bool Installed(SpeechModel model) => !IsDamaged(model) && File.Exists(PathFor(model)) && new FileInfo(PathFor(model)).Length == model.Bytes;
-    public string ModelPath => PathFor(InUse);
-    /// For Settings, under the model tiles.
-    public string ModelStatus => Chosen == InUse ? $"In use: {InUse.Title} ({FileSize.Describe(InUse.Bytes)}). Recognition stays on this PC."
-        : IsDamaged(Chosen) ? $"{Chosen.Title} is damaged; using {InUse.Title}. Download it again." : $"{Chosen.Title} is missing; using {InUse.Title}.";
+    /// Whisper small, the one speech model (SpeechModels.Small): a copy in pFlow's own folder when an
+    /// earlier version downloaded one there, else the package's. Checked by size and hash when the worker starts.
+    public string ModelPath { get { string download = System.IO.Path.Combine(root, SpeechModels.Small.FileName); return File.Exists(download) ? download : System.IO.Path.Combine(assets, "models", SpeechModels.Small.FileName); } }
     /// The small live-words model next to the main model, or null when it is not installed (then live
     /// windows run on the main model and Settings says so). Checked by size and hash when the worker starts.
     public string? LiveModelPath { get { string path = System.IO.Path.Combine(assets, "models", LiveSpeechModel.FileName); return File.Exists(path) ? path : null; } }
@@ -50,55 +26,34 @@ internal sealed class Whisper : IAsyncDisposable
     /// The AVX2 build on x64 processors that have it, else the baseline build (one rule: SpeechEngine.Choose).
     public string Executable => System.IO.Path.Combine(assets, "engine", SpeechEngine.Choose(
         RuntimeInformation.ProcessArchitecture == Architecture.X64, Native.Avx2Ready, name => File.Exists(System.IO.Path.Combine(assets, "engine", name))));
-    /// Removes partial downloads of any speech model left in pFlow's folder by an earlier run.
-    public int SweepPartials() => SpeechModels.All.Sum(model => PartialDownloads.Sweep(root, model.FileName));
-    public bool FilesPresent => Installed(InUse) && File.Exists(Executable);
+    /// Removes unfinished speech model downloads an earlier version left in pFlow's folder.
+    public int SweepPartials() => PartialDownloads.Sweep(root, SpeechModels.Small.FileName) + SpeechModels.RetiredFiles.Sum(file => PartialDownloads.Sweep(root, file));
+    /// Deletes the speech models 0.1.25 could download and 0.1.26 removed (SpeechModels.RetiredFiles),
+    /// only those exact files in pFlow's own folder, and their unfinished downloads. Returns the names
+    /// removed; the log gets the file names only, never a path.
+    public IReadOnlyList<string> RemoveRetiredModels()
+    {
+        var removed = new List<string>();
+        foreach (string file in SpeechModels.RetiredFiles) {
+            string path = System.IO.Path.Combine(root, file);
+            try { if (File.Exists(path)) { File.Delete(path); removed.Add(file); } }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { InsertionLog.Record("retired speech model not removed: " + file + " (" + error.GetType().Name + ")"); }
+            int partial = PartialDownloads.Sweep(root, file);
+            if (partial > 0) removed.Add(file + " (unfinished download x" + partial + ")");
+        }
+        if (removed.Count > 0) InsertionLog.Record("removed retired speech models: " + string.Join(", ", removed));
+        return removed;
+    }
+    public bool FilesPresent => File.Exists(ModelPath) && new FileInfo(ModelPath).Length == SpeechModels.Small.Bytes && File.Exists(Executable);
     /// For Settings: "x64, fast speech engine (AVX2)" and the like (one rule: SpeechEngine.Describe).
     public string EngineDescription => SpeechEngine.Describe(RuntimeInformation.ProcessArchitecture.ToString(), System.IO.Path.GetFileName(Executable), LiveModelReady);
     public Whisper(string root, string? assetsRoot = null) { this.root = root; assets = assetsRoot ?? AppContext.BaseDirectory; }
-    public async Task Verify(string path, SpeechModel model, CancellationToken cancel)
-    {
-        if (new FileInfo(path).Length != model.Bytes) throw new InvalidDataException($"The {model.Title} model has the wrong size. Download it again in Settings.");
-        await using var stream = File.OpenRead(path);
-        var digest = await SHA256.HashDataAsync(stream, cancel);
-        if (!Convert.ToHexString(digest).Equals(model.Sha, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException($"The {model.Title} model checksum did not match. Download it again in Settings.");
-    }
-    /// One pinned file, size-bounded, hashed before it is moved into place; the same for every model.
-    public async Task Download(SpeechModel model, IProgress<double> progress, CancellationToken cancel)
-    {
-        // The transfer and the hash run outside the recognition lock: a take during a download goes on
-        // with the model in use. The lock is taken only to put the checked file in place.
-        string target = System.IO.Path.Combine(root, model.FileName), temp = PartialDownloads.TempPath(root, model.FileName);
-        try {
-            using var client = new HttpClient { Timeout = TimeSpan.FromHours(1) };
-            using var response = await client.GetAsync(model.Url, HttpCompletionOption.ResponseHeadersRead, cancel); response.EnsureSuccessStatusCode();
-            await using (var source = await response.Content.ReadAsStreamAsync(cancel))
-            await using (var file = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
-                var bytes = new byte[1024 * 1024]; long total = 0; int count;
-                while ((count = await source.ReadAsync(bytes, cancel)) > 0) {
-                    total += count; if (total > model.Bytes) throw new InvalidDataException("Model download was larger than expected.");
-                    await file.WriteAsync(bytes.AsMemory(0, count), cancel); progress.Report((double)total / model.Bytes);
-                }
-            }
-            await Verify(temp, model, cancel);
-            await modelLock.WaitAsync(cancel);
-            try { if (worker != null && worker.ModelPath == target) ResetWorker(); File.Move(temp, target, true); ClearDamaged(model); }
-            finally { modelLock.Release(); }
-        } finally { if (File.Exists(temp)) File.Delete(temp); }
-    }
     void ResetWorker() { worker?.Dispose(); worker = null; }
-    /// A live worker holding the model in use is kept. A change of model in Settings starts a fresh one
-    /// at the next finished-text pass or prewarm, never under a take's live windows (`switchModel` false).
-    /// A chosen file the worker refuses (size or hash) is set aside and the pass runs on small.
-    async Task EnsureWorker(CancellationToken cancel, bool switchModel = true)
+    /// A live worker is kept for every take; one that was lost is replaced (as 0.1.23 did, one model).
+    async Task EnsureWorker(CancellationToken cancel)
     {
-        if (worker != null && !worker.Exited && (!switchModel || worker.ModelPath == ModelPath)) return;
-        ResetWorker(); var model = InUse;
-        try { worker = await SpeechWorker.Start(Executable, PathFor(model), model, LiveModelPath, cancel); }
-        catch (Exception error) when (SpeechModelRejected.Is(error) && !model.Bundled) {
-            MarkDamaged(model); model = InUse;
-            worker = await SpeechWorker.Start(Executable, PathFor(model), model, LiveModelPath, cancel);
-        }
+        if (worker != null && !worker.Exited) return;
+        ResetWorker(); worker = await SpeechWorker.Start(Executable, ModelPath, LiveModelPath, cancel);
     }
     internal async Task Prewarm(CancellationToken cancel = default)
     {
@@ -155,7 +110,7 @@ internal sealed class Whisper : IAsyncDisposable
         try {
             if (cancel.IsCancellationRequested) return null;
             if (!File.Exists(Executable)) throw new FileNotFoundException("The Windows speech engine is missing. Install a complete pFlow package.");
-            await EnsureWorker(lifetime.Token, switchModel: false);
+            await EnsureWorker(lifetime.Token);
             started?.Invoke();
             Interlocked.Increment(ref liveRequests);
             // The recognizer cancels a window after LiveSession.WindowLimitMs and the worker answers a

@@ -11,8 +11,8 @@ internal static partial class Program
     /// A scripted wheel scroll over the Settings home page: 40 touchpad-sized events (delta -30)
     /// and 10 notches (delta -120), each followed by a layout and render pass. Prints how far the
     /// page moved and how many passes took longer than 32 ms (two frames at 60 Hz), the before/after
-    /// number for the W025 "jittery scrolling" finding. Self-contained so the same file measures an
-    /// older build.
+    /// number for the W025 "jittery scrolling" finding. Since W026 a notch glides, so the 10 notches are
+    /// measured once the glide has landed.
     static (double SmallMoved, double NotchMoved, int Passes, int Over32, double LongestMs) ScrollFrames(bool print)
     {
         _ = Application.Current ?? new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
@@ -40,7 +40,11 @@ internal static partial class Program
                     return page.VerticalOffset - from;
                 }
                 page.ScrollToTop(); page.UpdateLayout(); Drain();
-                double small = Scroll(-30, 40), notch = Scroll(-120, 10);
+                double small = Scroll(-30, 40);
+                // Notches glide (SmoothScroll): the page lands once the glide has run its frames.
+                double before = page.VerticalOffset; Scroll(-120, 10);
+                for (var wait = System.Diagnostics.Stopwatch.StartNew(); SmoothScroll.Gliding(page) && wait.ElapsedMilliseconds < 3000;) { Drain(); System.Threading.Thread.Sleep(5); }
+                page.UpdateLayout(); Drain(); double notch = page.VerticalOffset - before;
                 var result = (small, notch, costs.Count, costs.Count(x => x > 32), costs.Max());
                 if (print) Console.WriteLine($"SCROLL-FRAMES small40={small:F0}px notch10={notch:F0}px passes={costs.Count} over32ms={result.Item4} longest={costs.Max():F1}ms scrollable={page.ScrollableHeight:F0}");
                 return result;

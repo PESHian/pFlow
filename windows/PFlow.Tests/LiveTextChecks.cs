@@ -95,7 +95,7 @@ internal static class LiveTextChecks
             var changed = before.Where(pair => pair.Key != "useAICleanup" && !JsonNode.DeepEquals(pair.Value, loaded[pair.Key])).Select(pair => pair.Key).ToList();
             Check("every earlier setting survives unchanged " + string.Join(",", changed), changed.Count == 0);
             Check("the retired AI cleanup switch is dropped", before.ContainsKey("useAICleanup") && !loaded.ContainsKey("useAICleanup"));
-            Check("the only new settings are Live text and the speech model", loaded.Select(x => x.Key).Except(before.Select(x => x.Key)).Order().SequenceEqual(new[] { "liveTextMode", "speechModel" }));
+            Check("the only new setting is Live text", loaded.Select(x => x.Key).Except(before.Select(x => x.Key)).SequenceEqual(new[] { "liveTextMode" }));
             store.Preferences.LiveTextMode = "preview"; store.SavePreferences();
             Check("a saved Preview in pFlow choice loads as Type in the current app", new StateStore(directory).Preferences.LiveTextMode == LiveTextModes.TypeInApp);
             store.Preferences.LiveTextMode = LiveTextModes.TypeInApp; store.SavePreferences();

@@ -64,8 +64,8 @@ public sealed class Preferences
     public string WaveBlend { get; set; } = "3DFF85";
     public string Waveform { get; set; } = "wave";
     public string Language { get; set; } = "en";
-    /// The speech model for the finished text (SpeechModels), read when a take starts; small when unknown.
-    public string SpeechModel { get; set; } = SpeechModels.Small.Id;
+    // speechModel (0.1.25's speech model choice) is gone: every take runs on Whisper small. A saved file
+    // that still has it is read without it and loses it at the next save (SpeechModels.RetiredFiles).
     /// Live text choice, read once when a take starts. Same saved values as the Mac app.
     public string LiveTextMode { get; set; } = LiveTextModes.Off;
     public int CapsulePositionVersion { get; set; }

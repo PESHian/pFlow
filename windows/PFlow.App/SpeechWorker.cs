@@ -8,16 +8,6 @@ internal readonly record struct SpeechMetrics(bool Reused, double Initialization
 /// The worker process was lost or went quiet (start, model load or a pass without progress).
 /// Not a worker-reported error: a fresh worker may well succeed, so the caller retries once.
 internal sealed class SpeechWorkerLost(string message, Exception? inner = null) : IOException(message, inner);
-/// A model file that failed its size or SHA-256 check at a worker start (a download damaged on disk) is an
-/// InvalidDataException marked here: the caller sets a downloaded model aside and runs on small rather than
-/// failing every take. Any other InvalidDataException (a bad setting, a protocol error) is not a damaged file.
-internal static class SpeechModelRejected
-{
-    const string Key = "pflow-speech-model-rejected";
-    internal static InvalidDataException Create(string message) { var error = new InvalidDataException(message); error.Data[Key] = true; return error; }
-    internal static bool Is(Exception error) => error is InvalidDataException && error.Data.Contains(Key);
-}
-
 // Anonymous pipes belong to this app and its child. There is no HTTP server or socket.
 internal sealed class SpeechWorker : IDisposable
 {
@@ -26,8 +16,6 @@ internal sealed class SpeechWorker : IDisposable
     readonly Process process;
     readonly Stream input, output;
     internal bool Exited => process.HasExited;
-    /// The model file this worker loaded (the chosen speech model at its start).
-    internal string ModelPath { get; private set; } = "";
     internal int Id => process.Id;
     internal double LoadMs { get; private set; }
     /// True when this worker runs live windows on the small live model.
@@ -51,7 +39,7 @@ internal sealed class SpeechWorker : IDisposable
     /// (a chunk hashed, a frame from the worker), and only `StallLimit` without any progress ends it. A slow
     /// disk or a virus scanner reading the file makes a start slow, not stuck. `liveModel` (null when the
     /// file is not installed) is checked the same way; a damaged one is left out, never blocking dictation.
-    internal static async Task<SpeechWorker> Start(string executable, string model, SpeechModel file, string? liveModel, CancellationToken cancel)
+    internal static async Task<SpeechWorker> Start(string executable, string model, string? liveModel, CancellationToken cancel)
     {
         if (FailNextStarts > 0) { FailNextStarts--; throw new SpeechWorkerLost(Stalled); }
         LiveModelRejected = false;
@@ -61,7 +49,7 @@ internal sealed class SpeechWorker : IDisposable
         using var stall = CancellationTokenSource.CreateLinkedTokenSource(cancel); stall.CancelAfter(StallLimit);
         var token = stall.Token;
         try {
-            await Verify(lease, file.Bytes, file.Sha, "The " + file.Title + " model", "Download it again in Settings.", stall, token);
+            await Verify(lease, SpeechModels.Small.Bytes, SpeechModels.Small.Sha, "The Whisper model", "Install a complete pFlow package.", stall, token);
             if (liveModel != null) {
                 // The live model only speeds up live words: a damaged one is left out (Settings says so) and
                 // the finished text is never held up by it.
@@ -69,7 +57,7 @@ internal sealed class SpeechWorker : IDisposable
                 catch (Exception error) when (error is InvalidDataException or IOException or UnauthorizedAccessException) { liveLease?.Dispose(); liveLease = null; liveModel = null; LiveModelRejected = true; }
             }
             var info = new ProcessStartInfo(executable) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
-            worker = new(lease, liveLease, Process.Start(info) ?? throw new SpeechWorkerLost("The speech engine could not start.")) { ModelPath = model };
+            worker = new(lease, liveLease, Process.Start(info) ?? throw new SpeechWorkerLost("The speech engine could not start."));
             using var kill = token.Register(worker.Abort);
             int finalThreads = SpeechThreads.Final(LogicalProcessors), liveThreads = SpeechThreads.Live(LogicalProcessors);
             await worker.Write(LiveWorkerProtocol.EncodeHello(finalThreads, liveThreads, model, liveModel), token);
@@ -89,14 +77,14 @@ internal sealed class SpeechWorker : IDisposable
     /// Size and SHA-256 of a model file, chunk by chunk; each chunk resets the stall limit.
     static async Task Verify(FileStream file, long bytes, string sha, string name, string remedy, CancellationTokenSource stall, CancellationToken token)
     {
-        if (file.Length != bytes) throw SpeechModelRejected.Create(name + " has the wrong size. " + remedy);
+        if (file.Length != bytes) throw new InvalidDataException(name + " has the wrong size. " + remedy);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         var chunk = new byte[1024 * 1024]; int count;
         while ((count = await file.ReadAsync(chunk, token)) > 0) {
             hash.AppendData(chunk, 0, count); stall.CancelAfter(StallLimit);
             if (StartThrottle != null) await StartThrottle();
         }
-        if (!Convert.ToHexString(hash.GetHashAndReset()).Equals(sha, StringComparison.OrdinalIgnoreCase)) throw SpeechModelRejected.Create(name + " checksum did not match. " + remedy);
+        if (!Convert.ToHexString(hash.GetHashAndReset()).Equals(sha, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException(name + " checksum did not match. " + remedy);
     }
     static void WriteText(BinaryWriter writer, string value, int maximum)
     {
