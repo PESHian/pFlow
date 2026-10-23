@@ -264,7 +264,7 @@ Check("cleanup accepts a spoken clock time written with a colon", TextFidelity.C
 Check("cleanup rejects a colon after an hour past 24", !TextFidelity.CleanupIsFaithful("the code was 25 30 today", "The code was 25:30 today."));
 Check("cleanup rejects a colon before a minute past 59", !TextFidelity.CleanupIsFaithful("we met at 6 60", "We met at 6:60."));
 Check("cleanup rejects a colon before a one-digit minute", !TextFidelity.CleanupIsFaithful("we met at 6 5", "We met at 6:5."));
-Check("cleanup rejects a colon that was not inserted between the two numbers", !TextFidelity.CleanupIsFaithful("we met at 6 30", "We met at: 6 30."));
+Check("cleanup accepts only one colon, and only after an hour", !TextFidelity.CleanupIsFaithful("we met at 6 30", "We met at 6::30.") && !TextFidelity.CleanupIsFaithful("the split was 6 30 45", "The split was 6:30:45."));
 Check("cleanup still rejects a thousands comma or a decimal point joined into the number", !TextFidelity.CleanupIsFaithful("about 1 000 people", "About 1,000 people.") && !TextFidelity.CleanupIsFaithful("it was 3 5 metres", "It was 3.5 metres."));
 Check("cleanup keeps a decimal inside a number", TextFidelity.CleanupIsFaithful("dose was 3.5 mg then rest", "Dose was 3.5 mg. Then rest."));
 Check("cleanup rejects a dropped percent", !TextFidelity.CleanupIsFaithful("maybe 40% done", "Maybe 40 done."));
