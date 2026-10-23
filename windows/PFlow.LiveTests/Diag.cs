@@ -241,7 +241,10 @@ internal static partial class Program
             try {
                 try { _ = InsertionTarget.Capture(); } catch (InvalidOperationException) { }
                 await Task.Delay(1500);
-                for (int i = 0; i < 5 && Native.GetForegroundWindow() != page.Window; i++) { Front(page.Window); await Task.Delay(500); }
+                for (int i = 0; i < 5 && Native.GetForegroundWindow() != page.Window; i++) {
+                    Front(page.Window); await Task.Delay(300);
+                    if (Native.GetForegroundWindow() != page.Window) { try { AutomationElement.FromHandle(page.Window).SetFocus(); } catch (InvalidOperationException) { } await Task.Delay(500); }
+                }
                 var e = await TypeTake("diag-edge", "medium-1.wav", rig.Whisper, rig.Store, rig.Text, rig.Preview, rig.Capsule, rig.Owner.Handle, rig.Directory, "msedge");
                 Console.WriteLine($"DIAG edge: writes={e.Writes} matched={e.Matched} firstWrite={e.FirstWriteMs:F0}ms late={e.LateBegin} stops={string.Join(",", e.Stops)} status=[{e.Status}]");
             } finally { await ClosePage("edge", page); }
