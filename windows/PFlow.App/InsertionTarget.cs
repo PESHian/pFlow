@@ -80,16 +80,20 @@ internal sealed class InsertionTarget : IInsertionTarget
         try { return element.Current.FrameworkId == "Chrome" && element.Current.ControlType == ControlType.Pane; }
         catch (Exception error) when (error is ElementNotAvailableException or COMException) { return false; }
     }
+    /// "ControlType/class/framework". A web page's class names are the site's own text, so for
+    /// Chromium (browsers, Electron apps) the class is never recorded.
     static string Describe(AutomationElement e)
     {
-        try { var c = e.Current; return c.ControlType.ProgrammaticName.Replace("ControlType.", "") + "/" + c.ClassName + "/" + c.FrameworkId; }
+        try { var c = e.Current; return c.ControlType.ProgrammaticName.Replace("ControlType.", "") + "/" + (c.FrameworkId == "Chrome" ? "-" : c.ClassName) + "/" + c.FrameworkId; }
         catch (Exception error) when (error is ElementNotAvailableException or COMException) { return "unavailable"; }
     }
     /// Only the classic Win32 providers set a field's whole value in place
     /// reliably (an Edit control's WM_SETTEXT). Browsers, UWP and Electron
     /// fields take typed input instead, like a person typing.
     bool Win32 { get { try { return element.Current.FrameworkId == "Win32"; } catch (Exception error) when (error is ElementNotAvailableException or COMException) { return false; } } }
-    void Log(string line) => InsertionLog.Record("insert " + ApplicationName + " " + Kind + ": " + line);
+    /// The app as logs and reports name it (one rule: PrivateLog.AppLabel).
+    internal string LogName => PrivateLog.AppLabel(ApplicationName);
+    void Log(string line) => InsertionLog.Record("insert " + LogName + " " + Kind + ": " + line);
     internal static string TypingNoteFor(uint process, string program)
     {
         var version = VersionInfo(process);
@@ -138,7 +142,7 @@ internal sealed class InsertionTarget : IInsertionTarget
             password = element.Current.IsPassword; focusable = element.Current.IsKeyboardFocusable;
         } catch (Exception error) when (error is ElementNotAvailableException or COMException or InvalidOperationException) { }
         IntPtr control = LiveTextField.FocusedControl(foreground);
-        return [new("app", ApplicationName), new("appIntegrity", DiagnosticEnvironment.IntegrityName(LiveTextField.Integrity(processId))),
+        return [new("app", LogName), new("appIntegrity", DiagnosticEnvironment.IntegrityName(LiveTextField.Integrity(processId))),
             new("pflowIntegrity", DiagnosticEnvironment.IntegrityName(LiveTextField.Integrity(0))), new("field", Kind),
             new("focusedControl", control == IntPtr.Zero ? "none" : LiveTextField.BaseClass(control)), new("patterns", patterns), new("password", password),
             new("keyboardFocusable", focusable), new("readable", readable), new("placeholder", placeholder), new("refusal", Refusal),

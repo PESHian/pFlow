@@ -106,6 +106,10 @@ internal static class DiagnosticChecks
             Check($"the report stays within about 2 MB ({recorder.Chars} characters)", recorder.Chars <= DiagnosticRecorder.MaxChars + 200_000);
             Check("a value cannot carry a paragraph: it is cut at 160 characters", DiagnosticRecorder.Value(new string('a', 500)).Length <= DiagnosticRecorder.MaxValueLength + 1);
             Check("control characters never break a line", !DiagnosticRecorder.Value("one\ntwo\rthree").Contains('\n'));
+            Check("logs name only known apps; any other program is 'other'", PrivateLog.AppLabel("Notepad") == "Notepad" && PrivateLog.AppLabel("msedge") == "msedge"
+                && PrivateLog.AppLabel("QuorvaneLedger") == "other" && PrivateLog.AppLabel(null) == "other");
+            Check("Japanese, Chinese and Korean input languages compose text; English and German do not",
+                InputLanguages.Composes(0x0411) && InputLanguages.Composes(0x0804) && InputLanguages.Composes(0x0404) && InputLanguages.Composes(0x0412) && !InputLanguages.Composes(0x0409) && !InputLanguages.Composes(0x0407));
         } finally { Diagnostics.Recorder = saved; }
         Console.WriteLine($"{passed} diagnostic checks passed.");
     }

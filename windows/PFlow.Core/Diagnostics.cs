@@ -205,3 +205,10 @@ public static class Diagnostics
 {
     public static DiagnosticRecorder Recorder { get; set; } = new();
 }
+
+/// Input languages whose input methods compose text before it is committed (Japanese, Chinese, Korean):
+/// typed characters may be swallowed into a composition, so pFlow does not type live with keys then.
+public static class InputLanguages
+{
+    public static bool Composes(int languageId) => (languageId & 0x3FF) is 0x04 or 0x11 or 0x12;
+}

@@ -42,6 +42,7 @@ internal sealed class LiveKeyField : ILiveTextField
                 : current.IsPassword ? "password field"
                 : current.ControlType != ControlType.Edit ? "not a text field (" + current.ControlType.ProgrammaticName.Replace("ControlType.", "") + ")"
                 : !InPage(element) ? "not in a web page (browser control)"
+                : Composing(window) ? "an input method that composes text is active"
                 : !element.TryGetCurrentPattern(TextPattern.Pattern, out _) ? "no text pattern" : "ok";
             if (why != "ok") return null;
             var field = new LiveKeyField(element, window, control, LiveTextField.TargetAboveUs(process));
@@ -81,29 +82,70 @@ internal sealed class LiveKeyField : ILiveTextField
     /// Types `text` over `range`, which ends at the caret (pFlow's own words end there). A range with
     /// characters in it is selected with Shift+Left first and must read back as exactly that span;
     /// then the characters are typed (or one Backspace removes the selected span). True once the
-    /// field reads back as expected with the caret after the new text.
+    /// field reads back as expected with the caret after the new text. Every key batch is sent only
+    /// right after `Unsafe` finds nothing changed (one rule, `SendChecked`); any change ends key
+    /// typing for the take, and no further key is sent anywhere, not even to undo a selection.
     public bool Replace(TextSpan range, string text)
     {
-        if (text.IndexOfAny(['\r', '\n']) >= 0 || !ReadyToWrite) return false;
+        if (aborted || text.IndexOfAny(['\r', '\n']) >= 0 || !ReadyToWrite) return false;
         var state = State();
         if (state.Element != LiveFieldState.Target || state.Value is not string value || state.Selection != new TextSpan(range.End, 0) || range.End > value.Length) return false;
+        int batch = 0;
         if (range.Length > 0) {
             int steps = new StringInfo(value.Substring(range.Start, range.Length)).LengthInTextElements;
             var keys = new List<Native.Input> { Native.Key(Shift) };
             for (int i = 0; i < steps; i++) { keys.Add(Native.Key(Left, extended: true)); keys.Add(Native.Key(Left, true, true)); }
             keys.Add(Native.Key(Shift, true));
-            if (!Send([.. keys])) return false;
+            if (!SendChecked(++batch, [.. keys])) return false;
             if (!Until(() => Selection() == range, 600)) {
                 // Not exactly pFlow's span: the selection is put back as a caret where it was, nothing is typed.
-                Send(Native.Key(Right, extended: true), Native.Key(Right, true, true));
+                SendChecked(++batch, Native.Key(Right, extended: true), Native.Key(Right, true, true));
                 return false;
             }
         }
         string expected = value[..range.Start] + text + value[range.End..];
-        if (!Send(text.Length > 0 ? Native.UnicodeText(text) : [Native.Key(Back), Native.Key(Back, true)])) return false;
+        if (!SendChecked(++batch, text.Length > 0 ? Native.UnicodeText(text) : [Native.Key(Back), Native.Key(Back, true)])) return false;
         var caret = new TextSpan(range.Start + text.Length, 0);
         return Until(() => Value() == expected && Selection() == caret, 800 + 15 * text.Length);
     }
+
+    /// Test hook: runs just before the safety check of each key batch (its number in the write, from 1).
+    internal static Action<int>? BeforeSend { get; set; }
+    bool aborted;
+
+    /// Why keys must not be sent now, or null: checked on this thread immediately before every batch.
+    /// Same foreground window, same focused control and field (by UI Automation id), not a password
+    /// field, no key held, and no input method that composes text (Japanese, Chinese, Korean), whose
+    /// composition could swallow or reorder typed characters.
+    string? Unsafe()
+    {
+        IntPtr front = Native.GetForegroundWindow();
+        if (front != window) return "another window came to the front";
+        if (LiveTextField.FocusedControl(front) != control) return "focus moved to another control";
+        try {
+            var focused = AutomationElement.FocusedElement;
+            if (focused == null || !focused.GetRuntimeId().SequenceEqual(runtimeId)) return "focus moved to another field";
+            if (focused.Current.IsPassword) return "a password field";
+        } catch (Exception error) when (error is ElementNotAvailableException or COMException or InvalidOperationException) { return "the focused field went away"; }
+        if (!ReadyToWrite) return "a key is held";
+        if (Composing(window)) return "an input method is active";
+        return null;
+    }
+
+    bool SendChecked(int batch, params Native.Input[] inputs)
+    {
+        BeforeSend?.Invoke(batch);
+        if (Unsafe() is string why) {
+            aborted = true;
+            Diagnostics.Recorder.Event("typing.guard", new DiagField("stopped", why), new DiagField("batch", batch));
+            return false;
+        }
+        return Send(inputs);
+    }
+
+    /// The window's thread types with an input method that composes text (one rule: InputLanguages.Composes).
+    internal static bool Composing(IntPtr window) => InputLanguages.Composes((int)(GetKeyboardLayout(Native.GetWindowThreadProcessId(window, out _)).ToInt64() & 0xFFFF));
+    [DllImport("user32.dll")] static extern IntPtr GetKeyboardLayout(uint thread);
 
     /// The caret or selection is already where the write left it; this only checks.
     public bool Select(TextSpan range) => Until(() => Selection() == range, 300);

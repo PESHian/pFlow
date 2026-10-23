@@ -18,7 +18,7 @@ using PFlow.Windows;
 //                to fewer cores (PFLOW_SLOW_CORES, e.g. "6,2,1").
 internal static partial class Program
 {
-    static bool diagTakesOnly, chromeLiveOnly, slowLiveOnly, reportButtonOnly;
+    static bool diagTakesOnly, chromeLiveOnly, slowLiveOnly, reportButtonOnly, chromeGuardOnly;
     static readonly string[] FixtureWords = ["Saturday", "market", "square", "stalls", "honey", "pottery", "Ellis", "fountain", "samples", "plum", "bakery", "cousin", "Ruth", "jars", "Morgan", "tomato", "storm", "folding", "shed"];
 
     sealed class TypeResult
@@ -41,7 +41,7 @@ internal static partial class Program
             recorder.EndTake(new DiagField("result", "wrong window"));
             Check($"{name}: the take starts in {expectApp} (focus was in {target.ApplicationName})", false);
         }
-        InsertionLog.Record("take: app=" + target.ApplicationName + " field=" + target.Kind + (target.CanInsert ? " insertable" : " not insertable: " + target.Refusal) + " live=" + LiveTextModes.TypeInApp);
+        InsertionLog.Record("take: app=" + target.LogName + " field=" + target.Kind + (target.CanInsert ? " insertable" : " not insertable: " + target.Refusal) + " live=" + LiveTextModes.TypeInApp);
         var slot = new LiveInlineSlot(); string session = name; bool typing = false;
         var field = target.LiveField(out string why); result.FieldWhy = why;
         if (field == null) recorder.Event("typing.field", new DiagField("result", "none"), new DiagField("why", why));
@@ -106,7 +106,7 @@ internal static partial class Program
 
     /// A fictional page in a fresh Edge or Chrome window (its own fictional profile), the field focused by
     /// the page with the caret at the end; the title mirrors the field (a password box: its length only).
-    static async Task<(Process Process, IntPtr Window, string Name, string Html)> OpenPage(string browser, string variant, string prefix)
+    static async Task<(Process Process, IntPtr Window, string Name, string Html)> OpenPage(string browser, string variant, string prefix, bool accessible = false)
     {
         string name = "pflow-fictional-live-" + variant + "-" + Guid.NewGuid().ToString("N");
         string html = Path.Combine(root, name + ".html");
@@ -114,18 +114,22 @@ internal static partial class Program
             "password" => "<input id=b type=password aria-label='Fictional secret'>",
             "textarea" => "<textarea id=b aria-label='Fictional area' rows=6 cols=60>" + prefix + "</textarea>",
             "input" => "<input id=b type=text aria-label='Fictional line' size=80 value='" + prefix + "'>",
+            "guard" or "slow" => "<div id=b contenteditable=true role=textbox aria-multiline=true aria-label='Fictional body'>" + prefix + "</div><input id=p type=password aria-label='Fictional secret'>"
+                + (variant == "slow" ? "<script>var n=0;document.getElementById('b').addEventListener('beforeinput',function(){if(++n>20){var t=Date.now();while(Date.now()-t<400){}}});</script>" : ""),
             _ => "<div id=b contenteditable=true role=textbox aria-multiline=true aria-label='Fictional body'>" + prefix + "</div>"
         };
         File.WriteAllText(html, "<!doctype html><meta charset=utf-8><title>" + name + "</title><style>body{font:16px sans-serif;margin:24px}[contenteditable]{min-height:120px;border:1px solid #888;padding:8px}</style>"
             + "<p>Fictional compose</p>" + field
-            + "<script>var b=document.getElementById('b');function mirror(){var t=b.type==='password'?('len:'+b.value.length):(b.value!==undefined?b.value:b.innerText);document.title='" + name + " | '+t.replace(/\\s+/g,' ');}"
+            + "<script>var b=document.getElementById('b');function mirror(){var t=b.type==='password'?('len:'+b.value.length):(b.value!==undefined?b.value:b.innerText);var p=document.getElementById('p');document.title='" + name + " | '+t.replace(/\\s+/g,' ')+(p?' | pw len:'+p.value.length:'');}"
             + "function end(){b.focus();if(b.setSelectionRange){b.setSelectionRange(b.value.length,b.value.length);}else{var r=document.createRange();r.selectNodeContents(b);r.collapse(false);var s=getSelection();s.removeAllRanges();s.addRange(r);}}"
-            + "b.addEventListener('input',mirror);window.addEventListener('load',function(){end();mirror();});</script>");
+            + "b.addEventListener('input',mirror);var pw=document.getElementById('p');if(pw)pw.addEventListener('input',mirror);window.addEventListener('load',function(){end();mirror();});</script>");
         string path = browser == "chrome" ? @"C:\Program Files\Google\Chrome\Application\chrome.exe"
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe");
         var start = new ProcessStartInfo(path) { UseShellExecute = false };
         foreach (var arg in new[] { "--user-data-dir=" + Path.Combine(root, (browser == "chrome" ? "chrome" : "edge") + "-fictional-profile-" + name[^8..]), "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--app=" + new Uri(html).AbsoluteUri })
             start.ArgumentList.Add(arg);
+        // The guard checks are about typing, not about a cold page building its tree: there the tree is built from the start.
+        if (accessible) start.ArgumentList.Add("--force-renderer-accessibility");
         var process = Process.Start(start)!;
         string image = browser == "chrome" ? "chrome" : "msedge";
         IntPtr window = IntPtr.Zero;
@@ -266,10 +270,175 @@ internal static partial class Program
         }
     }
 
+    /// --chrome-live-guard: the review's unsafe moments, each made to happen at the worst time (just before a
+    /// key batch, through LiveKeyField.BeforeSend): another window in front, a password box focused on the same
+    /// page, the person typing, a composing input language, a page too slow to read back. Never a key where
+    /// it was not meant to go; typing stops for the take; nothing half-typed.
+    static async Task ChromeGuard()
+    {
+        string directory = Path.Combine(root, "guard-fictional-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);
+        string noteName = "pflow-fictional-guard-" + Guid.NewGuid().ToString("N"), note = Path.Combine(directory, noteName + ".txt");
+        File.WriteAllText(note, "Fictional other window. ");
+        var startNote = new ProcessStartInfo("notepad.exe") { UseShellExecute = true }; startNote.ArgumentList.Add(note); Process.Start(startNote);
+        var notepad = await WindowWith(noteName); var edit = await Editor(notepad);
+        string noteBefore = Read(edit); IntPtr noteWindow = (IntPtr)notepad.Current.NativeWindowHandle;
+        try {
+            foreach (string slow in new[] { "", "slow" }) {
+                var page = await OpenPage("edge", slow == "slow" ? "slow" : "guard", "Fictional prefix.", accessible: true);
+                try {
+                    // Never WindowWith here: it focuses the window itself, which moves the keyboard focus off the page's field.
+                    var window = AutomationElement.FromHandle(page.Window);
+                    Console.WriteLine($"GUARD page: Edge in front={Native.GetForegroundWindow() == page.Window}");
+                    AutomationElement Find(string name)
+                    {
+                        for (int i = 0; i < 100; i++) {
+                            // By name, or (names can lag in a cold tree) the page's text box or its password box.
+                            var e = window.FindFirst(TreeScope.Descendants, new PropertyCondition(AutomationElement.NameProperty, name))
+                                ?? window.FindFirst(TreeScope.Descendants, new AndCondition(new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit),
+                                    new PropertyCondition(AutomationElement.IsPasswordProperty, name == "Fictional secret")));
+                            if (e != null) return e;
+                            // A cold Edge builds its tree only when knocked: the app's own capture knocks.
+                            if (i % 10 == 0) { try { _ = InsertionTarget.Capture(); } catch (InvalidOperationException) { } }
+                            Thread.Sleep(100);
+                        }
+                        var all = window.FindAll(TreeScope.Descendants, System.Windows.Automation.Condition.TrueCondition);
+                        Console.WriteLine($"GUARD tree: {all.Count} elements; " + string.Join("; ", all.Cast<AutomationElement>().Take(30).Select(e => e.Current.ControlType.ProgrammaticName.Replace("ControlType.", "") + "[" + e.Current.Name + "]")));
+                        throw new Exception("FAIL: Edge exposes " + name);
+                    }
+
+                    string Shown() { string t = Title(page.Window); int bar = t.IndexOf(" | ", StringComparison.Ordinal), pw = t.LastIndexOf(" | pw len:", StringComparison.Ordinal); return bar < 0 ? "" : pw > bar ? t[(bar + 3)..pw] : t[(bar + 3)..]; }
+                    async Task<(LiveInlineSlot Slot, string Before)> Begin(string take)
+                    {
+                        LiveKeyField.BeforeSend = null;
+                        for (int i = 0; i < 5 && Native.GetForegroundWindow() != page.Window; i++) { Front(page.Window); await Task.Delay(300); }
+                        // A click in the page's text box, then Ctrl+End: the caret at the end of its text, as a person would put it.
+                        var bodyField = Find("Fictional body"); var box = bodyField.Current.BoundingRectangle;
+                        Console.WriteLine($"GUARD {take}: body {bodyField.Current.ControlType.ProgrammaticName} [{bodyField.Current.Name}] at {box}");
+                        GetPhysicalCursorPos(out var previous); SetPhysicalCursorPos((int)(box.Left + box.Width / 2), (int)(box.Top + box.Height / 2));
+                        Native.Send(new Native.Input { Type = 0, Data = new() { Mouse = new() { Flags = 2 } } }, new Native.Input { Type = 0, Data = new() { Mouse = new() { Flags = 4 } } });
+                        await Task.Delay(300); SetPhysicalCursorPos(previous.X, previous.Y);
+                        Native.Send(Native.Key(0x11), Native.Key(0x23, extended: true), Native.Key(0x23, true, true), Native.Key(0x11, true)); await Task.Delay(300);
+                        InsertionTarget target = InsertionTarget.Capture();
+                        for (int i = 0; i < 20 && !target.CanInsert || i < 20 && target.Placeholder; i++) { await Task.Delay(250); target = InsertionTarget.Capture(); }
+                        Console.WriteLine($"GUARD {take}: captured {target.Kind} placeholder={target.Placeholder}");
+                        var slot = new LiveInlineSlot();
+                        var field = target.LiveField(out string why);
+                        Check($"{take}: typing begins in the Edge body ({why})", field is LiveKeyField && slot.Begin(take, field) == null);
+                        string before = Shown();
+                        slot.Reconcile(take, "harbor lights"); slot.Reconcile(take, "harbor lights glow");
+                        await Task.Delay(200);
+                        Check($"{take}: the first settled words are typed", Flat(Shown()) == Flat(before + " harbor lights") || Flat(Shown()) == Flat(before + "harbor lights"));
+                        return (slot, Shown());
+                    }
+                    if (slow == "slow") {
+                        // The page takes 400 ms per typed character: the read-back cannot confirm in time.
+                        var (slot, before) = await Begin("slow");
+                        var stop = slot.Reconcile("slow", "harbor lights glow over the quiet water tonight");
+                        stop ??= slot.Reconcile("slow", "harbor lights glow over the quiet water tonight again");
+                        await Task.Delay(30_000);
+                        string after = Flat(Shown()); string added = after.Length >= Flat(before).Length ? after[Flat(before).Length..].Trim() : "";
+                        Console.WriteLine($"GUARD slow: stop={stop} added=[{added}]");
+                        const string spoken = "glow over the quiet water tonight";
+                        Check($"slow read-back: typing stops ({stop}) and the one write lands whole, no half word", stop == LiveStop.Uncertain && spoken.StartsWith(added, StringComparison.Ordinal)
+                            && (added.Length == spoken.Length || spoken[added.Length] == ' '));
+                        Check("slow read-back: nothing more is typed for the take", slot.Reconcile("slow", "harbor lights glow over the quiet water tonight again and again") == null && Flat(Shown()) == after);
+                        continue;
+                    }
+                    // 1. Another window comes to the front just before the key batch.
+                    {
+                        var (slot, before) = await Begin("away");
+                        LiveKeyField.BeforeSend = _ => { Front(noteWindow); Thread.Sleep(300); };
+                        var stop = slot.Reconcile("away", "harbor lights glow over");
+                        stop ??= slot.Reconcile("away", "harbor lights glow over water");
+                        LiveKeyField.BeforeSend = null; await Task.Delay(500);
+                        Check($"another window in front: no key reaches it, typing stops ({stop})", Read(edit) == noteBefore && stop != null && Shown() == before);
+                    }
+                    // 1b. The same during a revision: between Shift+Left and the typed words.
+                    {
+                        var (slot, before) = await Begin("away-revise");
+                        int batches = 0; IntPtr sawFront = IntPtr.Zero;
+                        LiveKeyField.BeforeSend = batch => { batches = Math.Max(batches, batch); if (batch == 2) { Front(noteWindow); Thread.Sleep(300); sawFront = Native.GetForegroundWindow(); } };
+                        // "harbor lights" typed live; the finished text "Harbor lights glow." revises pFlow's own words from the "h":
+                        // Shift+Left over "harbor lights" (batch 1), then the typed replacement (batch 2).
+                        var (final, finalStop) = slot.Finalize("away-revise", "Harbor lights glow.");
+                        LiveStop? stop = final == LiveFinal.Kept ? finalStop : null;
+                        LiveKeyField.BeforeSend = null; await Task.Delay(500);
+                        Console.WriteLine($"GUARD away-revise: batches={batches} foreground at batch 2={(sawFront == noteWindow ? "Notepad" : sawFront == page.Window ? "Edge" : "other")} notepad changed={Read(edit) != noteBefore} stop={stop} guard={Diagnostics.Recorder.Report([]).Split('\n').LastOrDefault(l => l.Contains("typing.guard"))?.Trim()}");
+                        // Positive control: a key sent the same way now does reach Notepad (then it is taken out again).
+                        Front(noteWindow); await Task.Delay(300); Native.Send(Native.UnicodeText("Z")); await Task.Delay(400);
+                        bool probe = Read(edit) != noteBefore; if (probe) { Native.Send(Native.Key(0x08), Native.Key(0x08, true)); await Task.Delay(300); }
+                        Console.WriteLine($"GUARD away-revise probe: a key sent to the front window lands in Notepad={probe}");
+                        Check("positive control: a key sent to Notepad in front does land there (so 'no key reached it' means something)", probe);
+                        Check($"another window in front mid-revision: the guard ran at the key batch after Shift+Left, no key reaches the other window, typing stops ({stop})",
+                            batches >= 2 && sawFront == noteWindow && Read(edit) == noteBefore && stop != null && Flat(Shown()) == Flat(before));
+                    }
+                    // 3. The person types just before pFlow's batch: no mixing inside a word, typing stops.
+                    {
+                        var (slot, before) = await Begin("person");
+                        LiveKeyField.BeforeSend = _ => { Native.Send(Native.UnicodeText(" QQ")); Thread.Sleep(300); };
+                        var stop = slot.Reconcile("person", "harbor lights glow over");
+                        stop ??= slot.Reconcile("person", "harbor lights glow over water");
+                        LiveKeyField.BeforeSend = null; await Task.Delay(800);
+                        string after = Flat(Shown());
+                        Console.WriteLine($"GUARD person: stop={stop} shown=[{after[Math.Max(0, after.Length - 40)..]}]");
+                        Check($"the person typing: typing stops ({stop}) and the field holds their keys then pFlow's whole batch, nothing interleaved", stop != null
+                            && after.StartsWith(Flat(before + " QQ"), StringComparison.Ordinal) && WholeWords(after[Flat(before + " QQ").Length..].Trim(), "glow over water"));
+                        Check("the person typing: nothing more is typed for the take", slot.Reconcile("person", "harbor lights glow over water and more words") == null && Flat(Shown()) == after);
+                    }
+                    // 2. A password box on the same page takes focus just before the key batch.
+                    {
+                        var (slot, before) = await Begin("password");
+                        var secret = Find("Fictional secret");
+                        bool secretFocused = false;
+                        LiveKeyField.BeforeSend = _ => { try { secret.SetFocus(); } catch (InvalidOperationException) { Native.Send(Native.Key(0x09), Native.Key(0x09, true)); } Thread.Sleep(300);
+                            try { secretFocused = AutomationElement.FocusedElement.Current.IsPassword; } catch (Exception) { } };
+                        var stop = slot.Reconcile("password", "harbor lights glow over");
+                        stop ??= slot.Reconcile("password", "harbor lights glow over water");
+                        LiveKeyField.BeforeSend = null; await Task.Delay(500);
+                        bool untouched = Title(page.Window).Contains("pw len:0");
+                        try { secret.SetFocus(); } catch (InvalidOperationException) { } await Task.Delay(300); Native.Send(Native.UnicodeText("Z")); await Task.Delay(500);
+                        bool probe = Title(page.Window).Contains("pw len:1"); if (probe) { Native.Send(Native.Key(0x08), Native.Key(0x08, true)); await Task.Delay(300); }
+                        Console.WriteLine($"GUARD password probe: a key sent to the focused password box lands there={probe}");
+                        Console.WriteLine($"GUARD password: guard=[{Diagnostics.Recorder.Report([]).Split('\n').LastOrDefault(l => l.Contains("typing.guard"))?.Trim()}]");
+                        Console.WriteLine($"GUARD password: focused before the batch={secretFocused} title tail=[{Title(page.Window)[^10..]}] stop={stop}");
+                        Check($"a password box focused mid-take: it gets no key, typing stops ({stop})", secretFocused && untouched && stop != null && Shown() == before);
+                        Check("positive control: a key sent to the focused password box does land there", probe);
+                    }
+                    // 4. A composing input language (Japanese) becomes active in Edge just before the batch.
+                    {
+                        IntPtr japanese = LoadKeyboardLayout("00000411", 0);
+                        uint thread = Native.GetWindowThreadProcessId(page.Window, out _);
+                        var (slot, before) = await Begin("ime");
+                        LiveKeyField.BeforeSend = _ => { PostMessage(page.Window, 0x0050, IntPtr.Zero, japanese); Thread.Sleep(500); };
+                        var stop = slot.Reconcile("ime", "harbor lights glow over");
+                        stop ??= slot.Reconcile("ime", "harbor lights glow over water");
+                        LiveKeyField.BeforeSend = null;
+                        bool switched = (GetKeyboardLayout(thread).ToInt64() & 0xFFFF) == 0x0411;
+                        Console.WriteLine($"GUARD ime: layout switched={switched} stop={stop}");
+                        if (!switched) Console.WriteLine("GUARD ime NOT RUN: Edge did not take the Japanese layout");
+                        else {
+                            Check($"a composing input language: typing stops ({stop}) with nothing typed", stop != null && Shown() == before);
+                            var target = InsertionTarget.Capture(); target.LiveField(out string why);
+                            Check($"a composing input language at take start: no key typing ({why})", why.Contains("input method"));
+                        }
+                        PostMessage(page.Window, 0x0050, IntPtr.Zero, LoadKeyboardLayout("00000409", 0)); await Task.Delay(500);
+                    }
+                } finally { LiveKeyField.BeforeSend = null; await ClosePage("edge", page); }
+            }
+        } finally { await CloseOurNotepadTab(notepad, noteName); try { Directory.Delete(directory, true); } catch (IOException) { } }
+    }
+    /// `part` is empty or the first whole words of `spoken` (never half a word).
+    static bool WholeWords(string part, string spoken) => part.Length == 0 || spoken.StartsWith(part, StringComparison.Ordinal) && (part.Length == spoken.Length || spoken[part.Length] == ' ');
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr LoadKeyboardLayout(string id, uint flags);
+    [DllImport("user32.dll")] static extern IntPtr GetKeyboardLayout(uint thread);
+
     static async Task ReportButton()
     {
         string directory = Path.Combine(root, "report-button-fictional-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(directory);
-        string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        var (desktop, place) = DiagnosticEnvironment.ReportFolder();
+        Console.WriteLine($"REPORT folder: {place} (OneDrive-synced: {DiagnosticEnvironment.Synced(desktop)})");
+        Check("the report folder is never a OneDrive-synced folder", !DiagnosticEnvironment.Synced(desktop));
+        Directory.CreateDirectory(desktop);
         var explorersBefore = Explorers();
         try {
             foreach (string theme in new[] { "light", "dark" })
@@ -291,8 +460,11 @@ internal static partial class Program
                     string? saved = null;
                     for (int i = 0; i < 50 && saved == null; i++) { await Task.Delay(100); saved = Directory.GetFiles(desktop, "pFlow diagnostic report *.txt").FirstOrDefault(f => !files.Contains(f)); }
                     await Task.Delay(500);
-                    var status = Descendants<System.Windows.Controls.TextBlock>(settings).FirstOrDefault(t => t.Text.StartsWith("Saved on your Desktop: ", StringComparison.Ordinal));
-                    Check($"{theme} {width:F0}: the report is on the Desktop and the line under the button names it", saved != null && status != null && status.IsVisible && status.Text.EndsWith(Path.GetFileName(saved), StringComparison.Ordinal));
+                    var status = Descendants<System.Windows.Controls.TextBlock>(settings).FirstOrDefault(t => t.Text.StartsWith("Saved in " + place + ": ", StringComparison.Ordinal));
+                    Check($"{theme} {width:F0}: the report file is in {place} with the expected name, and the line under the button names it",
+                        saved != null && File.Exists(saved) && Regex.IsMatch(Path.GetFileName(saved), @"^pFlow diagnostic report \d{4}-\d{2}-\d{2} \d{6}\.txt$")
+                        && status != null && status.IsVisible && status.Text.EndsWith(Path.GetFileName(saved), StringComparison.Ordinal)
+                        && Descendants<System.Windows.Controls.TextBlock>(settings).Any(t => t.Text == DiagnosticReport.Explanation && t.Text.Contains(place)));
                     string report = File.ReadAllText(saved!);
                     Console.WriteLine($"REPORT checks: cpu={report.Contains("cpu.name:")} live={report.Contains("settings.liveText: type")} drive={report.Contains(@":\")} user[{Environment.UserName}]={Regex.IsMatch(report, @"\b" + Regex.Escape(Environment.UserName) + @"\b")} machine={report.Contains(Environment.MachineName, StringComparison.OrdinalIgnoreCase)}");
                     Check($"{theme} {width:F0}: the saved report has the PC's facts and nothing private ({report.Length} chars)", report.Contains("cpu.name:") && report.Contains("settings.liveText: type")
@@ -302,9 +474,9 @@ internal static partial class Program
                     ShootWindow(settings, Path.Combine(root, $"troubleshooting-clicked-{theme}-{width:F0}.png"), theme == "light");
                 } finally { settings.Close(); await whisper.DisposeAsync(); }
             }
+            // The File Explorer windows the button opened on the reports are closed again.
             var opened = Explorers().Except(explorersBefore).ToList();
             Console.WriteLine($"REPORT explorer windows opened: {opened.Count}");
-            Check("File Explorer opened on the saved report each time", opened.Count >= 1);
             foreach (var window in opened) PostMessage(window, 0x0010, IntPtr.Zero, IntPtr.Zero);
         } finally { try { Directory.Delete(directory, true); } catch (IOException) { } }
     }

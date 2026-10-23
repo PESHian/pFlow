@@ -72,7 +72,7 @@ internal static partial class Program
                     var texts = Descendants<TextBlock>(settings).Select(t => t.Text).ToList();
                     Check(tag + "Troubleshooting has one button, \"Save a diagnostic report\", with its one-line explanation and no status until it is used",
                         texts.Contains("TROUBLESHOOTING") && texts.Contains(DiagnosticReport.Explanation)
-                        && Descendants<Button>(settings).Count(b => b.Content as string == DiagnosticReport.ButtonLabel) == 1 && !texts.Any(t => t.StartsWith("Saved on your Desktop", StringComparison.Ordinal)));
+                        && Descendants<Button>(settings).Count(b => b.Content as string == DiagnosticReport.ButtonLabel) == 1 && !texts.Any(t => t.StartsWith("Saved in ", StringComparison.Ordinal)));
                     Check(tag + "Settings says \"Speech model: Whisper small (included)\" and shows nothing to choose or download for speech",
                         texts.Contains(SpeechModels.SettingsLine) && !Descendants<RadioButton>(settings).Any(r => r.GroupName == "SpeechModel")
                         && !texts.Any(t => t.Contains("large-v3-turbo") || t.Contains("Whisper medium")) && Descendants<DownloadControl>(settings).Count() == 1);
@@ -107,6 +107,17 @@ internal static partial class Program
             Check("a wrong-size own copy of Whisper small is passed over for the package's copy",
                 whisper.ModelPath == Path.Combine(damaged, "models", SpeechModels.Small.FileName) && whisper.OwnCopy == Whisper.OwnCopyState.WrongSize && whisper.OwnCopyNote != null);
             Check("with no own copy there is nothing to say", new Whisper(Path.Combine(damaged, "models"), damaged).OwnCopyNote == null);
+            // A right-size copy that failed its checksum once is remembered for that file (size + last write), not hashed every start.
+            string sized = Path.Combine(damaged, "models", "own"); Directory.CreateDirectory(sized);
+            string copy = Path.Combine(sized, SpeechModels.Small.FileName);
+            using (var stream = File.Create(copy)) stream.SetLength(SpeechModels.Small.Bytes);
+            Check("a right-size own copy with no verdict is used", new Whisper(sized, damaged).OwnCopy == Whisper.OwnCopyState.Usable);
+            new Whisper(sized, damaged).MarkOwnCopyDamaged();
+            var later = new Whisper(sized, damaged);
+            Check("a later start remembers the failed checksum for that file and uses the package's copy", later.OwnCopy == Whisper.OwnCopyState.Damaged && later.ModelPath == Path.Combine(damaged, "models", SpeechModels.Small.FileName) && later.OwnCopyNote != null);
+            File.SetLastWriteTimeUtc(copy, DateTime.UtcNow.AddMinutes(1));
+            Check("a changed own copy is checked again", new Whisper(sized, damaged).OwnCopy == Whisper.OwnCopyState.Usable);
+            File.Delete(copy);
             string? shots = Environment.GetEnvironmentVariable("PFLOW_SHOTS");
             foreach (string theme in new[] { "light", "dark" }) {
                 var store = new StateStore(damaged); store.Preferences.Theme = theme;

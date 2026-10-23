@@ -23,8 +23,22 @@ internal sealed class Whisper : IAsyncDisposable
     string PackagePath => System.IO.Path.Combine(assets, "models", SpeechModels.Small.FileName);
     internal enum OwnCopyState { None, Usable, WrongSize, Damaged }
     bool ownCopyDamaged;
-    internal OwnCopyState OwnCopy => !File.Exists(OwnCopyPath) ? OwnCopyState.None : ownCopyDamaged ? OwnCopyState.Damaged
+    internal OwnCopyState OwnCopy => !File.Exists(OwnCopyPath) ? OwnCopyState.None : ownCopyDamaged || DamagedBefore() ? OwnCopyState.Damaged
         : new FileInfo(OwnCopyPath).Length != SpeechModels.Small.Bytes ? OwnCopyState.WrongSize : OwnCopyState.Usable;
+    /// A failed checksum is remembered for that very file (its size and last-write time), so a damaged
+    /// own copy is not hashed again at every start; a changed file is checked again.
+    string VerdictPath => System.IO.Path.Combine(root, "small-own-copy-damaged.txt");
+    static string Stamp(FileInfo file) => file.Length + " " + file.LastWriteTimeUtc.Ticks;
+    bool DamagedBefore()
+    {
+        try { return File.Exists(VerdictPath) && File.ReadAllText(VerdictPath).Trim() == Stamp(new FileInfo(OwnCopyPath)); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
+    }
+    internal void MarkOwnCopyDamaged()
+    {
+        ownCopyDamaged = true;
+        try { File.WriteAllText(VerdictPath, Stamp(new FileInfo(OwnCopyPath))); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+    }
     /// For Settings and the diagnostic report: null while nothing is wrong.
     internal string? OwnCopyNote => OwnCopy is OwnCopyState.WrongSize or OwnCopyState.Damaged
         ? "pFlow's own copy of Whisper small is damaged, so the copy included with pFlow is used." : null;
@@ -86,7 +100,7 @@ internal sealed class Whisper : IAsyncDisposable
             try { worker = await SpeechWorker.Start(Executable, model, LiveModelPath, cancel); }
             catch (InvalidDataException) when (model == OwnCopyPath) {
                 // pFlow's own copy failed its size or checksum: the package's copy is used from now on.
-                ownCopyDamaged = true; InsertionLog.Record("own copy of Whisper small failed its check; using the package's copy");
+                MarkOwnCopyDamaged(); InsertionLog.Record("own copy of Whisper small failed its check; using the package's copy");
                 worker = await SpeechWorker.Start(Executable, ModelPath, LiveModelPath, cancel);
             }
             Diagnostics.Recorder.Event("worker.start", new DiagField("result", "ready"), new DiagField("ms", clock.ElapsedMilliseconds), new DiagField("loadMs", worker.LoadMs),

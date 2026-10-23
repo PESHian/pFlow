@@ -175,7 +175,7 @@ internal sealed partial class Program : Application
                 // Captured first: hiding the card could activate another window, which must never become the target.
                 target = InsertionTarget.Capture();
                 prompt.Dismiss();
-                InsertionLog.Record("take: app=" + target.ApplicationName + " field=" + target.Kind + (target.CanInsert ? " insertable" : " not insertable: " + target.Refusal) + " live=" + LiveTextModes.Resolve(store.Preferences.LiveTextMode) + " copy=" + store.Preferences.CopyDictationToClipboard);
+                InsertionLog.Record("take: app=" + target.LogName + " field=" + target.Kind + (target.CanInsert ? " insertable" : " not insertable: " + target.Refusal) + " live=" + LiveTextModes.Resolve(store.Preferences.LiveTextMode) + " copy=" + store.Preferences.CopyDictationToClipboard);
                 sessionId = operations.Start();
                 session = new CancellationTokenSource(TimeSpan.FromHours(2));
                 sessionDirectory = Path.Combine(store.DirectoryPath, "recording-" + Guid.NewGuid()); Directory.CreateDirectory(sessionDirectory);

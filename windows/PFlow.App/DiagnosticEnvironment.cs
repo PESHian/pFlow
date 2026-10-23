@@ -149,26 +149,45 @@ internal static class DiagnosticEnvironment
         return string.Join(", ", layouts.Select(Layout));
     }
 
-    /// A keyboard layout handle as its language and layout ids, marked when it is an input method (IME).
+    /// A keyboard layout handle as its language and layout ids, marked when its language types through a
+    /// composing input method (Japanese, Chinese, Korean).
     internal static string Layout(IntPtr layout)
     {
         long value = layout.ToInt64();
         string text = (value & 0xFFFF).ToString("x4") + "-" + ((value >> 16) & 0xFFFF).ToString("x4");
-        return ImmIsIME(layout) ? text + " (IME)" : text;
+        return InputLanguages.Composes((int)(value & 0xFFFF)) ? text + " (composing input method)" : text;
     }
 
     internal static string ForegroundLayout(IntPtr window) => Layout(GetKeyboardLayout(Native.GetWindowThreadProcessId(window, out _)));
 
-    /// Writes the report to the Desktop and shows it selected in File Explorer. Returns the file name.
+    /// Where reports go: the Downloads folder, unless OneDrive (or another cloud folder) holds it, where a
+    /// report would upload by itself; then pFlow's own Reports folder. Returns the folder and how
+    /// Settings names it.
+    internal static (string Folder, string Label) ReportFolder()
+    {
+        string? downloads = null;
+        try { if (SHGetKnownFolderPath(new Guid("374DE290-123F-4565-9164-39C4925E467B"), 0, IntPtr.Zero, out var raw) == 0) { downloads = Marshal.PtrToStringUni(raw); Marshal.FreeCoTaskMem(raw); } }
+        catch (Exception error) when (error is EntryPointNotFoundException or COMException) { }
+        if (downloads != null && Directory.Exists(downloads) && !Synced(downloads)) return (downloads, "your Downloads folder");
+        return (System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "pFlow", "Reports"), "pFlow's Reports folder");
+    }
+
+    /// A folder inside OneDrive (personal or work), which uploads what is saved there.
+    internal static bool Synced(string folder) =>
+        new[] { "OneDrive", "OneDriveConsumer", "OneDriveCommercial" }.Select(name => Environment.GetEnvironmentVariable(name)).Any(root => !string.IsNullOrEmpty(root) && folder.StartsWith(root.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase))
+        || folder.Split('\\').Any(part => part.StartsWith("OneDrive", StringComparison.OrdinalIgnoreCase));
+
+    /// Writes the report to the reports folder and shows it selected in File Explorer. Returns the file name.
     internal static string Save(string report)
     {
-        string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+        string folder = ReportFolder().Folder; Directory.CreateDirectory(folder);
         string name = "pFlow diagnostic report " + DateTime.Now.ToString("yyyy-MM-dd HHmmss", System.Globalization.CultureInfo.InvariantCulture) + ".txt";
-        string path = System.IO.Path.Combine(desktop, name);
+        string path = System.IO.Path.Combine(folder, name);
         File.WriteAllText(path, report, new System.Text.UTF8Encoding(false));
         try { Process.Start(new ProcessStartInfo("explorer.exe") { ArgumentList = { "/select," + path }, UseShellExecute = false }); } catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException) { }
         return name;
     }
+    [DllImport("shell32.dll")] static extern int SHGetKnownFolderPath([MarshalAs(UnmanagedType.LPStruct)] Guid id, uint flags, IntPtr token, out IntPtr path);
 
     [StructLayout(LayoutKind.Sequential)] struct MemoryStatus { public uint Length, Load; public ulong Total, Available, TotalPage, AvailablePage, TotalVirtual, AvailableVirtual, AvailableExtended; }
     [StructLayout(LayoutKind.Sequential)] struct PowerStatus { public byte AcLine, Flag, Percent, SaverOn; public int Seconds, FullSeconds; }
@@ -184,19 +203,22 @@ internal static class DiagnosticEnvironment
     [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
     [DllImport("user32.dll")] static extern int GetKeyboardLayoutList(int count, IntPtr[]? layouts);
     [DllImport("user32.dll")] static extern IntPtr GetKeyboardLayout(uint thread);
-    [DllImport("imm32.dll")] static extern bool ImmIsIME(IntPtr layout);
 }
 
 /// Settings → Troubleshooting → "Save a diagnostic report": the recorder's report with this PC's facts,
-/// saved on the Desktop and shown in File Explorer. Returns the line shown under the button.
+/// saved in Downloads (or pFlow's Reports folder when Downloads is in OneDrive) and shown in File
+/// Explorer. Returns the line shown under the button.
 internal static class DiagnosticReport
 {
-    internal const string ButtonLabel = "Save a diagnostic report", Explanation = "Helps fix problems. Contains no dictated words.";
+    internal const string ButtonLabel = "Save a diagnostic report";
+    /// The one line above the button: what it is for and where the file goes.
+    internal static string Explanation => "Helps fix problems. Contains no dictated words. Saved in " + DiagnosticEnvironment.ReportFolder().Label + ".";
     internal static string Save(Whisper whisper, StateStore store, string activationKey)
     {
         try {
             string report = Diagnostics.Recorder.Report(DiagnosticEnvironment.Collect(whisper, store, activationKey));
-            return "Saved on your Desktop: " + DiagnosticEnvironment.Save(report);
+            string name = DiagnosticEnvironment.Save(report);
+            return "Saved in " + DiagnosticEnvironment.ReportFolder().Label + ": " + name;
         } catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Security.SecurityException) {
             return "Could not save the report: " + PrivateLog.Scrub(error.Message);
         }
