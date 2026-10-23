@@ -31,11 +31,16 @@ internal static partial class Program
     /// One Type-mode take as Program runs it: BeginTake, capture, typing begins before any pFlow window
     /// (or later, when Chromium's field becomes readable during the take: CaptureAgainSoon + BeginTypingLate),
     /// live updates reconciled, then the pipeline's finish with the take's LiveTyping, EndTake.
-    static async Task<TypeResult> TypeTake(string name, string audio, Whisper whisper, StateStore store, LocalTextModel textModel, LivePreview preview, Capsule capsule, IntPtr owner, string directory)
+    static async Task<TypeResult> TypeTake(string name, string audio, Whisper whisper, StateStore store, LocalTextModel textModel, LivePreview preview, Capsule capsule, IntPtr owner, string directory, string? expectApp = null)
     {
         var result = new TypeResult(); var recorder = Diagnostics.Recorder;
         recorder.BeginTake(new DiagField("trigger", "hold"), new DiagField("key", store.Preferences.ActivationKey), new DiagField("liveText", LiveTextModes.TypeInApp));
         var target = InsertionTarget.Capture();
+        // Never a window the check does not own: the take stops before anything is typed if focus is elsewhere.
+        if (expectApp != null && !string.Equals(target.ApplicationName, expectApp, StringComparison.OrdinalIgnoreCase)) {
+            recorder.EndTake(new DiagField("result", "wrong window"));
+            Check($"{name}: the take starts in {expectApp} (focus was in {target.ApplicationName})", false);
+        }
         InsertionLog.Record("take: app=" + target.ApplicationName + " field=" + target.Kind + (target.CanInsert ? " insertable" : " not insertable: " + target.Refusal) + " live=" + LiveTextModes.TypeInApp);
         var slot = new LiveInlineSlot(); string session = name; bool typing = false;
         var field = target.LiveField(out string why); result.FieldWhy = why;
@@ -178,7 +183,7 @@ internal static partial class Program
                         string before = Title(page.Window);
                         string take = $"{browser}-{variant}-{temperature}";
                         TypeResult r;
-                        try { r = await TypeTake(take, "medium-1.wav", rig.Whisper, rig.Store, rig.Text, rig.Preview, rig.Capsule, rig.Owner.Handle, rig.Directory); }
+                        try { r = await TypeTake(take, "medium-1.wav", rig.Whisper, rig.Store, rig.Text, rig.Preview, rig.Capsule, rig.Owner.Handle, rig.Directory, browser == "chrome" ? "chrome" : "msedge"); }
                         catch (InvalidOperationException error) when (variant == "password") {
                             // A password box pFlow can see refuses the take at its start, as Program does (no recording, nothing typed).
                             Diagnostics.Recorder.EndTake(new DiagField("result", "could not start"), new DiagField("reason", PrivateLog.Reason(error)));
@@ -227,7 +232,7 @@ internal static partial class Program
             var start = new ProcessStartInfo("notepad.exe") { UseShellExecute = true }; start.ArgumentList.Add(file); Process.Start(start);
             notepad = await WindowWith(notepadName); var edit = await Editor(notepad);
             await Place(notepad, edit); End(edit);
-            var n = await TypeTake("diag-notepad", "medium-1.wav", rig.Whisper, rig.Store, rig.Text, rig.Preview, rig.Capsule, rig.Owner.Handle, rig.Directory);
+            var n = await TypeTake("diag-notepad", "medium-1.wav", rig.Whisper, rig.Store, rig.Text, rig.Preview, rig.Capsule, rig.Owner.Handle, rig.Directory, "Notepad");
             Console.WriteLine($"DIAG notepad: writes={n.Writes} matched={n.Matched} firstWrite={n.FirstWriteMs:F0}ms stops={string.Join(",", n.Stops)} status=[{n.Status}]");
             Check("Notepad: live words typed and read back", n.Matched > 0 && n.Status == "Inserted");
             await CloseOurNotepadTab(notepad, notepadName); notepad = null;
@@ -235,8 +240,9 @@ internal static partial class Program
             var page = await OpenPage("edge", "body", "Fictional prefix.");
             try {
                 try { _ = InsertionTarget.Capture(); } catch (InvalidOperationException) { }
-                await Task.Delay(1500); Front(page.Window); await Task.Delay(500);
-                var e = await TypeTake("diag-edge", "medium-1.wav", rig.Whisper, rig.Store, rig.Text, rig.Preview, rig.Capsule, rig.Owner.Handle, rig.Directory);
+                await Task.Delay(1500);
+                for (int i = 0; i < 5 && Native.GetForegroundWindow() != page.Window; i++) { Front(page.Window); await Task.Delay(500); }
+                var e = await TypeTake("diag-edge", "medium-1.wav", rig.Whisper, rig.Store, rig.Text, rig.Preview, rig.Capsule, rig.Owner.Handle, rig.Directory, "msedge");
                 Console.WriteLine($"DIAG edge: writes={e.Writes} matched={e.Matched} firstWrite={e.FirstWriteMs:F0}ms late={e.LateBegin} stops={string.Join(",", e.Stops)} status=[{e.Status}]");
             } finally { await ClosePage("edge", page); }
             // The report as the button builds it, saved next to the harness (the button saves to the Desktop).
@@ -342,7 +348,7 @@ internal static partial class Program
                 await whisper.Prewarm();
                 Console.WriteLine($"SLOW cores={cores} rule={rule}: worker threads {SpeechThreads.Final(SpeechWorker.LogicalProcessors)} final / {SpeechThreads.Live(SpeechWorker.LogicalProcessors)} live, affinity 0x{self.ProcessorAffinity.ToInt64():x}");
                 await Place(notepad, edit); End(edit);
-                var r = await TypeTake("slow-" + cores + "-" + rule, "medium-1.wav", whisper, rig.Store, rig.Text, rig.Preview, rig.Capsule, rig.Owner.Handle, rig.Directory);
+                var r = await TypeTake("slow-" + cores + "-" + rule, "medium-1.wav", whisper, rig.Store, rig.Text, rig.Preview, rig.Capsule, rig.Owner.Handle, rig.Directory, "Notepad");
                 var windows = r.Section.Split('\n').Where(l => l.Contains(" live.window ")).ToList();
                 var took = windows.Select(l => Regex.Match(l, @"tookMs=(-?\d+)")).Where(m => m.Success).Select(m => m.Groups[1].Value).ToList();
                 var cpu = windows.Select(l => Regex.Match(l, @"workerCpuMs=(-?[\d.]+)")).Where(m => m.Success).Select(m => m.Groups[1].Value).ToList();
