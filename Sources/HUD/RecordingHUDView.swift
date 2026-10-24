@@ -12,16 +12,15 @@ struct RecordingHUDView: View {
     }
 
     /// The recording capsule, the same control for every Live text choice:
-    /// Superwhisper's pill size (58x30 pt, measured on macOS 27) and its
-    /// material, dark Liquid Glass (an opaque dark fill with Reduce
-    /// Transparency), with a hairline outline in the person's colour palette
-    /// and the waveform or the spinner inside. One size while the take
-    /// records and finishes; a short status after the take widens it only
-    /// as far as its words need.
-    static let capsuleSize = CGSize(width: 58, height: 30)
+    /// a low pill, 70x22 pt (shorter and a little wider than Superwhisper's
+    /// 58x30, as the owner asked after 0.3.14), dark Liquid Glass (an opaque
+    /// dark fill with Reduce Transparency), with a hairline outline in the
+    /// person's colour palette and the waveform or the sweep inside. One
+    /// size in every phase; a status after the take is an icon only.
+    static let capsuleSize = CGSize(width: 70, height: 22)
     static let capsuleOutlineOpacity = 0.65
     /// The capsule's waveform, inside its rounded ends.
-    static let capsuleWaveform = CGSize(width: 34, height: 18)
+    static let capsuleWaveform = CGSize(width: 46, height: 14)
 
     /// The Copy card shows all of the text up to this many lines, then scrolls.
     static let wholeTextLines = 10
@@ -99,7 +98,7 @@ struct RecordingHUDView: View {
     /// The one thing a status shows in the capsule: its icon. No words.
     static func statusMark(_ text: String, _ systemImage: String) -> some View {
         Image(systemName: systemImage)
-            .font(.system(size: 13, weight: .medium))
+            .font(.system(size: 11, weight: .medium))
             .accessibilityLabel(text)
             .help(text)
     }

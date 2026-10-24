@@ -143,6 +143,9 @@ final class TextInjector: TextInjecting {
     private var targetApp: NSRunningApplication?
     private var targetField: AXUIElement?
     private var originalValue: String?
+    /// The field held only an empty editor's placeholder when the take began (EditorPlaceholder).
+    private var placeholder: EditorPlaceholder.Start?
+    private var placeholderStart: Bool { placeholder != nil }
     private var fieldUnreadable = false
     private var composition: (composing: Bool, at: UInt64) = (false, 0)
     private var originalSelection: CFRange?
@@ -202,7 +205,27 @@ final class TextInjector: TextInjecting {
         fieldUnreadable = targetField.map(FocusedElement.unreadable) ?? false
         originalValue = fieldUnreadable ? nil : targetField.flatMap { attribute($0, kAXValueAttribute) as? String }
         originalSelection = targetField.flatMap(selection)
+        placeholder = targetField.flatMap { field in
+            EditorPlaceholder.start(value: originalValue, placeholderText: attribute(field, "AXPlaceholderValue") as? String,
+                                    markedEmpty: markedEmpty(field))
+        }
         targetIsSecure = targetField.map { attribute($0, kAXSubroleAttribute) as? String == kAXSecureTextFieldSubrole } ?? false
+    }
+
+    /// The editor marks itself empty (EditorPlaceholder.emptyEditorClasses), on
+    /// the field or one of its first few descendants (a web page's own classes).
+    private func markedEmpty(_ field: AXUIElement) -> Bool {
+        var queue = [(field, 0)], seen = 0
+        while !queue.isEmpty, seen < 12 {
+            let (element, depth) = queue.removeFirst()
+            seen += 1
+            if let classes = attribute(element, "AXDOMClassList") as? [String],
+               classes.contains(where: EditorPlaceholder.emptyEditorClasses.contains) { return true }
+            if depth < 3, let children = attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
+                queue += children.prefix(4).map { ($0, depth + 1) }
+            }
+        }
+        return false
     }
 
     /// Live words by Accessibility range writes in native text views, by typed
@@ -210,24 +233,40 @@ final class TextInjector: TextInjecting {
     /// native field that takes no range writes but can be read. Never in a
     /// terminal or a remote viewer.
     private func beginLiveOverCapturedField(session: String) -> LiveInlineStart {
-        guard !delivering, let targetApp, let targetField else { return live.begin(id: session, field: nil) }
+        guard !delivering, let targetApp, let targetField else {
+            ReasonLog.note("live typing not started: no field found")
+            return live.begin(id: session, field: nil)
+        }
         let pid = targetApp.processIdentifier, bundleID = targetApp.bundleIdentifier
         let check = TargetCheck(pid: pid, element: targetField, bundleID: bundleID)
         // Never in a terminal or a remote viewer, nor while an input method may be composing.
         let composing = InputComposition.composing(markedLength: FocusedElement.markedLength(targetField),
                                                    tracked: composition.composing)
-        guard !composing, NoTypePlaces.place(bundleID: bundleID, elementClasses: check.classes(targetField)) == nil else {
+        guard !composing else {
+            ReasonLog.note("live typing not started:", InsertionBlock.inputMethod)
             return live.begin(id: session, field: nil)
         }
-        guard !fieldUnreadable else { return live.begin(id: session, field: nil) }
-        let composition = self.composition
-        let keys = { KeyLiveTextField(pid: pid, element: targetField, bundleID: bundleID, composition: composition) }
+        if let place = NoTypePlaces.place(bundleID: bundleID, elementClasses: check.classes(targetField)) {
+            ReasonLog.note("live typing not started:", place)
+            return live.begin(id: session, field: nil)
+        }
+        guard !fieldUnreadable else {
+            ReasonLog.note("live typing not started: the field's text cannot be read")
+            return live.begin(id: session, field: nil)
+        }
+        if placeholderStart { ReasonLog.note("the field holds only an empty editor's placeholder") }
+        let composition = self.composition, placeholder = self.placeholder
+        let keys = { KeyLiveTextField(pid: pid, element: targetField, bundleID: bundleID, composition: composition,
+                                      placeholder: placeholder) }
         let web = WebAppAccessibility.kind(of: targetApp) != nil || FocusedElement.inWebArea(targetField)
         switch LiveFieldMethod.method(webApp: web, bundleID: bundleID) {
         case .keys:
+            ReasonLog.note("live words by typed keys")
             return beginLive(session: session, field: keys())
         case .ranges:
-            let start = beginLive(session: session, field: AXLiveTextField(pid: pid, element: targetField, bundleID: bundleID))
+            ReasonLog.note("live words by Accessibility range writes")
+            let start = beginLive(session: session, field: AXLiveTextField(pid: pid, element: targetField, bundleID: bundleID,
+                                                                           placeholder: placeholder))
             return start == .preview(.unsupported) ? beginLive(session: session, field: keys()) : start
         }
     }
@@ -266,7 +305,7 @@ final class TextInjector: TextInjecting {
         // went in. Live words never touch the clipboard.
         if result == .applied, copyToClipboard(),
            placeOnClipboard(Self.clipboardItem(text: text, formatted: nil, sessionID: UUID().uuidString, private: false)) == nil {
-            NSLog("pFlow: the finished text could not be copied to the clipboard")
+            ReasonLog.note("the finished text could not be copied to the clipboard")
         }
         return result
     }
@@ -320,7 +359,7 @@ final class TextInjector: TextInjecting {
         }
 
         guard AXIsProcessTrusted() else {
-            NSLog("pFlow: Accessibility is off for this build, so the text cannot be put in")
+            ReasonLog.note("not put in:", InsertionBlock.accessibilityOff)
             return unavailable(.accessibilityOff)
         }
         PersonInput.shared.start()
@@ -332,16 +371,19 @@ final class TextInjector: TextInjecting {
         await waitForKeysToClear()
         guard !Task.isCancelled else { return unavailable(.cancelled) }
 
-        let insertion = InsertionSpacing.prepare(text, formatted: formatted, value: originalValue,
-            selection: originalSelection.map { NSRange(location: $0.location, length: $0.length) })
-        let expected = expectedValue(inserting: insertion.text)
+        let insertion = placeholderStart
+            ? InsertionSpacing.prepare(text, formatted: formatted, value: "", selection: NSRange(location: 0, length: 0))
+            : InsertionSpacing.prepare(text, formatted: formatted, value: originalValue,
+                                       selection: originalSelection.map { NSRange(location: $0.location, length: $0.length) })
+        // A field that held only a placeholder holds only pFlow's words afterwards.
+        let expected = placeholderStart ? insertion.text : expectedValue(inserting: insertion.text)
 
         // Native text views: a verified Accessibility write, no clipboard.
         if insertion.formatted == nil, let expected, accessibilityWriteFits() {
             switch writeThroughAccessibility(insertion.text, expected: expected, check: check) {
             case .landed:
                 if keepCopy, placeOnClipboard(Self.clipboardItem(text: text, formatted: nil, sessionID: sessionID, private: false)) == nil {
-                    NSLog("pFlow: the finished text could not be copied to the clipboard")
+                    ReasonLog.note("the finished text could not be copied to the clipboard")
                 }
                 return .pasted
             case .blocked(let block): return unavailable(block)
@@ -395,11 +437,11 @@ final class TextInjector: TextInjecting {
               AXUIElementSetAttributeValue(targetField, kAXSelectedTextRangeAttribute as CFString, rangeValue) == .success else { return .refused }
         let result = AXUIElementSetAttributeValue(targetField, kAXSelectedTextAttribute as CFString, text as CFString)
         var read = attribute(targetField, kAXValueAttribute) as? String
-        for _ in 0..<20 where read != expected {
+        for _ in 0..<20 where !EditorPlaceholder.same(read, expected, startedAsPlaceholder: placeholderStart) {
             usleep(50_000)
             read = attribute(targetField, kAXValueAttribute) as? String
         }
-        if read == expected { return .landed }
+        if EditorPlaceholder.same(read, expected, startedAsPlaceholder: placeholderStart) { return .landed }
         if read == before { return result == .success ? .notShown : .refused }
         return .changedOtherwise
     }
@@ -433,7 +475,7 @@ final class TextInjector: TextInjecting {
         let block: InsertionBlock? = Task.isCancelled ? .cancelled
             : extraBlock() ?? InsertionGuard.block(check.facts(since: started)) ?? (owned ? nil : .clipboard)
         if let block {
-            NSLog("pFlow: paste refused: \(block)")
+            ReasonLog.note("paste refused:", block)
             return keepCopy && owned ? .leftOnClipboard : .savedToHistory(block)
         }
         SyntheticKeys.paste()
@@ -442,23 +484,21 @@ final class TextInjector: TextInjecting {
         // goes back. Once a paste is queued, cancellation must not shorten it.
         let reads = keepCopy ? 30 : 20
         for _ in 0..<reads {
-            if let expected, read().map(Self.plain) == Self.plain(expected) { return .pasted }
+            if EditorPlaceholder.same(read(), expected, startedAsPlaceholder: placeholderStart) { return .pasted }
             if !PasteboardSnapshot.isOwned(pasteboard, change: change, session: sessionID) { return .unconfirmed }
             await withCheckedContinuation { continuation in
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { continuation.resume() }
             }
         }
         let now = read()
-        if let expected, now.map(Self.plain) == Self.plain(expected) { return .pasted }
-        // A field that held text and still reads exactly as before took nothing.
-        if let before, !before.isEmpty, let now, Self.plain(now) == Self.plain(before) {
-            NSLog("pFlow: the paste went out and the field still reads as before")
+        if EditorPlaceholder.same(now, expected, startedAsPlaceholder: placeholderStart) { return .pasted }
+        // A field that held text (or a placeholder) and still reads exactly as before took nothing.
+        if let before, !before.isEmpty, EditorPlaceholder.same(now, before, startedAsPlaceholder: false) {
+            ReasonLog.note("the paste went out and the field still reads as before")
             return .savedToHistory(.notTaken)
         }
         return .unconfirmed
     }
-
-    private static func plain(_ text: String) -> String { text.replacingOccurrences(of: "\u{00A0}", with: " ") }
 
     /// The end of a take with typed live words: pFlow's own words are selected
     /// (no keys). The finished text is pasted over them, the checked way, only
@@ -478,17 +518,18 @@ final class TextInjector: TextInjecting {
         delivering = true
         defer { delivering = false }
         func refuse(_ block: InsertionBlock) -> InjectionOutcome {
-            NSLog("pFlow: the finished text did not go over pFlow's words: \(block)")
+            ReasonLog.note("the finished text did not go over own words:", block)
             own.collapse()
             return .savedToHistory(block)
         }
         guard AXIsProcessTrusted() else { return refuse(.accessibilityOff) }
         guard let targetApp, let targetField, let check = targetCheck() else { return refuse(.appChanged) }
         let reader = AXLiveTextField(pid: targetApp.processIdentifier, element: targetField, plainSpaces: true,
-                                     bundleID: targetApp.bundleIdentifier)
+                                     bundleID: targetApp.bundleIdentifier, placeholder: placeholder)
         let now = reader.state()
         if let why = own.mismatch(value: now.value, selection: now.selection) {
-            NSLog("pFlow: replace refused: \(why)")
+            _ = why
+            ReasonLog.note("replace refused: own words no longer selected as left")
             return refuse(.selectionChanged)
         }
         guard let value = now.value else { return refuse(.selectionChanged) }

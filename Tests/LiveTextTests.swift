@@ -391,10 +391,10 @@ struct LiveTextTests {
         #expect(hud.model.reason == nil && hud.model.copyOffer == nil)
     }
 
-    /// The capsule is Superwhisper's measured pill (58x30 pt) in every phase;
+    /// The capsule is one low pill (70x22 pt) in every phase;
     /// a status after the take is an icon, its words on the card.
     @Test func capsuleIsThePillSizeWhileRecordingAndFinishing() throws {
-        #expect(RecordingHUDView.capsuleSize == CGSize(width: 58, height: 30))
+        #expect(RecordingHUDView.capsuleSize == CGSize(width: 70, height: 22))
         for phase in [HUDPhase.listening, .confirmCancel, .transcribing, .cleaning] {
             for style in WaveformStyle.allCases {
                 let model = HUDModel()
@@ -402,7 +402,7 @@ struct LiveTextTests {
                 model.waveformStyle = style
                 model.levels = (0..<HUDModel.waveformSampleCount).map { Float($0 % 5) / 5 }
                 let host = NSHostingView(rootView: RecordingHUDView(model: model))
-                #expect(host.fittingSize == NSSize(width: 58, height: 30), "\(phase) \(style): \(host.fittingSize)")
+                #expect(host.fittingSize == NSSize(width: 70, height: 22), "\(phase) \(style): \(host.fittingSize)")
             }
         }
         for phase in [HUDPhase.copied, .pasteUnconfirmed, .savedToHistory, .failed, .liveTextKept, .liveTextKeptTyped,
@@ -410,7 +410,7 @@ struct LiveTextTests {
             let model = HUDModel()
             model.phase = phase
             let host = NSHostingView(rootView: RecordingHUDView(model: model))
-            #expect(host.fittingSize == NSSize(width: 58, height: 30), "one size, an icon at most: \(phase): \(host.fittingSize)")
+            #expect(host.fittingSize == NSSize(width: 70, height: 22), "one size, an icon at most: \(phase): \(host.fittingSize)")
         }
     }
 
@@ -485,12 +485,12 @@ struct LiveTextTests {
         #expect(loud[0].height < loud[1].height && loud[1].height < loud[2].height && loud[2].height < loud[3].height)
         #expect(loud.allSatisfy { $0.minY >= rect.minY && $0.maxY <= rect.maxY && Int($0.height) % 2 == 0 })
         let trace = CapsuleWave.trace(voice, in: rect)
-        #expect(trace.count == 17 && trace.first?.x == 0 && trace.last?.x == rect.width)
+        #expect(trace.count == 23 && trace.first?.x == 0 && trace.last?.x == rect.width)
     }
 
     /// The panel is measured again when the card's content changes after it
     /// is on screen: the whole text and the Grant row make it taller, and it
-    /// stays inside the screen. The capsule keeps 58x30 in every phase.
+    /// stays inside the screen. The capsule keeps 70x22 in every phase.
     @Test func panelGrowsWithTheCopyCardAndStaysOnScreen() throws {
         let hud = HUDController(pasteboard: NSPasteboard(name: .init("pflow.panel.tests.\(UUID().uuidString)")))
         hud.show(device: nil, livePreview: false)

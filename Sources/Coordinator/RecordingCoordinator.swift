@@ -91,10 +91,12 @@ final class RecordingCoordinator {
         typingLive = false
         takeAccessibilityOff = !injector.accessibilityGranted
         if takeAccessibilityOff {
-            NSLog("pFlow: Accessibility is off for this build; words cannot be typed or pasted this take")
+            ReasonLog.note("take start:", InsertionBlock.accessibilityOff)
         }
         if takeLiveTextMode == .typeInApp, !takeAccessibilityOff {
-            switch injector.beginLive(session: take) {
+            let start = injector.beginLive(session: take)
+            ReasonLog.note("live typing start:", start)
+            switch start {
             case .typing:
                 typingLive = true
                 liveNote = "Typing in \(applicationName ?? "this app")"
@@ -177,7 +179,9 @@ final class RecordingCoordinator {
             while !Task.isCancelled {
                 try? await Task.sleep(for: self?.typingRetryEvery ?? .milliseconds(100))
                 guard let self, !Task.isCancelled, self.awaitingTyping, self.state == .recording, self.take == take else { return }
-                switch self.injector.retryLive(session: take) {
+                let retried = self.injector.retryLive(session: take)
+                if retried != .waiting { ReasonLog.note("live typing start after waiting:", retried) }
+                switch retried {
                 case .waiting where self.clock() < deadline:
                     continue
                 case .waiting:
@@ -437,10 +441,7 @@ final class RecordingCoordinator {
                 outcome = await injector.deliver(text, formatted: formattedText)
             }
             lastOutcome = outcome
-            NSLog("pFlow: insertion result: \(outcome)")
-            if case .blockedBySecureInput(let holder) = outcome {
-                NSLog("pFlow: paste blocked by secure input held by \(holder ?? "another app"); text left on clipboard")
-            }
+            ReasonLog.note("insertion result:", outcome)
 
             history.save(text: text, duration: duration, device: recordingDevice,
                          spokenWordCount: spokenWordCount, applicationName: applicationName,

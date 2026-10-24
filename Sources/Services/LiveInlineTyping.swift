@@ -112,7 +112,16 @@ final class LiveInlineSession {
            write.range.length > 0 || write.select != nil || write.text.contains(where: \.isNewline) {
             step = ownership.halt(.revised)
         }
-        return perform(step)
+        return logged(perform(step))
+    }
+
+    /// The reason line when typing stops: the stop and, for a read-back that
+    /// differed, its kind.
+    private func logged(_ stop: LiveInlineOwnership.Stop?) -> LiveInlineOwnership.Stop? {
+        guard let stop else { return nil }
+        ReasonLog.note("live typing stopped:", stop)
+        if let shape = ownership.mismatch { ReasonLog.note("live typing read-back differed:", shape) }
+        return stop
     }
 
     func finalize(_ text: String) -> LiveInlineFinal {
@@ -120,7 +129,7 @@ final class LiveInlineSession {
         // exactly as in Preview mode, whatever stopped the typing.
         if confirmNothingTyped() { return .notTyped }
         if field.appendOnly { return finalizeOwnWords(text) }
-        if let stop = perform(ownership.finalize(text: text, observed: field.state())) { return .kept(stop) }
+        if let stop = logged(perform(ownership.finalize(text: text, observed: field.state()))) { return .kept(stop) }
         return .applied
     }
 
@@ -130,10 +139,16 @@ final class LiveInlineSession {
         let now = field.state()
         guard let span = ownership.ownSpan(now) else {
             let stopped = ownership.stopped.flatMap { $0 == .revised ? nil : $0 }
-            return .kept(stopped ?? ownership.check(now) ?? .uncertain)
+            let stop = stopped ?? ownership.check(now) ?? .uncertain
+            ReasonLog.note("own words not found at the end:", stop)
+            if stopped == nil, let shape = ReadBackShape.classify(expected: ownership.expectedValue, read: now.value) {
+                ReasonLog.note("end read-back differed:", shape)
+            }
+            return .kept(stop)
         }
         if ownership.finished(text) { return .applied }
         guard field.select(span) else {
+            ReasonLog.note("own words could not be selected at the end")
             field.collapse()
             return .kept(.uncertain)
         }
@@ -201,13 +216,18 @@ final class AXLiveTextField: LiveTextField {
     private let application: AXUIElement
     /// Browsers show a typed space at a line end as a no-break space: read as a space.
     private let plainSpaces: Bool
+    /// The field held only a placeholder when the take began (EditorPlaceholder):
+    /// it is read and selected as an empty field would be.
+    private let placeholder: EditorPlaceholder.Start?
 
     private let bundleID: String?
 
-    init(pid: pid_t, element: AXUIElement, plainSpaces: Bool = false, bundleID: String? = nil) {
+    init(pid: pid_t, element: AXUIElement, plainSpaces: Bool = false, bundleID: String? = nil,
+         placeholder: EditorPlaceholder.Start? = nil) {
         self.pid = pid
         self.element = element
         self.plainSpaces = plainSpaces
+        self.placeholder = placeholder
         self.bundleID = bundleID
         application = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(application, 0.3)
@@ -227,8 +247,10 @@ final class AXLiveTextField: LiveTextField {
         }
         let secure = SecureInput.isEnabled
             || attribute(element, kAXSubroleAttribute) as? String == kAXSecureTextFieldSubrole
-        return LiveFieldState(app: front, element: same ? LiveFieldState.target : "other", secure: secure,
-                              trusted: AXIsProcessTrusted(), value: boundedValue(), selection: selection())
+        let state = LiveFieldState(app: front, element: same ? LiveFieldState.target : "other", secure: secure,
+                                   trusted: AXIsProcessTrusted(), value: boundedValue(), selection: selection())
+        guard let placeholder else { return state }
+        return EditorPlaceholder.seen(state, placeholderText: placeholder.text)
     }
 
     /// The field's text, unless it is too long to read on every update; a
@@ -264,6 +286,7 @@ final class AXLiveTextField: LiveTextField {
     func selectionSettable() -> Bool { settable(kAXSelectedTextRangeAttribute) }
 
     func select(_ range: NSRange) -> Bool {
+        let range = placeholder.map { EditorPlaceholder.fieldRange(range, raw: boundedValue(), placeholderText: $0.text) } ?? range
         var cf = CFRange(location: range.location, length: range.length)
         guard let value = AXValueCreate(.cfRange, &cf) else { return false }
         return AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value) == .success

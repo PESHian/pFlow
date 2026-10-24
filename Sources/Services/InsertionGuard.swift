@@ -288,10 +288,8 @@ struct OwnedWords: Equatable {
         guard selection == range else { return "the selection moved" }
         let field = value as NSString
         guard NSMaxRange(range) <= field.length else { return "the field is shorter than pFlow's words" }
-        return Self.plain(field.substring(with: range)) == Self.plain(text) ? nil : "the selected text is not pFlow's words"
+        return EditorPlaceholder.same(field.substring(with: range), text, startedAsPlaceholder: false) ? nil : "the selected text is not pFlow's words"
     }
-
-    private static func plain(_ text: String) -> String { text.replacingOccurrences(of: "\u{00A0}", with: " ") }
 
     static func == (a: OwnedWords, b: OwnedWords) -> Bool { a.range == b.range && a.text == b.text }
 }

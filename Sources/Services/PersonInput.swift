@@ -194,7 +194,7 @@ final class PersonInput: @unchecked Sendable {
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .tailAppendEventTap, options: options,
                                           eventsOfInterest: mask, callback: callback,
                                           userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
-            NSLog("pFlow: key presses and clicks cannot be watched (no event tap); typed live words and the end replace are off")
+            ReasonLog.note("key presses and clicks cannot be watched (no event tap); typed live words and the end replace are off")
             lock.withLock { state = .off }
             return
         }
@@ -206,7 +206,7 @@ final class PersonInput: @unchecked Sendable {
             runLoop = CFRunLoopGetCurrent()
             state = .on
         }
-        NSLog("pFlow: watching key presses and clicks (\(options == .listenOnly ? "listen-only" : "pass-through") tap)")
+        if options == .listenOnly { ReasonLog.note("watching key presses and clicks (listen-only tap)") } else { ReasonLog.note("watching key presses and clicks (pass-through tap)") }
         CFRunLoopRun()
     }
 

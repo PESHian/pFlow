@@ -107,10 +107,12 @@ final class KeyLiveTextField: LiveTextField {
         self.send = send
     }
 
-    convenience init(pid: pid_t, element: AXUIElement, bundleID: String?, composition: (composing: Bool, at: UInt64)) {
+    convenience init(pid: pid_t, element: AXUIElement, bundleID: String?, composition: (composing: Bool, at: UInt64),
+                     placeholder: EditorPlaceholder.Start? = nil) {
         var check = TargetCheck(pid: pid, element: element, bundleID: bundleID)
         check.composition = composition
-        self.init(reader: AXLiveTextField(pid: pid, element: element, plainSpaces: true, bundleID: bundleID), pid: pid,
+        self.init(reader: AXLiveTextField(pid: pid, element: element, plainSpaces: true, bundleID: bundleID,
+                                          placeholder: placeholder), pid: pid,
                   facts: { check.facts(since: $0) }, watch: .shared,
                   inputMethod: { PersonInput.inputMethodSelected() }, send: { SyntheticKeys.type($0) })
     }
@@ -128,7 +130,7 @@ final class KeyLiveTextField: LiveTextField {
     /// it could turn typed characters into a composition.
     func canWriteRanges() -> Bool {
         guard LiveFieldMethod.keysAllowed(watching: watch.watching, inputMethod: inputMethod()) else {
-            if !watch.watching { NSLog("pFlow: no typed live words: key presses and clicks are not being watched") }
+            if !watch.watching { ReasonLog.note("no typed live words: key presses and clicks are not being watched") }
             return false
         }
         return reader.selectionSettable()
@@ -147,20 +149,20 @@ final class KeyLiveTextField: LiveTextField {
         if !watch.watching {
             aborted = true
             refusal = .notWatching
-            NSLog("pFlow: live typing stopped before a key went out: key presses and clicks are not being watched")
+            ReasonLog.note("live typing stopped before a key went out:", InsertionBlock.notWatching)
             return false
         }
         if let block = InsertionGuard.block(facts(started)) {
             aborted = true
             refusal = block
-            NSLog("pFlow: live typing stopped before a key went out: \(block)")
+            ReasonLog.note("live typing stopped before a key went out:", block)
             return false
         }
         guard send(text) else { aborted = true; return false }
         let caret = NSRange(location: range.location + text.utf16.count, length: 0)
         return Self.until(milliseconds: 800 + 15 * text.utf16.count) {
             let state = reader.state()
-            return state.value.map { Self.plain($0) == Self.plain(expected) } == true && state.selection == caret
+            return EditorPlaceholder.same(state.value, expected, startedAsPlaceholder: false) && state.selection == caret
         }
     }
 
@@ -171,12 +173,12 @@ final class KeyLiveTextField: LiveTextField {
         if range.length == 0 { return Self.until(milliseconds: 300) { reader.state().selection == range } }
         guard !aborted else { return false }
         guard watch.watching else {
-            NSLog("pFlow: pFlow's words were not selected: key presses and clicks are not being watched")
+            ReasonLog.note("own words not selected:", InsertionBlock.notWatching)
             return false
         }
         let started = PersonInput.now()
         if let block = InsertionGuard.block(facts(started)) {
-            NSLog("pFlow: pFlow's words were not selected: \(block)")
+            ReasonLog.note("own words not selected:", block)
             return false
         }
         let before = reader.state().value
@@ -211,9 +213,6 @@ final class KeyLiveTextField: LiveTextField {
         guard let selectedAt else { return true }
         return watch.acted(since: selectedAt) ?? true
     }
-
-    /// A browser shows a typed space at a line end as a no-break space.
-    private static func plain(_ text: String) -> String { text.replacingOccurrences(of: "\u{00A0}", with: " ") }
 
     /// Waits for the app to show a write, reading again every 10 ms.
     private static func until(milliseconds: Int, _ done: () -> Bool) -> Bool {

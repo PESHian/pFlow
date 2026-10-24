@@ -50,6 +50,8 @@ final class TakeTarget {
     var windowTitle: String
     /// Empties the field before each take (a fresh message each time).
     var emptyBeforeTake = false
+    /// Types fictional text first when the field is empty, so each take starts with real text.
+    var seedText = false
 
     init(name: String, app: NSRunningApplication, windowTitle: String) {
         self.name = name
@@ -199,6 +201,20 @@ final class TakeHarness {
         await pause(0.6)
     }
 
+    /// Types `text` as a person would (unmarked Unicode key events).
+    func personType(_ text: String) {
+        let source = CGEventSource(stateID: .hidSystemState)
+        for unit in text.utf16 {
+            for down in [true, false] {
+                let e = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down)
+                var u = unit
+                e?.keyboardSetUnicodeString(stringLength: 1, unicodeString: &u)
+                e?.post(tap: .cghidEventTap)
+            }
+            usleep(15_000)
+        }
+    }
+
     func center(of element: AXUIElement) -> CGPoint? {
         guard let p = attribute(element, kAXPositionAttribute), let s = attribute(element, kAXSizeAttribute) else { return nil }
         var point = CGPoint.zero, size = CGSize.zero
@@ -222,7 +238,58 @@ final class TakeHarness {
     </script>
     """
 
+    /// Rich-text editors on a local page: Tiptap (ProseMirror), Lexical, and a
+    /// Gmail-like body that is a contenteditable holding only a <br>. The
+    /// editor bundles are built from npm (Tiptap 2.27.3, Lexical 0.52.0),
+    /// kept in ~/pflow-editors in the test VM and copied next to each page.
+    static func editorPage(_ kind: String, title: String) -> String {
+        // Next to the page: Safari does not load a file page's scripts from another folder.
+        let bundles = ""
+        let body: String
+        switch kind {
+        case "tiptap":
+            body = """
+            <script src="\(bundles)tiptap.bundle.js"></script>
+            <div id="ed" class="ed"></div>
+            <script>window.addEventListener('load', () => { makeTiptap(document.getElementById('ed')); });</script>
+            """
+        case "lexical":
+            body = """
+            <script src="\(bundles)lexical.bundle.js"></script>
+            <div id="ed" class="ed" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Fictional editor"></div>
+            <script>window.addEventListener('load', () => { makeLexical(document.getElementById('ed')); });</script>
+            """
+        default:
+            body = """
+            <div id="ed" class="ed" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Message Body"><div><br></div></div>
+            <script>window.addEventListener('load', () => { document.getElementById('ed').focus(); });</script>
+            """
+        }
+        // Safari does not always give a page's autofocus to the editor when its window opens.
+        let keepFocus = """
+        <script>setInterval(() => { if (document.activeElement === document.body) {
+          const e = document.querySelector('.ProseMirror') || document.getElementById('ed'); e.focus(); } }, 300);</script>
+        """
+        return """
+        <!doctype html><meta charset="utf-8"><title>\(title)</title>
+        <style>body{font:16px -apple-system} .ed,.ProseMirror{border:1px solid #888;min-height:80px;padding:6px}
+        .ProseMirror p.is-editor-empty:first-child::before{content:attr(data-placeholder);color:#999;float:left;height:0;pointer-events:none}</style>
+        \(body)
+        \(keepFocus)
+        """
+    }
+
+    static let editorKinds: Set<String> = ["tiptap", "lexical", "gmail"]
+
     func openTarget(_ name: String) async -> TakeTarget? {
+        // "<target>+empty": emptied before each take; "<target>+text": starts with real text.
+        if let plus = name.firstIndex(of: "+") {
+            guard let target = await openTarget(String(name[..<plus])) else { return nil }
+            let mode = name[name.index(after: plus)...]
+            target.emptyBeforeTake = mode == "empty"
+            target.seedText = mode == "text"
+            return target
+        }
         if let existing = targets[name], !existing.app.isTerminated { return existing }
         let tag = String(UUID().uuidString.prefix(6))
         var made: TakeTarget?
@@ -252,8 +319,15 @@ final class TakeHarness {
             let pageTitle = "pFlow fictional \(kind) \(tag)"
             // One page per field: a file URL's #fragment does not survive LaunchServices.
             let page = folder.appendingPathComponent("pflow-form-\(kind)-\(tag).html")
-            try? Self.page.replacingOccurrences(of: "TITLE", with: pageTitle).replacingOccurrences(of: "KIND", with: kind)
-                .write(to: page, atomically: true, encoding: .utf8)
+            if Self.editorKinds.contains(kind) {
+                let source = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("pflow-editors")
+                for bundle in ["tiptap.bundle.js", "lexical.bundle.js"] {
+                    try? FileManager.default.copyItem(at: source.appendingPathComponent(bundle), to: folder.appendingPathComponent(bundle))
+                }
+            }
+            let html = Self.editorKinds.contains(kind) ? Self.editorPage(kind, title: pageTitle)
+                : Self.page.replacingOccurrences(of: "TITLE", with: pageTitle).replacingOccurrences(of: "KIND", with: kind)
+            try? html.write(to: page, atomically: true, encoding: .utf8)
             let url = page
             let app: NSRunningApplication?
             if browser == "safari" {
@@ -363,6 +437,7 @@ final class TakeHarness {
         ("the copper kettle sings on the stove", "The copper kettle sings on the stove."),
         ("nine pelicans rest on the old pier", "Nine pelicans rest on the old pier."),
         ("the orchard ladder leans by the barn", "The orchard ladder leans by the barn."),
+        ("we don't need the old map today", "We don't need the old map today."),
     ]
 
     static func updates(_ spoken: String) -> [String] {
@@ -391,8 +466,16 @@ final class TakeHarness {
         var record: [String: Any] = ["target": target.name, "mode": mode.rawValue, "label": label]
         guard await activate(target.app) else { record["error"] = "could not bring the app forward"; return record }
         if target.emptyBeforeTake { await emptyField(target) }
+        let seedCheck = await target.readBack() ?? ""
+        if target.seedText, seedCheck.isEmpty || EditorPlaceholder.only(seedCheck, placeholderText: nil) {
+            await caretToEnd(target)
+            personType("Dear Sam, ")
+            await pause(0.6)
+        }
         if target.name != "vscode" { await caretToEnd(target) }
-        let before = await target.readBack() ?? ""
+        var before = await target.readBack() ?? ""
+        // The Tiptap page draws "Write a message" with CSS while empty; Chromium reads it out.
+        if target.name.hasSuffix("tiptap"), before.trimmingCharacters(in: .whitespacesAndNewlines) == "Write a message" { before = "" }
         record["frontmostIsTarget"] = frontmost() == target.app.processIdentifier
         let session = HarnessSession(final: final)
         let injector = TextInjector()
@@ -405,6 +488,7 @@ final class TakeHarness {
             liveTextMode: { mode })
         if let beforeBegin { await beforeBegin() }
         record["keyboardAppAtBegin"] = keyboardAppName()
+        ReasonLog.recent.removeAll()
         let started = Date()
         coordinator.begin()
         await pause(0.3)
@@ -428,6 +512,8 @@ final class TakeHarness {
         if let afterFinish { await afterFinish() }
         await pause(1.2)
         let after = await target.readBack() ?? ""
+        record["reasons"] = ReasonLog.recent
+        record["liveNote"] = hud.model.liveNote ?? NSNull()
         record["liveWordsSeen"] = liveSeen
         record["firstLiveMs"] = firstLiveMs
         record["outcome"] = coordinator.lastOutcome.map { "\($0)" } ?? "none"
