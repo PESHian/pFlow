@@ -36,7 +36,14 @@ final class SimulatedKeyField: LiveTextField {
         current.selection = NSRange(location: range.location + (text as NSString).length, length: 0)
         return true
     }
-    func select(_ range: NSRange) -> Bool { selects.append(range); current.selection = range; return true }
+    /// A key the person still holds: selecting pFlow's words is refused, as the real guard does.
+    var keysHeld = false
+    func select(_ range: NSRange) -> Bool {
+        guard !keysHeld else { return false }
+        selects.append(range)
+        current.selection = range
+        return true
+    }
     func collapse() {
         collapses += 1
         if let selection = current.selection { current.selection = NSRange(location: NSMaxRange(selection), length: 0) }
@@ -108,26 +115,74 @@ struct InsertionGuardTests {
     // MARK: Input methods
 
     @Test func onlyAnUnfinishedCompositionCountsAsComposing() {
-        #expect(InputComposition.composing(markedText: true, inputMethod: false, uncommittedKeys: false))
-        #expect(InputComposition.composing(markedText: false, inputMethod: true, uncommittedKeys: true))
-        #expect(!InputComposition.composing(markedText: false, inputMethod: true, uncommittedKeys: false),
-                "Japanese selected but everything committed: paste as usual")
-        #expect(!InputComposition.composing(markedText: false, inputMethod: false, uncommittedKeys: true),
+        #expect(InputComposition.composing(markedLength: 6, inputMethod: true, uncommittedKeys: false))
+        #expect(!InputComposition.composing(markedLength: 0, inputMethod: true, uncommittedKeys: true),
+                "the field says nothing is marked: committed, whatever the keys were")
+        #expect(InputComposition.composing(markedLength: nil, inputMethod: true, uncommittedKeys: true))
+        #expect(!InputComposition.composing(markedLength: nil, inputMethod: true, uncommittedKeys: false),
+                "Japanese or Pinyin selected but everything committed: paste as usual")
+        #expect(!InputComposition.composing(markedLength: nil, inputMethod: false, uncommittedKeys: true),
                 "typing in a plain layout is no composition")
     }
 
-    @Test func returnEscapeTabAndClicksEndAComposition() {
+    @Test func spaceDigitsPunctuationReturnEscapeTabAndClicksEndAComposition() {
         let watch = PersonInput()
-        watch.record(keyCode: 40)
+        let n: Int64 = 45, i: Int64 = 34, h: Int64 = 4
+        watch.record(keyCode: n)
         #expect(watch.uncommittedKeys)
-        for commit: Int64 in [36, 76, 53, 48] {
-            watch.record(keyCode: 40)
+        // Return, Enter, Escape, Tab, Space (Pinyin "nihao" + Space), 1 and 9 (candidates), comma, period.
+        for commit: Int64 in [36, 76, 53, 48, 49, 18, 25, 43, 47] {
+            watch.record(keyCode: n)
+            watch.record(keyCode: i)
+            watch.record(keyCode: h)
+            #expect(watch.uncommittedKeys)
             watch.record(keyCode: commit)
             #expect(!watch.uncommittedKeys, "key \(commit)")
         }
-        watch.record(keyCode: 40)
+        watch.record(keyCode: n)
         watch.record(keyCode: nil)
         #expect(!watch.uncommittedKeys, "a click")
+    }
+
+    @Test func shortcutsAndThePflowHotkeyAreNeverPartOfAComposition() {
+        let watch = PersonInput()
+        watch.record(keyCode: 8, flags: .maskCommand)          // ⌘C
+        #expect(!watch.uncommittedKeys)
+        watch.record(keyCode: 2, flags: [.maskCommand, .maskShift])   // ⌘⇧D
+        #expect(!watch.uncommittedKeys)
+        watch.record(keyCode: 8, flags: .maskControl)
+        #expect(!watch.uncommittedKeys)
+        watch.record(keyCode: 8, flags: .maskShift)            // Shift+C may compose
+        #expect(watch.uncommittedKeys)
+    }
+
+    @Test func aCompositionLeftAloneExpires() {
+        #expect(PersonInput.compositionIdle <= 10_000_000_000)
+        #expect(PersonInput.compositionIdle >= 2_000_000_000)
+    }
+
+    @Test func typedLiveKeysNeedTheWatchAndNoComposingInputMethod() {
+        #expect(LiveFieldMethod.keysAllowed(watching: true, inputMethod: false))
+        #expect(!LiveFieldMethod.keysAllowed(watching: false, inputMethod: false), "not watching: no typed keys, the checked paste instead")
+        #expect(!LiveFieldMethod.keysAllowed(watching: true, inputMethod: true))
+    }
+
+    @Test func aWatchThatNeverStartedOrWasStoppedIsNotWatching() {
+        let watch = PersonInput()
+        #expect(!watch.watching, "no tap yet")
+        watch.stop()
+        #expect(!watch.watching)
+        #expect(watch.acted(since: 0) == nil)
+    }
+
+    @Test func notWatchingReportsSoAndCountsAsActed() {
+        let watch = PersonInput()
+        watch.overrideWatching(false)
+        #expect(!watch.watching)
+        #expect(watch.acted(since: 0) == nil)
+        watch.overrideWatching(true)
+        watch.record(keyCode: 8)
+        #expect(watch.acted(since: 0) == true)
     }
 
     @Test func nobodyWatchingMeansNobodyCanSayThePersonDidNotAct() {
@@ -166,11 +221,15 @@ struct InsertionGuardTests {
         #expect(pieces.count > 1)
     }
 
-    @Test func pflowsClipboardWritesAreMarkedTransientAndConcealed() throws {
-        let item = try #require(TextInjector.clipboardItem(text: "fictional words", formatted: nil, sessionID: "s1"))
-        #expect(item.types.contains(TextInjector.transientType))
-        #expect(item.types.contains(TextInjector.concealedType))
-        #expect(item.string(forType: .string) == "fictional words")
+    @Test func pflowsTemporaryPasteWriteIsMarkedButAKeptCopyIsNot() throws {
+        let temporary = try #require(TextInjector.clipboardItem(text: "fictional words", formatted: nil, sessionID: "s1", private: true))
+        #expect(temporary.types.contains(TextInjector.transientType))
+        #expect(temporary.types.contains(TextInjector.concealedType))
+        #expect(temporary.string(forType: .string) == "fictional words")
+        let kept = try #require(TextInjector.clipboardItem(text: "fictional words", formatted: nil, sessionID: "s2", private: false))
+        #expect(!kept.types.contains(TextInjector.transientType), "the copy the person asked to keep shows in clipboard managers")
+        #expect(!kept.types.contains(TextInjector.concealedType))
+        #expect(kept.string(forType: .string) == "fictional words")
     }
 
     // MARK: Typed keys: append only, then the end replace
@@ -326,6 +385,24 @@ struct InsertionGuardTests {
         #expect(injector.overSelection.isEmpty, "the words stay; nothing is selected or pasted")
         #expect(hud.reasons.last == LiveInlineOwnership.Stop.app.cardReason)
         #expect(hud.offers == ["The copper kettle sings."])
+    }
+
+    @Test func theEndReplaceWaitsForAHeldStopKey() async {
+        let field = SimulatedKeyField("")
+        field.keysHeld = true
+        let session = FakeSession()
+        session.textToReturn = "Nine pelicans rest."
+        let hud = FakeHUD()
+        let (coordinator, injector) = keyCoordinator(field, session: session, hud: hud)
+        injector.onWaitForKeys = { field.keysHeld = false }
+        coordinator.begin()
+        await Task.yield()
+        session.emit("nine pelicans")
+        session.emit("nine pelicans rest")
+        await coordinator.finish()
+        #expect(injector.keyWaits == 1)
+        #expect(field.value == "Nine pelicans rest.", "replaced once the key was up")
+        #expect(hud.offers.isEmpty)
     }
 
     @Test func cancellingNeverTakesTypedWordsBackOutWithKeys() async {

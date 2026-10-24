@@ -30,6 +30,8 @@ enum InsertionBlock: Equatable {
     case notTaken
     /// The end replace: pFlow's selected words were no longer exactly its own.
     case selectionChanged
+    /// The person's key presses and clicks could not be watched.
+    case notWatching
     /// Live typing wrote into the field and then stopped for this reason.
     case typingStopped(LiveInlineOwnership.Stop)
 
@@ -52,6 +54,7 @@ enum InsertionBlock: Equatable {
         case .inputMethod: return "Your input method was still composing, so the text was not put in."
         case .notTaken: return "The app did not take the text."
         case .selectionChanged: return "The words in the app changed, so the finished text was not put in."
+        case .notWatching: return "pFlow could not watch the keyboard, so the finished text was not put in."
         case .typingStopped(let stop): return stop.cardReason
         }
     }
@@ -95,6 +98,8 @@ protocol TextInjecting {
     func typedLive(session: String) -> Bool
     func finalizeLive(session: String, text: String) -> LiveInlineFinal
     func cancelLive(session: String) -> LiveInlineCancel
+    /// Waits (bounded) for held keys to be released, before the end of a take.
+    func waitForKeysToClear() async
     /// After `finalizeLive` returned `.replace`: the finished text over pFlow's
     /// own selected words, through the checked paste.
     func insertOverSelection(_ text: String, own: OwnedWords, formatted: NSAttributedString?) async -> InjectionOutcome
@@ -110,6 +115,7 @@ extension TextInjecting {
     func typedLive(session: String) -> Bool { false }
     func finalizeLive(session: String, text: String) -> LiveInlineFinal { .notTyped }
     func cancelLive(session: String) -> LiveInlineCancel { .nothingTyped }
+    func waitForKeysToClear() async {}
     func insertOverSelection(_ text: String, own: OwnedWords, formatted: NSAttributedString?) async -> InjectionOutcome {
         own.collapse()
         return .savedToHistory(.selectionChanged)
@@ -204,7 +210,8 @@ final class TextInjector: TextInjecting {
         let pid = targetApp.processIdentifier, bundleID = targetApp.bundleIdentifier
         let check = TargetCheck(pid: pid, element: targetField, bundleID: bundleID)
         // Never in a terminal or a remote viewer, nor while an input method may be composing.
-        let composing = InputComposition.composing(markedText: false, inputMethod: PersonInput.inputMethodSelected(),
+        let composing = InputComposition.composing(markedLength: FocusedElement.markedLength(targetField),
+                                                   inputMethod: PersonInput.inputMethodSelected(),
                                                    uncommittedKeys: PersonInput.shared.uncommittedKeys)
         guard !composing, NoTypePlaces.place(bundleID: bundleID, elementClasses: check.classes(targetField)) == nil else {
             return live.begin(id: session, field: nil)
@@ -254,7 +261,7 @@ final class TextInjector: TextInjecting {
         // "Copy dictation to clipboard": the finished words, once, after they
         // went in. Live words never touch the clipboard.
         if result == .applied, copyToClipboard(),
-           placeOnClipboard(Self.clipboardItem(text: text, formatted: nil, sessionID: UUID().uuidString)) == nil {
+           placeOnClipboard(Self.clipboardItem(text: text, formatted: nil, sessionID: UUID().uuidString, private: false)) == nil {
             NSLog("pFlow: the finished text could not be copied to the clipboard")
         }
         return result
@@ -268,12 +275,17 @@ final class TextInjector: TextInjecting {
         await deliver(text, formatted: nil)
     }
 
-    static func clipboardItem(text: String, formatted: NSAttributedString?, sessionID: String) -> NSPasteboardItem? {
+    /// pFlow's temporary paste write is marked so clipboard managers skip it
+    /// (`private`); the copy the person asked to keep ("Copy dictation to
+    /// clipboard") goes on unmarked, like any copy of theirs.
+    static func clipboardItem(text: String, formatted: NSAttributedString?, sessionID: String, private: Bool) -> NSPasteboardItem? {
         let item = NSPasteboardItem()
         guard item.setString(text, forType: .string),
-              item.setString(sessionID, forType: sessionType),
-              item.setString("", forType: transientType),
-              item.setString("", forType: concealedType) else { return nil }
+              item.setString(sessionID, forType: sessionType) else { return nil }
+        if `private` {
+            guard item.setString("", forType: transientType),
+                  item.setString("", forType: concealedType) else { return nil }
+        }
         if let formatted, formatted.string == text {
             for (type, data) in TemplateTextStyle.representations(for: formatted) {
                 item.setData(data, forType: type)
@@ -292,7 +304,7 @@ final class TextInjector: TextInjecting {
 
         func unavailable(_ block: InsertionBlock, _ outcome: InjectionOutcome = .leftOnClipboard) -> InjectionOutcome {
             guard keepCopy,
-                  placeOnClipboard(Self.clipboardItem(text: text, formatted: formatted, sessionID: sessionID)) != nil else { return .savedToHistory(block) }
+                  placeOnClipboard(Self.clipboardItem(text: text, formatted: formatted, sessionID: sessionID, private: false)) != nil else { return .savedToHistory(block) }
             return outcome
         }
 
@@ -306,7 +318,7 @@ final class TextInjector: TextInjecting {
         if let block = InsertionGuard.block(check.facts(since: PersonInput.now())),
            [.terminal, .remoteViewer, .passwordField].contains(block) { return unavailable(block) }
         if let block = targetBlock() { return unavailable(block) }
-        await waitForModifiersToClear()
+        await waitForKeysToClear()
         guard !Task.isCancelled else { return unavailable(.cancelled) }
 
         let insertion = InsertionSpacing.prepare(text, formatted: formatted, value: originalValue,
@@ -317,7 +329,7 @@ final class TextInjector: TextInjecting {
         if insertion.formatted == nil, let expected, accessibilityWriteFits() {
             switch writeThroughAccessibility(insertion.text, expected: expected, check: check) {
             case .landed:
-                if keepCopy, placeOnClipboard(Self.clipboardItem(text: text, formatted: nil, sessionID: sessionID)) == nil {
+                if keepCopy, placeOnClipboard(Self.clipboardItem(text: text, formatted: nil, sessionID: sessionID, private: false)) == nil {
                     NSLog("pFlow: the finished text could not be copied to the clipboard")
                 }
                 return .pasted
@@ -388,7 +400,8 @@ final class TextInjector: TextInjecting {
                               extraBlock: () -> InsertionBlock?, read: () -> String?) async -> InjectionOutcome {
         // Prepare rich formats before the snapshot so generation cannot widen
         // the interval that could overwrite a newer clipboard change.
-        let prepared = Self.clipboardItem(text: text, formatted: formatted, sessionID: sessionID)
+        // Kept (the person's setting): unmarked. Temporary: marked, and put back after.
+        let prepared = Self.clipboardItem(text: text, formatted: formatted, sessionID: sessionID, private: !keepCopy)
         var saved: [[NSPasteboard.PasteboardType: Data]]?
         if !keepCopy {
             let count = pasteboard.changeCount
@@ -501,12 +514,17 @@ final class TextInjector: TextInjecting {
         return pasteboard.changeCount
     }
 
-    private func waitForModifiersToClear(timeout: TimeInterval = 0.6) async {
-        let deadline = Date().addingTimeInterval(timeout)
-        let watched: NSEvent.ModifierFlags = [.command, .shift, .option, .control, .function]
+    /// The person's stop key (Right Command, a ⌘⇧ shortcut) may still be held
+    /// when the text is due: up to `keyWait` for every modifier, key and
+    /// button to be released, before the final paste and before the end
+    /// replace selects pFlow's words. The checks after it still refuse a key
+    /// held longer.
+    static let keyWait: TimeInterval = 0.6
 
+    func waitForKeysToClear() async {
+        let deadline = Date().addingTimeInterval(Self.keyWait)
         while Date() < deadline {
-            if NSEvent.modifierFlags.intersection(watched).isEmpty { return }
+            if !PersonInput.modifiersHeld() && !PersonInput.somethingHeld() { return }
             try? await Task.sleep(nanoseconds: 15_000_000)
         }
     }

@@ -13,50 +13,107 @@ import CoreGraphics
 final class PersonInput: @unchecked Sendable {
     static let shared = PersonInput()
 
+    private enum State { case off, starting, on }
+
     private let lock = NSLock()
     private var lastAction: UInt64 = 0
-    private var keysSinceCommit = false
+    /// When the last key that may continue a composition was pressed; nil
+    /// once a commit key or a click ended it.
+    private var lastComposingKey: UInt64?
     private var tap: CFMachPort?
-    private var thread: Thread?
-    private var watchingNow = false
+    private var runLoop: CFRunLoop?
+    private var state = State.off
+    /// Tests only: what `watching` reports without a tap.
+    private var watchingOverride: Bool?
 
     /// Nanoseconds on the clock `acted(since:)` compares against.
     static func now() -> UInt64 { clock_gettime_nsec_np(CLOCK_UPTIME_RAW) }
 
-    /// True while key presses and clicks are being seen.
-    var watching: Bool { lock.withLock { watchingNow } }
+    /// A composition the person left alone this long no longer counts.
+    static let compositionIdle: UInt64 = 5_000_000_000
+
+    /// True only while key presses and clicks are really being seen: the tap
+    /// exists, is still valid and enabled, and pFlow is still trusted.
+    var watching: Bool {
+        let (override, healthy) = lock.withLock { () -> (Bool?, Bool) in
+            guard state == .on, let tap else { return (watchingOverride, false) }
+            return (watchingOverride, CFMachPortIsValid(tap) && CGEvent.tapIsEnabled(tap: tap))
+        }
+        if let override { return override }
+        return healthy && AXIsProcessTrusted()
+    }
 
     /// Whether the person pressed a key or clicked at or after `time`; nil
     /// when nothing is watching, so nobody can say.
     func acted(since time: UInt64) -> Bool? {
-        lock.withLock { watchingNow ? lastAction >= time : nil }
+        guard watching else { return nil }
+        return lock.withLock { lastAction >= time }
     }
 
-    /// A key was pressed since the last Return, Enter, Escape, Tab or click.
-    var uncommittedKeys: Bool { lock.withLock { keysSinceCommit } }
+    /// A key that may continue a composition was pressed, and no commit key
+    /// or click came after it, within the last `compositionIdle`.
+    var uncommittedKeys: Bool {
+        lock.withLock {
+            guard let last = lastComposingKey else { return false }
+            return Self.now() &- last < Self.compositionIdle
+        }
+    }
 
-    /// Starts watching once Accessibility is granted; safe to call every take.
+    /// Follows the Accessibility grant: watching while trusted, and a fresh
+    /// tap once trust comes back (a tap from before a revoke can stay
+    /// "enabled" and see nothing). Called from every permission refresh.
+    func follow(trusted: Bool) {
+        if trusted { start() } else { stop() }
+    }
+
+    /// Starts watching once Accessibility is granted; safe to call every
+    /// take. A tap that the system disabled or invalidated is replaced.
     func start() {
-        lock.lock()
-        let running = thread != nil
-        lock.unlock()
-        guard !running, AXIsProcessTrusted() else { return }
+        guard AXIsProcessTrusted() else { return }
+        let current = lock.withLock { state }
+        if current == .starting || (current == .on && watching) { return }
+        if current == .on { stop() }
+        lock.withLock { state = .starting }
         let thread = Thread { [weak self] in self?.run() }
         thread.name = "pFlow person input"
         thread.qualityOfService = .userInteractive
-        lock.withLock { self.thread = thread }
         thread.start()
     }
 
-    /// Test and self-test hook: what a key press or click by the person records.
-    func record(keyCode: Int64?) {
+    /// Stops watching; `watching` is false until `start` succeeds again.
+    func stop() {
         lock.withLock {
-            lastAction = Self.now()
-            if let keyCode {
-                keysSinceCommit = !InputComposition.commitKeys.contains(keyCode)
-            } else {
-                keysSinceCommit = false
+            if let tap {
+                CGEvent.tapEnable(tap: tap, enable: false)
+                CFMachPortInvalidate(tap)
             }
+            if let runLoop { CFRunLoopStop(runLoop) }
+            tap = nil
+            runLoop = nil
+            state = .off
+        }
+    }
+
+    #if DEBUG
+    /// Self-test only: the system shutting the tap down under pFlow.
+    func invalidateTapForTesting() {
+        lock.withLock { if let tap { CFMachPortInvalidate(tap) } }
+    }
+    #endif
+
+    /// Tests only: pretend the tap is (or is not) running.
+    func overrideWatching(_ value: Bool?) { lock.withLock { watchingOverride = value } }
+
+    /// What one key press or click by the person records. A key with
+    /// Command or Control held is a shortcut (pFlow's own hotkey among them),
+    /// never part of a composition.
+    func record(keyCode: Int64?, flags: CGEventFlags = []) {
+        lock.withLock {
+            let now = Self.now()
+            lastAction = now
+            guard let keyCode else { lastComposingKey = nil; return }
+            if !flags.intersection([.maskCommand, .maskControl]).isEmpty { return }
+            lastComposingKey = InputComposition.commitKeys.contains(keyCode) ? nil : now
         }
     }
 
@@ -73,8 +130,8 @@ final class PersonInput: @unchecked Sendable {
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .tailAppendEventTap, options: options,
                                           eventsOfInterest: mask, callback: callback,
                                           userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
-            NSLog("pFlow: key presses and clicks cannot be watched (no event tap)")
-            lock.withLock { thread = nil }
+            NSLog("pFlow: key presses and clicks cannot be watched (no event tap); typed live words and the end replace are off")
+            lock.withLock { state = .off }
             return
         }
         let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
@@ -82,7 +139,8 @@ final class PersonInput: @unchecked Sendable {
         CGEvent.tapEnable(tap: tap, enable: true)
         lock.withLock {
             self.tap = tap
-            watchingNow = true
+            runLoop = CFRunLoopGetCurrent()
+            state = .on
         }
         NSLog("pFlow: watching key presses and clicks (\(options == .listenOnly ? "listen-only" : "pass-through") tap)")
         CFRunLoopRun()
@@ -92,11 +150,12 @@ final class PersonInput: @unchecked Sendable {
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             // Re-enabled at once; anything missed meanwhile counts as acted.
+            // If it stays disabled, `watching` says so until a new tap.
             if let tap = lock.withLock({ self.tap }) { CGEvent.tapEnable(tap: tap, enable: true) }
             record(keyCode: nil)
         case .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown:
             guard event.getIntegerValueField(.eventSourceUserData) != SyntheticKeys.marker else { return }
-            record(keyCode: type == .keyDown ? event.getIntegerValueField(.keyboardEventKeycode) : nil)
+            record(keyCode: type == .keyDown ? event.getIntegerValueField(.keyboardEventKeycode) : nil, flags: event.flags)
         default:
             break
         }

@@ -44,13 +44,6 @@ struct OnboardingView: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                PermissionStep(
-                    icon: "wand.and.stars",
-                    title: "Automation",
-                    detail: "To place text in the focused field.",
-                    granted: app.permissions.automation == .granted,
-                    action: { Task { await app.permissions.grantAutomation() } }
-                )
             }
 
             Spacer(minLength: 0)

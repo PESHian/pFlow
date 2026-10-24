@@ -66,7 +66,7 @@ struct DictationParagraphTests {
         let report = try #require(await formatter.formatStyled(Self.report, using: template, vocabulary: []))
         let board = NSPasteboard(name: .init("pflow.paragraph.fixture.\(UUID())"))
         defer { board.releaseGlobally() }
-        let item = try #require(TextInjector.clipboardItem(text: report.string, formatted: report, sessionID: "fixture"))
+        let item = try #require(TextInjector.clipboardItem(text: report.string, formatted: report, sessionID: "fixture", private: true))
         #expect(board.writeObjects([item]))
         for rich in [true, false] {
             let editor = NSTextView(frame: NSRect(x: 0, y: 0, width: 500, height: 300))

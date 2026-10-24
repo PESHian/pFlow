@@ -57,7 +57,7 @@ struct BoldTemplateTests {
         let styled = report()
         let board = NSPasteboard(name: .init("pflow.bold.tests.\(UUID().uuidString)"))
         defer { board.releaseGlobally() }
-        let item = try #require(TextInjector.clipboardItem(text: styled.string, formatted: styled, sessionID: "fixture"))
+        let item = try #require(TextInjector.clipboardItem(text: styled.string, formatted: styled, sessionID: "fixture", private: true))
         #expect(board.writeObjects([item]))
         #expect(board.string(forType: .string) == styled.string)
         #expect(board.data(forType: .rtf) != nil)
@@ -87,10 +87,10 @@ struct BoldTemplateTests {
     }
 
     @Test func staleOrPlainFormattingDoesNotAddRichClipboardTypes() throws {
-        let item = try #require(TextInjector.clipboardItem(text: "Current text", formatted: report(), sessionID: "fixture"))
+        let item = try #require(TextInjector.clipboardItem(text: "Current text", formatted: report(), sessionID: "fixture", private: true))
         #expect(item.string(forType: .string) == "Current text")
         #expect(item.data(forType: .rtf) == nil && item.data(forType: .html) == nil)
-        let plain = try #require(TextInjector.clipboardItem(text: "Plain", formatted: NSAttributedString(string: "Plain"), sessionID: "fixture"))
+        let plain = try #require(TextInjector.clipboardItem(text: "Plain", formatted: NSAttributedString(string: "Plain"), sessionID: "fixture", private: true))
         #expect(plain.data(forType: .rtf) == nil && plain.data(forType: .html) == nil)
     }
 

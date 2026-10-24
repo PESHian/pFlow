@@ -73,17 +73,26 @@ enum InsertionGuard {
     }
 }
 
-/// Whether an input method may be composing text in the field (Japanese,
-/// Chinese, Korean): the field shows marked text, or a composing input
-/// method is selected and the person pressed a key since the last key that
-/// ends a composition (Return, Enter, Escape, Tab) or click. A paste or typed
-/// key then could commit or mix with the person's unfinished characters.
+/// Whether an input method is composing text in the field (Japanese,
+/// Chinese, Korean), the same rule as Windows 0.1.28: only a real composition
+/// counts, never the keyboard language alone. AppKit fields say so directly
+/// (AXTextInputMarkedRange, length > 0 while composing); elsewhere (Chrome,
+/// Electron) a composing input method is selected and the person pressed a
+/// key that continues a composition, with no commit key or click since and
+/// not long ago (PersonInput). A paste then could commit or mix with the
+/// person's unfinished characters.
 enum InputComposition {
-    /// Return, keypad Enter, Escape, Tab.
-    static let commitKeys: Set<Int64> = [36, 76, 53, 48]
+    /// Keys that end a composition: Return, keypad Enter, Escape, Tab, Space
+    /// (Pinyin and Korean commit with it), the candidate digits 1-9 and
+    /// punctuation.
+    static let commitKeys: Set<Int64> = [36, 76, 53, 48, 49,
+                                         18, 19, 20, 21, 23, 22, 26, 28, 25,
+                                         43, 47, 44, 41, 39, 33, 30, 27, 24, 50, 42]
 
-    static func composing(markedText: Bool, inputMethod: Bool, uncommittedKeys: Bool) -> Bool {
-        markedText || (inputMethod && uncommittedKeys)
+    /// `markedLength` is the field's marked text length when it reports one, nil when it cannot say.
+    static func composing(markedLength: Int?, inputMethod: Bool, uncommittedKeys: Bool) -> Bool {
+        if let markedLength { return markedLength > 0 }
+        return inputMethod && uncommittedKeys
     }
 }
 
@@ -100,6 +109,12 @@ enum LiveFieldMethod: Equatable {
     /// in Safari and Chrome fields and VS Code); native text views, Notes and
     /// LibreOffice's document show it at once. Word takes typed keys too.
     static let keyApps: Set<String> = ["com.microsoft.Word"]
+
+    /// Typed live keys only while the person's own keys and clicks are
+    /// watched (else a key of theirs could land between pFlow's checks and
+    /// keys unseen) and no input method that composes is selected (it could
+    /// turn typed characters into a composition).
+    static func keysAllowed(watching: Bool, inputMethod: Bool) -> Bool { watching && !inputMethod }
 
     static func method(webApp: Bool, bundleID: String?) -> LiveFieldMethod {
         if webApp { return .keys }
@@ -183,6 +198,13 @@ enum FocusedElement {
             current = element(node, kAXParentAttribute)
         }
         return false
+    }
+
+    /// The field's marked (composing) text length, when it reports one (AppKit).
+    static func markedLength(_ element: AXUIElement) -> Int? {
+        guard let raw = attribute(element, "AXTextInputMarkedRange"), CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+        var range = CFRange()
+        return AXValueGetValue(raw as! AXValue, .cfRange, &range) ? range.length : nil
     }
 
     /// Web classes of fields whose text Accessibility does not show (VS Code's

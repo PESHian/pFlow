@@ -14,7 +14,7 @@ enum YapMain {
             let permissions = PermissionsManager()
             permissions.refresh()
             let login = LaunchAtLoginService()
-            print("MICROPHONE=\(permissions.microphone) SPEECH=\(permissions.speech) ACCESSIBILITY=\(permissions.accessibility) AUTOMATION=\(permissions.automation)")
+            print("MICROPHONE=\(permissions.microphone) SPEECH=\(permissions.speech) ACCESSIBILITY=\(permissions.accessibility)")
             print("LOGIN_ENABLED=\(login.isEnabled) LOGIN_NEEDS_APPROVAL=\(login.needsApproval) APPLE_INTELLIGENCE=\(TranscriptCleanupService().isAvailable)")
             return
         }

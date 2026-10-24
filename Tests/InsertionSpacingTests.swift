@@ -63,7 +63,7 @@ struct InsertionSpacingTests {
             for sentence in ["It runs together.", "Just like this."] {
                 let payload = InsertionSpacing.prepare(sentence, value: editor.string, selection: editor.selectedRange())
                 board.clearContents()
-                #expect(board.writeObjects([try #require(TextInjector.clipboardItem(text: payload.text, formatted: nil, sessionID: "fixture"))]))
+                #expect(board.writeObjects([try #require(TextInjector.clipboardItem(text: payload.text, formatted: nil, sessionID: "fixture", private: true))]))
                 #expect(editor.readSelection(from: board))
                 editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
             }

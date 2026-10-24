@@ -134,6 +134,7 @@ final class RecordingCoordinator {
     }
 
     static let needsAccessibilityNote = "pFlow needs Accessibility to type"
+    static let onClipboardNote = "Your words are on the clipboard. Press ⌘V to paste them."
 
     func finish() async {
         guard state == .recording else { return }
@@ -418,6 +419,9 @@ final class RecordingCoordinator {
             var typingStopped = false
             if typingLive, let take {
                 typingLive = false
+                // The stop key may still be held: selecting pFlow's words and the
+                // paste over them wait for it, as the plain paste does.
+                await injector.waitForKeysToClear()
                 // Plain text replaces the provisional words once. Accessibility
                 // cannot set styles, so template formatting arrives as plain text.
                 switch injector.finalizeLive(session: take, text: text) {
@@ -476,8 +480,13 @@ final class RecordingCoordinator {
                 if block == .accessibilityOff { hud.setNeedsAccessibility(true) }
                 hud.offerCopy(text)
             case .leftOnClipboard, .blockedBySecureInput:
+                // The words wait on the clipboard: the card says so (the
+                // capsule is one size and shows at most an icon).
+                hud.setLivePreview(true)
+                hud.setPartial(text)
                 hud.setPhase(.copied)
-                hud.hide(after: 3)
+                hud.setReason(Self.onClipboardNote)
+                hud.offerCopy(text)
             }
             noteAccessibilityIfMissing()
         } catch {

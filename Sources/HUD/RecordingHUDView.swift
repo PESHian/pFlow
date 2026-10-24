@@ -21,9 +21,7 @@ struct RecordingHUDView: View {
     static let capsuleSize = CGSize(width: 58, height: 30)
     static let capsuleOutlineOpacity = 0.65
     /// The capsule's waveform, inside its rounded ends.
-    static let capsuleWaveform = CGSize(width: 34, height: 16)
-    /// Samples the capsule's waveform shows: about one bar per two points.
-    static let capsuleSamples = 14
+    static let capsuleWaveform = CGSize(width: 34, height: 18)
 
     /// The Copy card shows all of the text up to this many lines, then scrolls.
     static let wholeTextLines = 10
@@ -41,9 +39,9 @@ struct RecordingHUDView: View {
     private var compact: some View {
         status
         .foregroundStyle(.white.opacity(0.9))
-        .padding(.horizontal, Theme.s2 + 2)
-        // The waveform and the dots fit the pill; a status widens it for its words.
-        .frame(minWidth: Self.capsuleSize.width, minHeight: Self.capsuleSize.height, maxHeight: Self.capsuleSize.height)
+        // One size in every phase; a status after the take is an icon only,
+        // its words are on the card or in the tooltip and VoiceOver label.
+        .frame(width: Self.capsuleSize.width, height: Self.capsuleSize.height)
         .contentShape(Capsule())
         .background { CapsuleBackground(palette: model.palette) }
         // Everything inside draws for a dark background, the spinner included.
@@ -55,9 +53,8 @@ struct RecordingHUDView: View {
     private var status: some View {
         Group {
             if isRecordingPhase {
-                RecordingWaveform(levels: Array(model.levels.suffix(Self.capsuleSamples)),
-                                  style: model.waveformStyle, compact: true, palette: model.palette,
-                                  size: Self.capsuleWaveform)
+                CapsuleWave(levels: model.levels, style: model.waveformStyle, palette: model.palette)
+                    .frame(width: Self.capsuleWaveform.width, height: Self.capsuleWaveform.height)
             } else if model.phase == .pasteUnconfirmed {
                 capsuleLabel("Check paste", "info.circle")
                     .help("The app could not verify the paste. Check your text before pasting again.")
@@ -86,17 +83,24 @@ struct RecordingHUDView: View {
             } else {
                 // The system spinner draws for the window's light or dark
                 // look, which is dark on the capsule's dark glass.
-                WorkingDots(palette: model.palette)
+                ProcessingSweep(palette: model.palette)
+                    .frame(width: Self.capsuleWaveform.width, height: Self.capsuleWaveform.height)
             }
         }
     }
 
-    /// One short status that fits the capsule on one line.
+    /// A status after the take: its icon in the capsule; the words in the
+    /// tooltip and the VoiceOver label (the card carries them when it shows).
     private func capsuleLabel(_ text: String, _ systemImage: String) -> some View {
-        Label(text, systemImage: systemImage)
-            .font(.system(size: 10.5, weight: .medium))
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
+        Self.statusMark(text, systemImage)
+    }
+
+    /// The one thing a status shows in the capsule: its icon. No words.
+    static func statusMark(_ text: String, _ systemImage: String) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 13, weight: .medium))
+            .accessibilityLabel(text)
+            .help(text)
     }
 
     static let shadowInsets = EdgeInsets()
@@ -460,17 +464,15 @@ struct RecordingWaveform: View {
     var compact = false
     /// The palette read when the take started; nil draws the app's current one.
     var palette: ThemePalette?
-    /// Overrides the drawing size (the capsule's is smaller than the card's).
-    var size: CGSize?
 
     var body: some View {
         switch style {
         case .wave:
-            Waveform(levels: levels, compact: compact, gradient: palette?.gradient ?? Theme.gradient, size: size)
+            Waveform(levels: levels, compact: compact, gradient: palette?.gradient ?? Theme.gradient)
         case .lines:
             WaveformLines(levels: AudioLevel.waveformLevels(levels))
                 .fill(palette?.gradient ?? Theme.gradient)
-                .frame(width: size?.width ?? (compact ? 84 : 100), height: size?.height ?? (compact ? 16 : 20))
+                .frame(width: compact ? 84 : 100, height: compact ? 16 : 20)
                 .shadow(color: .black.opacity(compact ? 0 : 0.25), radius: 1.5, x: 0, y: 1)
         }
     }
@@ -499,14 +501,13 @@ private struct Waveform: View {
     let levels: [Float]
     var compact = false
     var gradient: LinearGradient = Theme.gradient
-    var size: CGSize?
 
     var body: some View {
         let outline = WaveformOutline(levels: AudioLevel.waveformLevels(levels))
         outline
             .fill(gradient)
             .overlay(outline.stroke(.black.opacity(compact ? 0 : 0.5), lineWidth: 0.75))
-            .frame(width: size?.width ?? (compact ? 84 : 100), height: size?.height ?? (compact ? 16 : 20))
+            .frame(width: compact ? 84 : 100, height: compact ? 16 : 20)
             .shadow(color: .black.opacity(compact ? 0 : 0.25), radius: 1.5, x: 0, y: 1)
     }
 }
@@ -570,24 +571,110 @@ private struct CapsuleBackground: View {
     }
 }
 
-/// The capsule's "still working" sign: three dots in the person's palette,
-/// one brighter at a time. With Reduce Motion they stay still.
-private struct WorkingDots: View {
+/// The capsule's waveform, drawn as Windows 0.1.28 draws it (one look on
+/// both apps). Default: Superwhisper's bars, 2 pt wide with 2 pt gaps, as
+/// many as fit up to seven, each as tall as the voice was at that moment
+/// (relative to the take's own loudest moment, eased), in the palette's
+/// gradient; silence is a row of 2 x 2 dots. "Lines": one thin trace
+/// swinging up and down through the newest levels.
+struct CapsuleWave: View {
+    let levels: [Float]
+    let style: WaveformStyle
+    let palette: ThemePalette
+
+    static let barWidth: CGFloat = 2, gap: CGFloat = 2
+    static let mostBars = 7
+
+    /// Height of one level, 0...1, against the loudest of `levels` (at least 0.25).
+    static func height(_ value: Float, peak: Float) -> CGFloat {
+        CGFloat(pow(min(max(value / peak, 0), 1), 1.4))
+    }
+
+    static func peak(_ levels: [Float]) -> Float { max(0.25, levels.max() ?? 0) }
+
+    /// The bars for `levels` in `rect`: rounded to even heights, never under 2 x 2.
+    static func bars(_ levels: [Float], in rect: CGRect) -> [CGRect] {
+        guard !levels.isEmpty, rect.width > 0, rect.height > 0 else { return [] }
+        let count = min(max(Int((rect.width + gap) / (barWidth + gap)), 1), min(mostBars, levels.count))
+        let peak = peak(levels)
+        let left = (rect.minX + (rect.width - (CGFloat(count) * (barWidth + gap) - gap)) / 2).rounded()
+        return (0..<count).map { index in
+            let value = levels[levels.count - count + index]
+            let tall = ((max(barWidth, height(value, peak: peak) * rect.height)) / 2).rounded() * 2
+            return CGRect(x: left + CGFloat(index) * (barWidth + gap), y: rect.midY - tall / 2, width: barWidth, height: tall)
+        }
+    }
+
+    /// The trace's points for `levels` in `rect`, alternating above and below the middle.
+    static func trace(_ levels: [Float], in rect: CGRect) -> [CGPoint] {
+        guard levels.count >= 2, rect.width > 0 else { return [] }
+        let count = min(max(Int(rect.width / 2), 2), levels.count)
+        let peak = peak(levels), step = rect.width / CGFloat(count - 1), swing = rect.height / 2 - 1
+        return (0..<count).map { index in
+            let sign: CGFloat = index % 2 == 0 ? -1 : 1
+            return CGPoint(x: rect.minX + CGFloat(index) * step,
+                           y: rect.midY + sign * height(levels[levels.count - count + index], peak: peak) * swing)
+        }
+    }
+
+    var body: some View {
+        switch style {
+        case .wave:
+            BarsShape(levels: levels).fill(palette.gradient)
+        case .lines:
+            TraceShape(levels: levels)
+                .stroke(palette.gradient, style: StrokeStyle(lineWidth: 1.25, lineCap: .round, lineJoin: .round))
+        }
+    }
+
+    private struct BarsShape: Shape {
+        let levels: [Float]
+        func path(in rect: CGRect) -> Path {
+            var path = Path()
+            for bar in CapsuleWave.bars(levels, in: rect) {
+                path.addRoundedRect(in: bar, cornerSize: CGSize(width: 1, height: 1))
+            }
+            return path
+        }
+    }
+
+    private struct TraceShape: Shape {
+        let levels: [Float]
+        func path(in rect: CGRect) -> Path {
+            var path = Path()
+            let points = CapsuleWave.trace(levels, in: rect)
+            guard let first = points.first else { return path }
+            path.move(to: first)
+            points.dropFirst().forEach { path.addLine(to: $0) }
+            return path
+        }
+    }
+}
+
+/// The capsule's "still working" sign, as on Windows: a short line in the
+/// palette sweeping back and forth. With Reduce Motion it rests in the middle.
+private struct ProcessingSweep: View {
     let palette: ThemePalette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.12, paused: reduceMotion)) { context in
-            let step = reduceMotion ? -1 : Int(context.date.timeIntervalSinceReferenceDate / 0.3) % 3
-            HStack(spacing: 4) {
-                ForEach(0..<3, id: \.self) { index in
-                    Circle()
-                        .fill(palette.gradient)
-                        .frame(width: 5, height: 5)
-                        .opacity(step < 0 || step == index ? 1 : 0.5)
-                }
-            }
+        TimelineView(.animation(paused: reduceMotion)) { context in
+            let sweep = reduceMotion ? Double.pi / 2 : context.date.timeIntervalSinceReferenceDate * 2.6
+            SweepShape(sweep: sweep)
+                .stroke(palette.gradient, style: StrokeStyle(lineWidth: 2, lineCap: .round))
         }
         .accessibilityHidden(true)
+    }
+
+    private struct SweepShape: Shape {
+        let sweep: Double
+        func path(in rect: CGRect) -> Path {
+            let length = rect.width * 0.32
+            let x = rect.minX + (rect.width - length) * (1 - cos(sweep)) / 2
+            var path = Path()
+            path.move(to: CGPoint(x: x, y: rect.midY))
+            path.addLine(to: CGPoint(x: x + length, y: rect.midY))
+            return path
+        }
     }
 }

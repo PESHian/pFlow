@@ -332,6 +332,10 @@ struct RecordingCoordinatorTests {
         #expect(history.saved == ["hello world"])
         #expect(coordinator.lastOutcome == .leftOnClipboard)
         #expect(hud.phases.last == .copied)
+        // "Press ⌘V" is on the card, never as words in the one-size capsule.
+        #expect(hud.livePreview)
+        #expect(hud.reasons.last == RecordingCoordinator.onClipboardNote)
+        #expect(hud.offers == ["hello world"])
     }
 
     @Test func unverifiedPasteHidesImmediatelyAndKeepsTruthfulOutcomeAndHistory() async {

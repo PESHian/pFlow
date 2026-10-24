@@ -112,19 +112,17 @@ struct PermissionGrantTests {
         #expect(PermissionsManager.grantPath(for: .granted) == .nothing)
     }
 
-    @Test func eachMicrophoneSpeechAndAutomationPressDoesOneThing() async {
+    @Test func eachMicrophoneAndSpeechPressDoesOneThing() async {
         let permissions = PermissionsManager()
         for status in [PermissionsManager.Status.notDetermined, .denied, .granted] {
             var prompts = 0, opens = 0
             permissions.microphone = status
             permissions.speech = status
-            permissions.automation = status
             await permissions.grantMicrophone(prompt: { prompts += 1 }, open: { opens += 1 })
             await permissions.grantSpeech(prompt: { prompts += 1 }, open: { opens += 1 })
-            await permissions.grantAutomation(prompt: { prompts += 1 }, open: { opens += 1 })
             let expected: (Int, Int) = switch status {
-            case .notDetermined: (3, 0)
-            case .denied: (0, 3)
+            case .notDetermined: (2, 0)
+            case .denied: (0, 2)
             case .granted: (0, 0)
             }
             #expect((prompts, opens) == expected, "\(status): prompts \(prompts), opens \(opens)")
@@ -132,7 +130,19 @@ struct PermissionGrantTests {
     }
 
     @Test func everyPrivacyListHasItsOwnAddress() {
-        let anchors = Set([PermissionsManager.PrivacyPane.accessibility, .microphone, .speechRecognition, .automation].map(\.rawValue))
-        #expect(anchors == ["Privacy_Accessibility", "Privacy_Microphone", "Privacy_SpeechRecognition", "Privacy_Automation"])
+        let anchors = Set([PermissionsManager.PrivacyPane.accessibility, .microphone, .speechRecognition].map(\.rawValue))
+        #expect(anchors == ["Privacy_Accessibility", "Privacy_Microphone", "Privacy_SpeechRecognition"])
+    }
+
+    /// pFlow pastes with its own key events, so it never asks to control
+    /// System Events: setup is Microphone, Speech Recognition and Accessibility.
+    @Test func setupNeedsNoAutomation() {
+        let permissions = PermissionsManager()
+        permissions.microphone = .granted
+        permissions.speech = .granted
+        permissions.accessibility = true
+        #expect(permissions.allGranted)
+        let plist = try? String(contentsOfFile: #filePath.replacingOccurrences(of: "Tests/PermissionGrantTests.swift", with: "Sources/Info.plist"), encoding: .utf8)
+        #expect(plist?.contains("NSAppleEventsUsageDescription") == false)
     }
 }

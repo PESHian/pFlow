@@ -317,6 +317,15 @@ final class TakeHarness {
         return made
     }
 
+    /// The app the system says has the keyboard, by name and pid.
+    func keyboardAppName() -> String {
+        let system = AXUIElementCreateSystemWide()
+        guard let app = element(system, kAXFocusedApplicationAttribute) else { return "none" }
+        var pid: pid_t = 0
+        AXUIElementGetPid(app, &pid)
+        return "\(NSRunningApplication(processIdentifier: pid)?.localizedName ?? "?") \(pid)"
+    }
+
     /// Puts the caret at the end of the field through Accessibility (no keys).
     func caretToEnd(_ target: TakeTarget) async {
         guard let field = target.field else { return }
@@ -357,7 +366,7 @@ final class TakeHarness {
     /// One take. `during` runs after the second update (a guard's action);
     /// `beforeFinish` right before the take ends.
     func take(_ target: TakeTarget, mode: LiveTextMode, label: String,
-              beforeBegin: (() async -> Void)? = nil, during: (() async -> Void)? = nil, beforeFinish: (() async -> Void)? = nil,
+              keepCopy: Bool = false, beforeBegin: (() async -> Void)? = nil, during: (() async -> Void)? = nil, beforeFinish: (() async -> Void)? = nil,
               afterFinish: (() async -> Void)? = nil) async -> [String: Any] {
         let (spoken, final) = Self.sentences[takeIndex % Self.sentences.count]
         takeIndex += 1
@@ -368,6 +377,7 @@ final class TakeHarness {
         record["frontmostIsTarget"] = frontmost() == target.app.processIdentifier
         let session = HarnessSession(final: final)
         let injector = TextInjector()
+        injector.copyToClipboard = { keepCopy }
         let hud = HUDController()
         let history = HarnessHistory()
         let coordinator = RecordingCoordinator(
@@ -375,6 +385,7 @@ final class TakeHarness {
             cleaner: HarnessCleanup(), cleanupEnabled: { false }, vocabulary: { [] }, deviceName: { nil },
             liveTextMode: { mode })
         if let beforeBegin { await beforeBegin() }
+        record["keyboardAppAtBegin"] = keyboardAppName()
         let started = Date()
         coordinator.begin()
         await pause(0.3)
@@ -392,6 +403,8 @@ final class TakeHarness {
             if index == 1, let during { await during() }
         }
         if let beforeFinish { await beforeFinish() }
+        record["keyboardAppAtFinish"] = keyboardAppName()
+        record["markedAtFinish"] = focused(target.app.processIdentifier).flatMap(FocusedElement.markedLength) ?? -1
         await coordinator.finish()
         if let afterFinish { await afterFinish() }
         await pause(1.2)

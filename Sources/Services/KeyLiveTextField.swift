@@ -55,7 +55,8 @@ struct TargetCheck {
         facts.secureInput = SecureInput.isEnabled
         facts.modifiersHeld = PersonInput.modifiersHeld()
         facts.keyDown = PersonInput.somethingHeld()
-        facts.composing = InputComposition.composing(markedText: false, inputMethod: PersonInput.inputMethodSelected(),
+        facts.composing = InputComposition.composing(markedLength: now.flatMap(FocusedElement.markedLength),
+                                                     inputMethod: PersonInput.inputMethodSelected(),
                                                      uncommittedKeys: PersonInput.shared.uncommittedKeys)
         facts.personActed = PersonInput.shared.acted(since: since) ?? false
         return facts
@@ -98,7 +99,10 @@ final class KeyLiveTextField: LiveTextField {
     /// pFlow can set. Never while an input method that composes is selected:
     /// it could turn typed characters into a composition.
     func canWriteRanges() -> Bool {
-        guard !PersonInput.inputMethodSelected() else { return false }
+        guard LiveFieldMethod.keysAllowed(watching: PersonInput.shared.watching, inputMethod: PersonInput.inputMethodSelected()) else {
+            if !PersonInput.shared.watching { NSLog("pFlow: no typed live words: key presses and clicks are not being watched") }
+            return false
+        }
         return reader.selectionSettable()
     }
 
@@ -112,6 +116,12 @@ final class KeyLiveTextField: LiveTextField {
               range.location <= (value as NSString).length else { return false }
         let expected = (value as NSString).replacingCharacters(in: range, with: text)
         let started = PersonInput.now()
+        if !PersonInput.shared.watching {
+            aborted = true
+            refusal = .notWatching
+            NSLog("pFlow: live typing stopped before a key went out: key presses and clicks are not being watched")
+            return false
+        }
         if let block = InsertionGuard.block(check.facts(since: started)) {
             aborted = true
             refusal = block
@@ -132,6 +142,10 @@ final class KeyLiveTextField: LiveTextField {
     func select(_ range: NSRange) -> Bool {
         if range.length == 0 { return Self.until(milliseconds: 300) { reader.state().selection == range } }
         guard !aborted else { return false }
+        guard PersonInput.shared.watching else {
+            NSLog("pFlow: pFlow's words were not selected: key presses and clicks are not being watched")
+            return false
+        }
         let started = PersonInput.now()
         if let block = InsertionGuard.block(check.facts(since: started)) {
             NSLog("pFlow: pFlow's words were not selected: \(block)")

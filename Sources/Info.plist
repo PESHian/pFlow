@@ -32,8 +32,6 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT Licensed. Open source.</string>
-	<key>NSAppleEventsUsageDescription</key>
-	<string>pFlow uses System Events to paste transcribed text when the AppleScript paste method is selected.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>pFlow uses your microphone to transcribe your speech on-device.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

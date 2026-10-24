@@ -63,10 +63,142 @@ extension TakeHarness {
                 await pause(0.3)
             })
             _ = selectInputSource("com.apple.keylayout.ABC") || selectInputSource("com.apple.keylayout.US")
+        case "imeprobe" where parts.count == 3:
+            // What Accessibility shows while a composition is in progress, then after it is committed.
+            guard let target = await openTarget(parts[1]) else { result["error"] = "could not open"; return result }
+            guard selectInputSource(parts[2]) else { result["error"] = "input source not available"; return result }
+            _ = await activate(target.app)
+            func dump(_ label: String) {
+                guard let field = focused(target.app.processIdentifier) else { result[label] = "no field"; return }
+                var names: CFArray?
+                AXUIElementCopyAttributeNames(field, &names)
+                var info: [String: String] = [:]
+                for name in (names as? [String]) ?? [] {
+                    guard let value = attribute(field, name) else { continue }
+                    if CFGetTypeID(value) == AXValueGetTypeID() {
+                        var range = CFRange()
+                        if AXValueGetValue(value as! AXValue, .cfRange, &range) { info[name] = "\(range.location)+\(range.length)"; continue }
+                    }
+                    if let text = value as? String { info[name] = String(text.suffix(30)) } else if let number = value as? NSNumber { info[name] = number.stringValue } else { info[name] = "\(CFCopyTypeIDDescription(CFGetTypeID(value)) as String? ?? "?")" }
+                }
+                var parameterized: CFArray?
+                AXUIElementCopyParameterizedAttributeNames(field, &parameterized)
+                info["_parameterized"] = ((parameterized as? [String]) ?? []).joined(separator: ",")
+                result[label] = info
+            }
+            dump("before")
+            for code in [kVK_ANSI_N, kVK_ANSI_I, kVK_ANSI_H, kVK_ANSI_A, kVK_ANSI_O] { personKey(CGKeyCode(code)); usleep(80_000) }
+            await pause(0.6)
+            dump("composing")
+            result["uncommittedWhileComposing"] = PersonInput.shared.uncommittedKeys
+            personKey(CGKeyCode(parts[2].contains("Pinyin") || parts[2].contains("SCIM") ? kVK_Space : kVK_Return))
+            await pause(0.6)
+            dump("committed")
+            result["uncommittedAfterCommit"] = PersonInput.shared.uncommittedKeys
+            _ = selectInputSource("com.apple.keylayout.ABC")
+        case "keepcopy" where parts.count == 3:
+            // "Copy dictation to clipboard" on: the kept copy is the finished text, unmarked.
+            guard let target = await openTarget(parts[1]) else { result["error"] = "could not open"; return result }
+            let take = await take(target, mode: parts[2] == "off" ? .off : .typeInApp, label: spec, keepCopy: true)
+            result["take"] = take
+            let board = NSPasteboard.general
+            result["clipboardIsFinal"] = board.string(forType: .string) == take["final"] as? String
+            result["clipboardMarked"] = board.types?.contains(where: { [TextInjector.transientType, TextInjector.concealedType].contains($0) }) ?? false
+        case "hold" where parts.count == 3:
+            // The stop key still held for 200 ms when the take ends: Right Command, or Command+Shift.
+            guard let target = await openTarget(parts[1]) else { result["error"] = "could not open"; return result }
+            let command = CGEventFlags.maskCommand, rightCommand = CGEventFlags(rawValue: CGEventFlags.maskCommand.rawValue | 0x10)
+            let keys: [(CGKeyCode, CGEventFlags)] = parts[2] == "cmdshift"
+                ? [(CGKeyCode(55), command), (CGKeyCode(56), command.union(.maskShift))]
+                : [(CGKeyCode(54), rightCommand)]
+            result["take"] = await take(target, mode: .typeInApp, label: spec, beforeFinish: { [self] in
+                for (code, flags) in keys { personModifier(code, down: true, flags: flags) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [self] in
+                    for (code, _) in keys.reversed() { personModifier(code, down: false, flags: []) }
+                }
+            })
+        case "ime-commit" where parts.count == 4:
+            // A finished composition ("nihao" + Space in Pinyin, + Return in Kotoeri) before the take: inserted.
+            guard let target = await openTarget(parts[1]) else { result["error"] = "could not open"; return result }
+            guard selectInputSource(parts[3]) else { result["error"] = "input source not available"; return result }
+            result["take"] = await take(target, mode: parts[2] == "off" ? .off : .typeInApp, label: spec, beforeBegin: { [self] in
+                for code in [kVK_ANSI_N, kVK_ANSI_I, kVK_ANSI_H, kVK_ANSI_A, kVK_ANSI_O] { personKey(CGKeyCode(code)); usleep(60_000) }
+                personKey(CGKeyCode(parts[3].contains("SCIM") ? kVK_Space : kVK_Return))
+                await pause(0.6)
+            })
+            _ = selectInputSource("com.apple.keylayout.ABC")
+        case "ime-mid" where parts.count == 4:
+            // A composition still open when the take ends: refused, the person's characters left alone.
+            guard let target = await openTarget(parts[1]) else { result["error"] = "could not open"; return result }
+            guard selectInputSource(parts[3]) else { result["error"] = "input source not available"; return result }
+            result["take"] = await take(target, mode: parts[2] == "off" ? .off : .typeInApp, label: spec, beforeBegin: { [self] in
+                for code in [kVK_ANSI_N, kVK_ANSI_I, kVK_ANSI_H, kVK_ANSI_A, kVK_ANSI_O] { personKey(CGKeyCode(code)); usleep(60_000) }
+                await pause(0.6)
+            }, afterFinish: { [self] in
+                personKey(CGKeyCode(kVK_Escape)); personKey(CGKeyCode(kVK_Escape))
+                await pause(0.3)
+            })
+            _ = selectInputSource("com.apple.keylayout.ABC")
+        case "shortcut-before" where parts.count == 4:
+            // Command+C pressed just before the take with an input method selected: not a composition.
+            guard let target = await openTarget(parts[1]) else { result["error"] = "could not open"; return result }
+            guard selectInputSource(parts[3]) else { result["error"] = "input source not available"; return result }
+            result["take"] = await take(target, mode: parts[2] == "off" ? .off : .typeInApp, label: spec, beforeBegin: { [self] in
+                personModifier(55, down: true, flags: .maskCommand)
+                let source = CGEventSource(stateID: .hidSystemState)
+                for down in [true, false] {
+                    let event = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_ANSI_C), keyDown: down)
+                    event?.flags = .maskCommand
+                    event?.post(tap: .cghidEventTap)
+                }
+                personModifier(55, down: false, flags: [])
+                await pause(0.3)
+            })
+            _ = selectInputSource("com.apple.keylayout.ABC")
+        case "notwatching" where parts.count == 2:
+            // The key watch not running: no typed live words, the finished text through the checked paste.
+            guard let target = await openTarget(parts[1]) else { result["error"] = "could not open"; return result }
+            PersonInput.shared.overrideWatching(false)
+            result["take"] = await take(target, mode: .typeInApp, label: spec)
+            PersonInput.shared.overrideWatching(nil)
+        case "rearm":
+            // The tap shut down by the system, and Accessibility followed off and on: never reported as
+            // watching while it is not, and watching again (seeing the person) once re-created.
+            func seesPerson() async -> Bool {
+                let since = PersonInput.now()
+                personKey(CGKeyCode(kVK_Escape))   // a plain key-down, no modifier state left behind
+                await pause(0.3)
+                return PersonInput.shared.acted(since: since) ?? false
+            }
+            PersonInput.shared.follow(trusted: AXIsProcessTrusted())
+            _ = await waitFor(3) { PersonInput.shared.watching }
+            result["1 watchingAtStart"] = PersonInput.shared.watching
+            PersonInput.shared.invalidateTapForTesting()
+            result["2 watchingAfterTapShutDown"] = PersonInput.shared.watching
+            result["3 actedKnownAfterTapShutDown"] = PersonInput.shared.acted(since: 0) != nil
+            PersonInput.shared.follow(trusted: AXIsProcessTrusted())
+            _ = await waitFor(3) { PersonInput.shared.watching }
+            result["4 watchingAfterRecreate"] = PersonInput.shared.watching
+            result["5 seesPersonAfterRecreate"] = await seesPerson()
+            PersonInput.shared.follow(trusted: false)
+            result["6 watchingWhileUntrusted"] = PersonInput.shared.watching
+            PersonInput.shared.follow(trusted: AXIsProcessTrusted())
+            _ = await waitFor(3) { PersonInput.shared.watching }
+            result["7 watchingAfterTrustBack"] = PersonInput.shared.watching
+            result["8 seesPersonAfterTrustBack"] = await seesPerson()
+            note("rearm: \(result.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" })")
         default:
             result["error"] = "unknown spec"
         }
         return result
+    }
+
+    /// A modifier key pressed or released as the person would.
+    func personModifier(_ code: CGKeyCode, down: Bool, flags: CGEventFlags) {
+        let source = CGEventSource(stateID: .hidSystemState)
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down) else { return }
+        event.flags = flags
+        event.post(tap: .cghidEventTap)
     }
 
     /// Enables and selects an input source by ID, or the first whose ID ends
@@ -88,6 +220,8 @@ extension TakeHarness {
         if let parent = all.first(where: { sourceID($0) == parentID }) { TISEnableInputSource(parent) }
         TISEnableInputSource(source)
         let selected = TISSelectInputSource(source) == noErr
+        // The system's input-source switch popup takes the keyboard for a moment.
+        Thread.sleep(forTimeInterval: 1.5)
         note("input source \(found): selected \(selected)")
         return selected
     }

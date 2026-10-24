@@ -159,6 +159,9 @@ final class LiveFakeInjector: TextInjecting {
     var keyField: SimulatedKeyField?
     /// Any other live field in place of `field`.
     var liveField: LiveTextField?
+    var keyWaits = 0
+    var onWaitForKeys: (() -> Void)?
+    func waitForKeysToClear() async { keyWaits += 1; onWaitForKeys?() }
 }
 
 @MainActor

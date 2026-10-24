@@ -40,7 +40,6 @@ struct TranscriptionEngineTests {
         let permissions = PermissionsManager()
         permissions.microphone = .granted
         permissions.accessibility = true
-        permissions.automation = .granted
         permissions.speech = .denied
         #expect(!permissions.allGranted)
         permissions.requiresSpeechRecognition = false

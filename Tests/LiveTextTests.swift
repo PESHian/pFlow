@@ -389,9 +389,8 @@ struct LiveTextTests {
         #expect(hud.model.reason == nil && hud.model.copyOffer == nil)
     }
 
-    /// The capsule is Superwhisper's measured pill (58x30 pt) while a take
-    /// records and finishes; a status after the take keeps the height and
-    /// widens only as far as its words need, never clipping them.
+    /// The capsule is Superwhisper's measured pill (58x30 pt) in every phase;
+    /// a status after the take is an icon, its words on the card.
     @Test func capsuleIsThePillSizeWhileRecordingAndFinishing() throws {
         #expect(RecordingHUDView.capsuleSize == CGSize(width: 58, height: 30))
         for phase in [HUDPhase.listening, .confirmCancel, .transcribing, .cleaning] {
@@ -409,21 +408,47 @@ struct LiveTextTests {
             let model = HUDModel()
             model.phase = phase
             let host = NSHostingView(rootView: RecordingHUDView(model: model))
-            #expect(host.fittingSize.height == 30, "\(phase): \(host.fittingSize)")
-            #expect(host.fittingSize.width >= 58 && host.fittingSize.width <= 120, "\(phase): \(host.fittingSize)")
+            #expect(host.fittingSize == NSSize(width: 58, height: 30), "one size, an icon at most: \(phase): \(host.fittingSize)")
         }
+    }
+
+    /// A status after the take shows only its icon in the capsule; its words
+    /// are on the card (Press ⌘V) or in the tooltip.
+    @Test func aStatusInTheCapsuleIsAnIconWithoutWords() {
+        let mark = NSHostingView(rootView: RecordingHUDView.statusMark("Press ⌘V", "doc.on.clipboard"))
+        #expect(mark.fittingSize.width <= 24, "an icon, no words: \(mark.fittingSize)")
+    }
+
+    /// The capsule's waveform matches Windows 0.1.28: up to seven bars 2 pt
+    /// wide with 2 pt gaps, as tall as the voice against the take's loudest
+    /// moment; silence is a row of 2 x 2 dots; "Lines" is one thin trace.
+    @Test func capsuleWaveformIsSevenThinBarsAndQuietIsDots() {
+        let rect = CGRect(origin: .zero, size: RecordingHUDView.capsuleWaveform)
+        let quiet = CapsuleWave.bars(Array(repeating: 0, count: 32), in: rect)
+        #expect(quiet.count == 7)
+        #expect(quiet.allSatisfy { $0.width == 2 && $0.height == 2 }, "silence is dots: \(quiet)")
+        #expect(zip(quiet, quiet.dropFirst()).allSatisfy { $1.minX - $0.maxX == 2 }, "2 pt gaps")
+        var voice = Array(repeating: Float(0), count: 25)
+        voice += [0.1, 0.3, 0.6, 0.9, 0.6, 0.3, 0.1]
+        let loud = CapsuleWave.bars(voice, in: rect)
+        #expect(loud.count == 7)
+        #expect(loud[3].height == rect.height, "the loudest moment fills the height")
+        #expect(loud[0].height < loud[1].height && loud[1].height < loud[2].height && loud[2].height < loud[3].height)
+        #expect(loud.allSatisfy { $0.minY >= rect.minY && $0.maxY <= rect.maxY && Int($0.height) % 2 == 0 })
+        let trace = CapsuleWave.trace(voice, in: rect)
+        #expect(trace.count == 17 && trace.first?.x == 0 && trace.last?.x == rect.width)
     }
 
     /// The panel is measured again when the card's content changes after it
     /// is on screen: the whole text and the Grant row make it taller, and it
-    /// stays inside the screen. A status in the capsule keeps its height.
+    /// stays inside the screen. The capsule keeps 58x30 in every phase.
     @Test func panelGrowsWithTheCopyCardAndStaysOnScreen() throws {
         let hud = HUDController(pasteboard: NSPasteboard(name: .init("pflow.panel.tests.\(UUID().uuidString)")))
         hud.show(device: nil, livePreview: false)
         let panel = try #require(hud.panelForTesting)
         hud.setPhase(.copied)
-        #expect(panel.frame.height == RecordingHUDView.capsuleSize.height && panel.frame.width > RecordingHUDView.capsuleSize.width,
-                "a status keeps the capsule's height and is measured again for its words: \(panel.frame.size)")
+        #expect(panel.frame.size == NSSize(width: RecordingHUDView.capsuleSize.width, height: RecordingHUDView.capsuleSize.height),
+                "the capsule is one size in every phase: \(panel.frame.size)")
         hud.setLivePreview(true)
         hud.setPhase(.savedToHistory)
         let card = panel.frame.height
