@@ -89,12 +89,17 @@ enum InputComposition {
 
 /// Input method families, by input source ID; each ends a composition with its own keys.
 enum InputMethodFamily: Equatable {
-    case japanese, chinese, korean, other
+    /// `phonetic`: Vietnamese (Telex, VNI), Hindi transliteration, Rime,
+    /// Cantonese: Space and punctuation end a word.
+    case japanese, chinese, korean, phonetic, other
 
     static func of(sourceID: String) -> InputMethodFamily {
         let id = sourceID.lowercased()
         if id.contains("kotoeri") || id.contains("japanese") || id.contains("atok") { return .japanese }
         if id.contains("korean") || id.contains("hangul") { return .korean }
+        if id.contains("vietnamese") || id.contains("telex") || id.contains("vni") || id.contains("transliteration")
+            || id.contains("hindi") || id.contains("rime") || id.contains("squirrel") || id.contains("cantonese")
+            || id.contains("jyutping") { return .phonetic }
         if id.contains(".scim") || id.contains(".tcim") || id.contains("pinyin") || id.contains("zhuyin")
             || id.contains("chinese") || id.contains("wubi") || id.contains("cangjie") || id.contains("sogou")
             || id.contains("stroke") { return .chinese }
@@ -124,35 +129,57 @@ enum CompositionKeys {
         case .japanese, .other: return false
         case .chinese: return key == space || digits.contains(key) || punctuation.contains(key)
         case .korean: return key == space || punctuation.contains(key) || arrows.contains(key)
+        case .phonetic: return key == space || punctuation.contains(key)
         }
     }
 }
 
-/// What the person's keys say about a composition outside AppKit fields. No
-/// time limit runs during a take: the state at the take's start is kept, and
-/// the end of the take refuses until a real commit is seen. Before a take a
-/// composition left alone for `preTakeExpiry` no longer counts: dictation is
+/// What the person's keys say about a composition outside AppKit fields.
+/// Each key is kept with the input source that was selected when it was
+/// pressed (read on the main thread right after the key) since the last
+/// universal end (Return, Enter, Escape, a committing click). At a take's
+/// start and at the final check the keys are read with the input source
+/// selected *then*: keys typed under another source belong to before a switch
+/// (switching ends a composition), and with a plain layout selected there is
+/// no composition to protect. No notification decides anything.
+///
+/// No time limit runs during a take: the state at the take's start is kept,
+/// and the end of the take refuses until a real commit is seen. Before a take
+/// a composition left alone for `preTakeExpiry` no longer counts: dictation is
 /// started by the person, and a minute is far longer than anyone leaves a
 /// half-typed word open and then starts dictating into the same field
 /// (Windows 0.1.28 reads the open composition itself; this is the stand-in).
 struct CompositionTracker: Equatable {
     static let preTakeExpiry: UInt64 = 60_000_000_000
+    /// Keys kept at most (a word being composed is far shorter).
+    static let keptKeys = 200
 
-    /// When the last key that started or continued a composition was pressed; nil when none is open.
-    private(set) var composingSince: UInt64?
-    /// When a composition last ended (a commit key, a committing click, an input source change).
-    private(set) var lastCommit: UInt64 = 0
+    struct Key: Equatable {
+        let code: Int64
+        let at: UInt64
+        /// The input source ID selected for this key ("" a plain layout); nil until read.
+        var source: String?
+    }
 
-    /// A key the person pressed. `family` is nil while a plain layout is selected.
-    mutating func key(_ code: Int64, shortcut: Bool, family: InputMethodFamily?, at time: UInt64) {
+    /// Keys since the last universal end, in order.
+    private(set) var keys: [Key] = []
+    /// When a composition last ended for every input method (Return, Escape, a click).
+    private(set) var lastEnd: UInt64 = 0
+
+    /// A key the person pressed. Shortcuts (Command or Control held) are never part of a composition.
+    mutating func key(_ code: Int64, shortcut: Bool, at time: UInt64, source: String? = nil) {
         if shortcut { return }
-        guard let family else { end(at: time); return }
-        if CompositionKeys.commits(code, in: family) { end(at: time); return }
-        if CompositionKeys.navigation.contains(code) {
-            if composingSince != nil { composingSince = time }
+        if code == CompositionKeys.return || code == CompositionKeys.enter || code == CompositionKeys.escape {
+            end(at: time)
             return
         }
-        composingSince = time
+        keys.append(Key(code: code, at: time, source: source))
+        if keys.count > Self.keptKeys { keys.removeFirst(keys.count - Self.keptKeys) }
+    }
+
+    /// The input source read for the key pressed at `time`.
+    mutating func stamp(at time: UInt64, source: String) {
+        if let index = keys.lastIndex(where: { $0.at == time && $0.source == nil }) { keys[index].source = source }
     }
 
     /// A click that commits (anywhere but the input method's own candidate window).
@@ -161,22 +188,47 @@ struct CompositionTracker: Equatable {
     }
 
     mutating func end(at time: UInt64) {
-        if composingSince != nil { lastCommit = time }
-        composingSince = nil
+        if !keys.isEmpty { lastEnd = time }
+        keys.removeAll()
     }
 
-    /// At the start of a take: a composition is open (and not stale).
-    func snapshot(at time: UInt64) -> Bool {
-        guard let since = composingSince else { return false }
+    /// The kept keys read for the input source selected now (nil: a plain
+    /// layout): when a composition was last started or continued (nil when
+    /// none is open) and when one last ended.
+    func replay(sourceID: String?) -> (since: UInt64?, lastCommit: UInt64) {
+        guard let sourceID else { return (nil, lastEnd) }
+        let family = InputMethodFamily.of(sourceID: sourceID)
+        // Only keys after the last one typed under another source (a switch since).
+        let start = (keys.lastIndex { $0.source != nil && $0.source != sourceID }).map { $0 + 1 } ?? 0
+        var since: UInt64?
+        var lastCommit = start > 0 ? max(lastEnd, keys[start - 1].at) : lastEnd
+        for key in keys[start...] {
+            if CompositionKeys.commits(key.code, in: family) {
+                if since != nil { lastCommit = key.at }
+                since = nil
+            } else if CompositionKeys.navigation.contains(key.code) {
+                if since != nil { since = key.at }
+            } else {
+                since = key.at
+            }
+        }
+        return (since, lastCommit)
+    }
+
+    /// At the start of a take: a composition is open (and not stale) for the input source selected now.
+    func snapshot(at time: UInt64, sourceID: String?) -> Bool {
+        guard let since = replay(sourceID: sourceID).since else { return false }
         return time >= since && time - since < Self.preTakeExpiry
     }
 
     /// During and at the end of a take, with no time limit: composing when it
     /// was at the start and no commit was seen since, or when one began after
-    /// the start.
-    func composing(snapshot: Bool, takeStart: UInt64) -> Bool {
-        if snapshot, lastCommit < takeStart { return true }
-        if let since = composingSince, since >= takeStart { return true }
+    /// the start. Never with a plain layout selected now.
+    func composing(snapshot: Bool, takeStart: UInt64, sourceID: String?) -> Bool {
+        guard sourceID != nil else { return false }
+        let state = replay(sourceID: sourceID)
+        if snapshot, state.lastCommit < takeStart { return true }
+        if let since = state.since, since >= takeStart { return true }
         return false
     }
 }

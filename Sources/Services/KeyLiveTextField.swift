@@ -58,7 +58,7 @@ struct TargetCheck {
         facts.modifiersHeld = PersonInput.modifiersHeld()
         facts.keyDown = PersonInput.somethingHeld()
         facts.composing = InputComposition.composing(markedLength: now.flatMap(FocusedElement.markedLength),
-                                                     tracked: PersonInput.shared.composing(since: composition))
+                                                     tracked: PersonInput.shared.composing(since: composition, sourceID: PersonInput.selectedInputMethodID()))
         facts.personActed = PersonInput.shared.acted(since: since) ?? false
         return facts
     }

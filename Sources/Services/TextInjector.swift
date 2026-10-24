@@ -190,7 +190,7 @@ final class TextInjector: TextInjecting {
         PersonInput.shared.start()
         // Whether the person was composing when the take started: the end of
         // the take refuses until a real commit is seen, whatever the time.
-        composition = PersonInput.shared.compositionSnapshot()
+        composition = PersonInput.shared.compositionSnapshot(sourceID: PersonInput.selectedInputMethodID())
         captureField()
     }
 

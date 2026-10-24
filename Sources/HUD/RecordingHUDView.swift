@@ -44,9 +44,10 @@ struct RecordingHUDView: View {
         .frame(width: Self.capsuleSize.width, height: Self.capsuleSize.height)
         .contentShape(Capsule())
         .background { CapsuleBackground(palette: model.palette) }
-        // Everything inside draws for a dark background, the spinner included.
+        // Everything inside draws for the capsule's dark glass. Not
+        // preferredColorScheme: that turns the whole panel dark and the card
+        // shown after the take in the same panel would stay dark in light mode.
         .environment(\.colorScheme, .dark)
-        .preferredColorScheme(.dark)
         .accessibilityLabel(title)
     }
 
@@ -125,9 +126,9 @@ struct RecordingHUDView: View {
         case .copied: return "Text copied. Press Command V to paste."
         case .savedToHistory: return "Text saved in History. Clipboard unchanged."
         case .restarting: return "Restarting pFlow"
-        case .liveTextKept: return "Speech recognition stopped early. The words so far are saved in History."
+        case .liveTextKept: return "pFlow stopped listening early. The words so far are saved in History."
         case .liveTextKeptTyped:
-            return "Speech recognition stopped early. The words already typed stay in your app, and the words so far are saved in History."
+            return "pFlow stopped listening early. The words already typed stay in your app, and the words so far are saved in History."
         case .passwordField: return "Dictation is off in password fields."
         case .typingStopped: return "Typing stopped, so the finished text was not put in. Copy it here; it is also in History."
         case .typedTextLeft: return "Cancelled. Words pFlow already typed are still in the app."
@@ -156,7 +157,53 @@ private struct LivePreviewCard<Status: View>: View {
     private var boxLines: Int { 4 }
     private var headerHeight: CGFloat { 20 }
 
+    /// Only a reason to give (password field, recording did not start,
+    /// cancelled): one compact row, sized to the sentence, with close.
+    private var messageOnly: Bool {
+        model.reason != nil && model.copyOffer == nil && !model.needsAccessibility && !isRecordingPhase && !isProcessingPhase
+    }
+
+    @ViewBuilder private var content: some View {
+        if messageOnly, let reason = model.reason {
+            HStack(alignment: .center, spacing: Theme.s2) {
+                PeshMark(size: 16)
+                status()
+                Text(reason)
+                    .font(.system(size: 12))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("reason")
+                HUDButton(systemName: "xmark", tint: .secondary) { model.onClose?() }
+                    .accessibilityLabel("Close")
+            }
+            .padding(.horizontal, Theme.s4)
+            .padding(.vertical, Theme.s3)
+        } else {
+            fullCard
+        }
+    }
+
     var body: some View {
+        content
+        .frame(width: model.previewMaxWidth)
+        .contentShape(Rectangle())
+        .background {
+            let shape = RoundedRectangle(cornerRadius: Theme.radiusLarge, style: .continuous)
+            if reduceTransparency {
+                shape.fill(Color(nsColor: .windowBackgroundColor))
+            } else {
+                shape.fill(.regularMaterial)
+            }
+            shape.strokeBorder(contrast == .increased ? Theme.switchOffStrong : Theme.hairlineStrong,
+                               lineWidth: contrast == .increased ? 1 : 0.75)
+        }
+        .environment(\.colorScheme, model.colorScheme ?? systemScheme)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(messageOnly ? (model.reason ?? "") : model.partial)
+    }
+
+    private var fullCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
                 .frame(height: headerHeight)
@@ -193,22 +240,6 @@ private struct LivePreviewCard<Status: View>: View {
                     .padding(.bottom, Theme.s3)
             }
         }
-        .frame(width: model.previewMaxWidth)
-        .contentShape(Rectangle())
-        .background {
-            let shape = RoundedRectangle(cornerRadius: Theme.radiusLarge, style: .continuous)
-            if reduceTransparency {
-                shape.fill(Color(nsColor: .windowBackgroundColor))
-            } else {
-                shape.fill(.regularMaterial)
-            }
-            shape.strokeBorder(contrast == .increased ? Theme.switchOffStrong : Theme.hairlineStrong,
-                               lineWidth: contrast == .increased ? 1 : 0.75)
-        }
-        .environment(\.colorScheme, model.colorScheme ?? systemScheme)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(title)
-        .accessibilityValue(model.partial)
     }
 
     private var header: some View {
@@ -240,7 +271,7 @@ private struct LivePreviewCard<Status: View>: View {
     /// takes focus, so the app the person was in keeps it.
     private var copyRow: some View {
         HStack(spacing: Theme.s2) {
-            Text(model.reason == nil ? title : "Also saved in History.")
+            Text(model.reason == nil ? title : "Saved in History")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

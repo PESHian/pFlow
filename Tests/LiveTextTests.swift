@@ -414,6 +414,37 @@ struct LiveTextTests {
         }
     }
 
+    /// A card with only a reason (password field, recording did not start,
+    /// cancelled) is one compact row sized to its sentence, with close; a
+    /// card with words keeps the words, Copy and close.
+    @Test func aReasonOnlyCardIsOneCompactRowWithClose() {
+        let model = HUDModel()
+        model.livePreview = true
+        model.phase = .passwordField
+        model.reason = RecordingCoordinator.passwordNote
+        var closed = false
+        model.onClose = { closed = true }
+        let host = NSHostingView(rootView: RecordingHUDView(model: model))
+        #expect(host.fittingSize.height <= 56, "one row: \(host.fittingSize)")
+        let withWords = HUDModel()
+        withWords.livePreview = true
+        withWords.phase = .liveTextKept
+        withWords.reason = RecordingCoordinator.keptNote
+        withWords.partial = "Seven blue kites drift over the dunes."
+        withWords.copyOffer = withWords.partial
+        #expect(NSHostingView(rootView: RecordingHUDView(model: withWords)).fittingSize.height > 90)
+        model.onClose?()
+        #expect(closed)
+        #expect(!RecordingCoordinator.keptNote.contains("History"), "History is named once, in the card's footer")
+    }
+
+    @Test func everyCardCanBeClosed() {
+        let hud = HUDController(pasteboard: NSPasteboard(name: .init("pflow.close.tests.\(UUID().uuidString)")))
+        hud.show(device: nil, livePreview: false)
+        #expect(hud.model.onClose != nil, "a reason-only card has its close too")
+        hud.hide(after: 0)
+    }
+
     /// A status after the take shows only its icon in the capsule; its words
     /// are on the card (Press ⌘V) or in the tooltip.
     @Test func aStatusInTheCapsuleIsAnIconWithoutWords() {

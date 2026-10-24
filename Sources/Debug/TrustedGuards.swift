@@ -90,11 +90,11 @@ extension TakeHarness {
             for code in [kVK_ANSI_N, kVK_ANSI_I, kVK_ANSI_H, kVK_ANSI_A, kVK_ANSI_O] { personKey(CGKeyCode(code)); usleep(80_000) }
             await pause(0.6)
             dump("composing")
-            result["trackerWhileComposing"] = PersonInput.shared.composing(since: (false, 0))
+            result["trackerWhileComposing"] = PersonInput.shared.composing(since: (false, 0), sourceID: PersonInput.selectedInputMethodID())
             personKey(CGKeyCode(parts[2].contains("Pinyin") || parts[2].contains("SCIM") ? kVK_Space : kVK_Return))
             await pause(0.6)
             dump("committed")
-            result["trackerAfterCommit"] = PersonInput.shared.composing(since: (false, 0))
+            result["trackerAfterCommit"] = PersonInput.shared.composing(since: (false, 0), sourceID: PersonInput.selectedInputMethodID())
             _ = selectInputSource("com.apple.keylayout.ABC")
         case "keepcopy" where parts.count == 3:
             // "Copy dictation to clipboard" on: the kept copy is the finished text, unmarked.
@@ -191,6 +191,78 @@ extension TakeHarness {
             })
             result["candidateClick"] = clicked
             _ = selectInputSource("com.apple.keylayout.ABC")
+        case "srcswitch" where parts.count == 2:
+            // The input source switched while pFlow is in the background after having been active once:
+            // (a) ABC -> Kotoeri, then "nihon" in Chrome: refused; (b) Kotoeri "nihon" -> ABC, then "hello": inserted.
+            guard let target = await openTarget("chrome-textarea") else { result["error"] = "could not open"; return result }
+            let abc = "com.apple.keylayout.ABC", kotoeri = "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese"
+            _ = selectInputSource(parts[1] == "a" ? abc : kotoeri)
+            // pFlow active once, as when Settings was opened and closed.
+            let settings = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 320, height: 160), styleMask: [.titled, .closable],
+                                    backing: .buffered, defer: false)
+            settings.title = "pFlow fictional settings"
+            settings.isReleasedWhenClosed = false
+            settings.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            _ = await waitFor(3) { NSApp.isActive }
+            result["pflowWasActive"] = NSApp.isActive
+            settings.close()
+            _ = await activate(target.app)
+            await pause(1)
+            result["pflowActiveAfter"] = NSApp.isActive
+            result["centreSuspended"] = DistributedNotificationCenter.default().suspended
+            let letters: [Int] = parts[1] == "a" ? [kVK_ANSI_N, kVK_ANSI_I, kVK_ANSI_H, kVK_ANSI_O, kVK_ANSI_N]
+                                                 : [kVK_ANSI_H, kVK_ANSI_E, kVK_ANSI_L, kVK_ANSI_L, kVK_ANSI_O]
+            result["take"] = await take(target, mode: .off, label: spec, beforeBegin: { [self] in
+                if parts[1] == "a" {
+                    _ = selectInputSource(kotoeri)
+                } else {
+                    for code in [kVK_ANSI_N, kVK_ANSI_I, kVK_ANSI_H, kVK_ANSI_O, kVK_ANSI_N] { personKey(CGKeyCode(code)); usleep(80_000) }
+                    _ = selectInputSource(abc)
+                }
+                for code in letters { personKey(CGKeyCode(code)); usleep(80_000) }
+                await pause(0.6)
+            }, afterFinish: { [self] in
+                personKey(CGKeyCode(kVK_Escape)); personKey(CGKeyCode(kVK_Escape))
+            })
+            result["sourceAtEnd"] = PersonInput.selectedInputMethodID() ?? "plain layout"
+            _ = selectInputSource(abc)
+        case "clickprobe" where parts.count == 2:
+            // Does a click on Chrome's tab strip, or a right-click in the page, end an open Kotoeri word?
+            // Compose, click, then Escape: a word still open is cancelled (gone); an ended one stays.
+            guard let target = await openTarget("chrome-textarea"), let field = target.field else { result["error"] = "could not open"; return result }
+            _ = selectInputSource("com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese")
+            _ = await activate(target.app)
+            await caretToEnd(target)
+            let before = string(field, kAXValueAttribute) ?? ""
+            for code in [kVK_ANSI_N, kVK_ANSI_I, kVK_ANSI_H, kVK_ANSI_O, kVK_ANSI_N] { personKey(CGKeyCode(code)); usleep(80_000) }
+            await pause(0.5)
+            let composed = string(field, kAXValueAttribute) ?? ""
+            let window = element(AXUIElementCreateApplication(target.app.processIdentifier), kAXFocusedWindowAttribute)
+            var origin = CGPoint.zero, size = CGSize.zero
+            if let window, let p = attribute(window, kAXPositionAttribute), let z = attribute(window, kAXSizeAttribute) {
+                AXValueGetValue(p as! AXValue, .cgPoint, &origin); AXValueGetValue(z as! AXValue, .cgSize, &size)
+            }
+            let source = CGEventSource(stateID: .hidSystemState)
+            if parts[1] == "tabstrip" {
+                personClick(at: CGPoint(x: origin.x + size.width - 120, y: origin.y + 14))
+            } else if let point = center(of: field) {
+                for type in [CGEventType.rightMouseDown, .rightMouseUp] {
+                    CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .right)?.post(tap: .cghidEventTap)
+                }
+                await pause(0.5)
+                personKey(CGKeyCode(kVK_Escape))   // closes the menu
+            }
+            await pause(0.6)
+            _ = await activate(target.app)
+            personKey(CGKeyCode(kVK_Escape))
+            await pause(0.6)
+            let after = string(field, kAXValueAttribute) ?? ""
+            result["composedGrew"] = composed.count > before.count
+            result["wordAfterEscape"] = String(after.dropFirst(before.count))
+            result["endedByClick"] = composed.count > before.count && after.count > before.count
+            _ = selectInputSource("com.apple.keylayout.ABC")
+            note("clickprobe \(parts[1]): \(result)")
         case "rearm":
             // The tap shut down by the system, and Accessibility followed off and on: never reported as
             // watching while it is not, and watching again (seeing the person) once re-created.

@@ -544,6 +544,6 @@ final class RecordingCoordinator {
     static let passwordNote = "That's a password field, so pFlow didn't type there."
     static let startFailedNote = "pFlow couldn't start recording, so nothing was typed."
     static let typedLeftNote = "Cancelled. The words pFlow already typed are still in the app."
-    static let keptNote = "Speech recognition stopped early. These words are in History; nothing was typed."
-    static let keptTypedNote = "Speech recognition stopped early. The words already typed stay in the app; these are in History."
+    static let keptNote = "pFlow stopped listening early, so nothing was typed."
+    static let keptTypedNote = "pFlow stopped listening early. The words it already typed stay in the app."
 }

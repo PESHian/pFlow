@@ -18,10 +18,12 @@ final class PersonInput: @unchecked Sendable {
     private let lock = NSLock()
     private var lastAction: UInt64 = 0
     private var tracker = CompositionTracker()
-    /// The family of the selected input method, nil for a plain layout; kept
-    /// current from the main thread (input source changes), read by the tap.
-    private var family: InputMethodFamily?
-    private var sourceObserver: NSObjectProtocol?
+    /// Tests: in place of the tap thread (a stand-in that marks the watch running).
+    var launcherForTesting: ((PersonInput) -> Void)?
+    /// Tests: the tap's health when there is no real tap.
+    var healthForTesting: (() -> Bool)?
+    /// Tests: how often the watch was stopped.
+    private(set) var stops = 0
     /// What `start` and the trust check ask; tests make it false so no tap is made.
     private let isTrusted: () -> Bool
     /// The last trust value `follow` was given (tests read it).
@@ -43,7 +45,8 @@ final class PersonInput: @unchecked Sendable {
     /// exists, is still valid and enabled, and pFlow is still trusted.
     var watching: Bool {
         let (override, healthy) = lock.withLock { () -> (Bool?, Bool) in
-            guard state == .on, let tap else { return (watchingOverride, false) }
+            guard state == .on else { return (watchingOverride, false) }
+            guard let tap else { return (watchingOverride, healthForTesting?() ?? false) }
             return (watchingOverride, CFMachPortIsValid(tap) && CGEvent.tapIsEnabled(tap: tap))
         }
         if let override { return override }
@@ -57,37 +60,21 @@ final class PersonInput: @unchecked Sendable {
         return lock.withLock { lastAction >= time }
     }
 
-    /// At the start of a take: an open composition (CompositionTracker.snapshot) and when.
-    func compositionSnapshot() -> (composing: Bool, at: UInt64) {
+    /// At the start of a take: an open composition (CompositionTracker.snapshot)
+    /// for the input method selected now (read by the caller on the main thread), and when.
+    func compositionSnapshot(sourceID: String?) -> (composing: Bool, at: UInt64) {
         let now = Self.now()
-        return (lock.withLock { tracker.snapshot(at: now) }, now)
+        return (lock.withLock { tracker.snapshot(at: now, sourceID: sourceID) }, now)
     }
 
-    /// During or at the end of a take that started with `snapshot`.
-    func composing(since snapshot: (composing: Bool, at: UInt64)) -> Bool {
-        lock.withLock { tracker.composing(snapshot: snapshot.composing, takeStart: snapshot.at) }
+    /// During or at the end of a take that started with `snapshot`, for the
+    /// input method selected now. A plain layout now: never composing.
+    func composing(since snapshot: (composing: Bool, at: UInt64), sourceID: String?) -> Bool {
+        lock.withLock { tracker.composing(snapshot: snapshot.composing, takeStart: snapshot.at, sourceID: sourceID) }
     }
 
     /// Tests: the tracker as it is now.
     var trackerForTesting: CompositionTracker { lock.withLock { tracker } }
-
-    /// The selected input source changed: its family from now on, and any
-    /// open composition is ended (switching commits it).
-    func inputSourceChanged(to sourceID: String?) {
-        lock.withLock {
-            family = sourceID.map(InputMethodFamily.of(sourceID:))
-            tracker.end(at: Self.now())
-        }
-    }
-
-    private func followInputSource() {
-        guard sourceObserver == nil else { return }
-        let read: () -> Void = { [weak self] in self?.inputSourceChanged(to: PersonInput.selectedInputMethodID()) }
-        DispatchQueue.main.async { read() }
-        sourceObserver = DistributedNotificationCenter.default().addObserver(
-            forName: NSNotification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
-            object: nil, queue: .main) { _ in read() }
-    }
 
     /// Follows the Accessibility grant: watching while trusted, and a fresh
     /// tap once trust comes back (a tap from before a revoke can stay
@@ -101,11 +88,11 @@ final class PersonInput: @unchecked Sendable {
     /// take. A tap that the system disabled or invalidated is replaced.
     func start() {
         guard isTrusted() else { return }
-        followInputSource()
         let current = lock.withLock { state }
         if current == .starting || (current == .on && watching) { return }
         if current == .on { stop() }
         lock.withLock { state = .starting }
+        if let launcherForTesting { launcherForTesting(self); return }
         let thread = Thread { [weak self] in self?.run() }
         thread.name = "pFlow person input"
         thread.qualityOfService = .userInteractive
@@ -123,8 +110,12 @@ final class PersonInput: @unchecked Sendable {
             tap = nil
             runLoop = nil
             state = .off
+            stops += 1
         }
     }
+
+    /// Tests: what the tap thread does once its tap is running.
+    func markRunningForTesting() { lock.withLock { state = .on } }
 
     #if DEBUG
     /// Self-test only: the system shutting the tap down under pFlow.
@@ -144,12 +135,14 @@ final class PersonInput: @unchecked Sendable {
             lastAction = time
             guard let keyCode else { tracker.click(commits: clickCommits, at: time); return }
             let shortcut = !flags.intersection([.maskCommand, .maskControl]).isEmpty
-            tracker.key(keyCode, shortcut: shortcut, family: family, at: time)
+            tracker.key(keyCode, shortcut: shortcut, at: time)
         }
     }
 
-    /// Tests: the input method family keys are recorded under.
-    func setFamilyForTesting(_ family: InputMethodFamily?) { lock.withLock { self.family = family } }
+    /// The input source selected for the key pressed at `time`, read on the main thread.
+    func stampSource(at time: UInt64, source: String) {
+        lock.withLock { tracker.stamp(at: time, source: source) }
+    }
 
     /// Whether a click at `point` (global, top-left origin) commits an open
     /// composition. A click on the input method's candidate list does not:
@@ -160,7 +153,7 @@ final class PersonInput: @unchecked Sendable {
     /// commits (browsers commit on blur and click). Looked up only while a
     /// composition is open.
     private func clickCommits(at point: CGPoint) -> Bool {
-        guard lock.withLock({ tracker.composingSince != nil }) else { return true }
+        guard lock.withLock({ !tracker.keys.isEmpty }) else { return true }
         let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
         return Self.clickCommits(at: point, windows: windows)
     }
@@ -224,8 +217,15 @@ final class PersonInput: @unchecked Sendable {
         case .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown:
             guard event.getIntegerValueField(.eventSourceUserData) != SyntheticKeys.marker else { return }
             if type == .keyDown {
-                record(keyCode: event.getIntegerValueField(.keyboardEventKeycode), flags: event.flags)
+                let time = Self.now()
+                record(keyCode: event.getIntegerValueField(.keyboardEventKeycode), flags: event.flags, at: time)
+                // The input source is read on the main thread (Text Input Sources must be), right after.
+                DispatchQueue.main.async { [weak self] in
+                    self?.stampSource(at: time, source: Self.selectedInputMethodID() ?? "")
+                }
             } else {
+                // Any click ends a word in Chrome, a right-click and the tab strip included (VM check),
+                // except one on the input method's candidate list.
                 record(keyCode: nil, clickCommits: clickCommits(at: event.location))
             }
         default:
