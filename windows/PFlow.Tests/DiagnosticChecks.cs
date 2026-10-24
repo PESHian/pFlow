@@ -53,6 +53,8 @@ internal static class DiagnosticChecks
             slot.Begin("b", field); slot.Reconcile("b", "harbor lights"); slot.Reconcile("b", "harbor lights glow");
             var final = slot.Finalize("b", "Harbor lights glow.");
             Check("end of take: different finished text (capitals, punctuation) still selects only pFlow's words", final.Result == LiveFinal.Replace && field.Caret == new TextSpan(6, "harbor lights".Length) && field.Ranges.Count == 1);
+            Check("end of take: the replace carries exactly pFlow's own words and where they start, for the insert to hold the selection to",
+                slot.Selection("b") == new OwnedWords(6, "harbor lights") && slot.Selection("b")!.Mismatch(field.Value, field.Caret.Start, field.Caret.Length) == null && slot.Selection("other") == null);
             Check("after a refused replace the selection ends without a key", slot.Collapse("b") && field.Collapses == 1 && field.Caret == new TextSpan(6 + "harbor lights".Length, 0) && field.Value == "Note: harbor lights");
         }
         {

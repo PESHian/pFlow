@@ -30,7 +30,8 @@ internal sealed class LiveKeyField : ILiveTextField
     public bool AppendOnly => true;
     public bool ReadyToWrite => !new[] { 0x10, 0x11, 0x12, 0x5B, 0x5C }.Any(key => Native.GetAsyncKeyState(key) < 0);
 
-    LiveKeyField(AutomationElement element, IntPtr window, IntPtr control, bool elevated) { this.element = element; runtimeId = element.GetRuntimeId(); this.window = window; this.control = control; this.elevated = elevated; }
+    /// Internal for the native checks of Collapse; the app makes one only through Create.
+    internal LiveKeyField(AutomationElement element, IntPtr window, IntPtr control, bool elevated) { this.element = element; runtimeId = element.GetRuntimeId(); this.window = window; this.control = control; this.elevated = elevated; }
 
     /// The focused field when it is a readable, editable text field in a web page in Chrome or Edge (an
     /// edit control under the page's document, so never the address bar or other browser controls) with
@@ -120,9 +121,12 @@ internal sealed class LiveKeyField : ILiveTextField
         return false;
     }
 
-    /// Ends any selection in the field at its end, through UI Automation (no keys).
+    /// Ends any selection in the field at its end, through UI Automation (no keys), only while the field still
+    /// has the focus in the window in front: a selection in a field the person left is left alone (in Chrome a
+    /// UI Automation select there can pull the caret back). False when nothing was done.
     public bool Collapse()
     {
+        if (Native.GetForegroundWindow() != window || !SameElement()) { Diagnostics.Recorder.Event("typing.collapse", new DiagField("result", "left alone: the field no longer has the focus")); return false; }
         try {
             var selections = ((TextPattern)element.GetCurrentPattern(TextPattern.Pattern)).GetSelection();
             if (selections.Length != 1) return false;

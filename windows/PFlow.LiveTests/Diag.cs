@@ -85,7 +85,7 @@ internal static partial class Program
         DictationPipeline.Result run;
         try {
             run = await pipeline.Run(wav, result.Report.AudioMs / 1000, target, directory, owner, (_, _) => { }, CancellationToken.None, result.Report.LiveWords,
-                typing ? new LiveTyping(text => slot.Finalize(session, text), () => slot.Typed(session), () => slot.Cancel(session), () => slot.Collapse(session)) : null);
+                typing ? new LiveTyping(text => slot.Finalize(session, text), () => slot.Typed(session), () => slot.Cancel(session), () => slot.Collapse(session), () => slot.Selection(session)) : null);
         } catch (RecognitionFailure error) {
             // As Program.Finish does: the take failed; the recorder says so.
             InsertionLog.Record("take failed: " + InsertionLog.Reason(error));
@@ -439,7 +439,7 @@ internal static partial class Program
                         await Task.Delay(300);
                         string selected = Selected();
                         Check($"end of take: exactly pFlow's own words are selected, no key ({final}, [{selected}])", final == LiveFinal.Replace && Shown() == before && Flat(selected) == "harbor lights");
-                        string status = await target.InsertOverSelection("Harbor lighthouse keeper waves.", IntPtr.Zero, false, CancellationToken.None);
+                        string status = await target.InsertOverSelection("Harbor lighthouse keeper waves.", slot.Selection("revised")!, IntPtr.Zero, false, CancellationToken.None);
                         await Task.Delay(500);
                         Console.WriteLine($"GUARD replace: selected=[{selected.Replace(' ', '_').Replace('\u00A0', '~')}] before=[{before}] status=[{status}] shown=[{Flat(Shown())}]");
                         Check($"end of take: the finished text replaces pFlow's words exactly once, nothing else changed ({status})", status == "Inserted" && Flat(Shown()) == Flat(before[..^"harbor lights".Length] + "Harbor lighthouse keeper waves.") && Selected().Length == 0);
@@ -450,12 +450,37 @@ internal static partial class Program
                         var target = InsertionTarget.Capture();
                         var (final, _) = slot.Finalize("replace-away", "Harbor lights glow tonight.");
                         Front(noteWindow); await Task.Delay(500);
-                        string status; try { status = await target.InsertOverSelection("Harbor lights glow tonight.", IntPtr.Zero, false, CancellationToken.None); } catch (InvalidOperationException error) { status = error.Message; }
+                        string status; try { status = await target.InsertOverSelection("Harbor lights glow tonight.", slot.Selection("replace-away")!, IntPtr.Zero, false, CancellationToken.None); } catch (InvalidOperationException error) { status = error.Message; }
+                        // The field no longer has the focus: pFlow leaves its selection alone (a select there can pull the caret back).
                         bool collapsed = slot.Collapse("replace-away"); await Task.Delay(300);
+                        bool notepadStillFront = Native.GetForegroundWindow() == noteWindow;
                         Front(page.Window); await Task.Delay(400);
-                        Console.WriteLine($"GUARD replace-away: final={final} status=[{status}] collapsed={collapsed} selected=[{Selected()}]");
-                        Check($"focus moves after the selection: no key in the other window, live words left, selection ended ({status})",
-                            final == LiveFinal.Replace && status.StartsWith("Focus changed", StringComparison.Ordinal) && Read(edit) == noteBefore && Shown() == before && collapsed && Selected().Length == 0);
+                        Console.WriteLine($"GUARD replace-away: final={final} status=[{status}] collapsed={collapsed} notepad still in front={notepadStillFront} selected=[{Selected()}]");
+                        Check($"focus moves after the selection: no key in the other window, live words left, the selection left alone, Notepad keeps the focus ({status})",
+                            final == LiveFinal.Replace && status.StartsWith("Focus changed", StringComparison.Ordinal) && Read(edit) == noteBefore && Shown() == before && !collapsed && notepadStillFront
+                            && Flat(Selected()) == "harbor lights");
+                        // Back in the field: the selection ends there without a key.
+                        Check("back in the field, pFlow's selection ends without a key", slot.Collapse("replace-away") && Selected().Length == 0 && Shown() == before);
+                    }
+                    {
+                        // The person (Shift+Left twice, as a Shift+click or a page script would) changes the selection after
+                        // pFlow selected its words: the finished text must not go over what is now selected.
+                        var (slot, before) = await Begin("replace-script");
+                        var target = InsertionTarget.Capture();
+                        var (final, _) = slot.Finalize("replace-script", "Harbor lights glow tonight.");
+                        await Task.Delay(300);
+                        Native.Send(Native.Key(0x10), Native.Key(0x25, extended: true), Native.Key(0x25, true, true), Native.Key(0x25, extended: true), Native.Key(0x25, true, true), Native.Key(0x10, true));
+                        var seen = new List<string>();
+                        foreach (int wait in new[] { 0, 150, 300, 600 }) { await Task.Delay(wait == 0 ? 0 : 150); seen.Add(Selected().Replace(' ', '_')); }
+                        string movedTo = Selected();
+                        Console.WriteLine($"GUARD replace-script: selection after the keys, read every 150 ms: [{string.Join("] [", seen)}]");
+                        string status; try { status = await target.InsertOverSelection("Harbor lights glow tonight.", slot.Selection("replace-script")!, IntPtr.Zero, false, CancellationToken.None); } catch (InvalidOperationException error) { status = error.Message; }
+                        await Task.Delay(500);
+                        bool collapsed = slot.Collapse("replace-script"); await Task.Delay(300);
+                        Console.WriteLine($"GUARD replace-script: final={final} moved to=[{movedTo.Replace(' ', '_')}] status=[{status}] collapsed={collapsed} shown=[{Flat(Shown())}]");
+                        Check($"the selection moved after pFlow selected its words: nothing typed over it, live words left, the selection ended ({status})",
+                            final == LiveFinal.Replace && Flat(movedTo) != "harbor lights" && status.StartsWith("The field changed", StringComparison.Ordinal)
+                            && Shown() == before && collapsed && Selected().Length == 0);
                     }
                     {
                         // The person types over the selection before pFlow writes: their key stays, pFlow writes nothing.
@@ -464,7 +489,7 @@ internal static partial class Program
                         var (final, _) = slot.Finalize("replace-person", "Harbor lights glow tonight.");
                         await Task.Delay(300);
                         Native.Send(Native.Key(0x51), Native.Key(0x51, true)); await Task.Delay(500);
-                        string status; try { status = await target.InsertOverSelection("Harbor lights glow tonight.", IntPtr.Zero, false, CancellationToken.None); } catch (InvalidOperationException error) { status = error.Message; }
+                        string status; try { status = await target.InsertOverSelection("Harbor lights glow tonight.", slot.Selection("replace-person")!, IntPtr.Zero, false, CancellationToken.None); } catch (InvalidOperationException error) { status = error.Message; }
                         slot.Collapse("replace-person"); await Task.Delay(400);
                         Console.WriteLine($"GUARD replace-person: final={final} status=[{status}] shown=[{Flat(Shown())}]");
                         Check($"the person types over the selection: pFlow writes nothing after it ({status})", final == LiveFinal.Replace && status != "Inserted" && Flat(Shown()) == Flat(before[..^"harbor lights".Length] + "q"));
@@ -477,7 +502,7 @@ internal static partial class Program
                         var secret = Find("Fictional secret");
                         try { secret.SetFocus(); } catch (InvalidOperationException) { Native.Send(Native.Key(0x09), Native.Key(0x09, true)); }
                         await Task.Delay(400);
-                        string status; try { status = await target.InsertOverSelection("Harbor lights glow tonight.", IntPtr.Zero, false, CancellationToken.None); } catch (InvalidOperationException error) { status = error.Message; }
+                        string status; try { status = await target.InsertOverSelection("Harbor lights glow tonight.", slot.Selection("replace-password")!, IntPtr.Zero, false, CancellationToken.None); } catch (InvalidOperationException error) { status = error.Message; }
                         await Task.Delay(400);
                         bool untouched = Title(page.Window).Contains("pw len:0");
                         slot.Collapse("replace-password"); await Task.Delay(300);

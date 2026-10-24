@@ -15,7 +15,7 @@ using Forms = System.Windows.Forms;
 //            box), the clipboard restored after every take; Notepad++ (Scintilla) and a RichEdit box as more apps.
 internal static partial class Program
 {
-    static bool writerOnly;
+    static bool writerOnly, terminalsOnly, historyCopyOnly;
     const string Soffice = @"C:\Program Files\LibreOffice\program\soffice.exe";
     const string LockedPassword = "fictional-secret";
 
@@ -97,13 +97,62 @@ internal static partial class Program
     {
         for (int i = 0; ; i++) {
             try { Forms.Clipboard.SetDataObject(text, true, 1, 50); return; }
-            catch (System.Runtime.InteropServices.ExternalException) when (i < 50) { if (i % 10 == 0) Console.WriteLine("WRITER clipboard busy (write), held by " + ClipboardHolder()); Thread.Sleep(100); }
+            // The VM's SPICE agent (vdagent) can hold the clipboard for seconds while it syncs a copy to the host.
+            catch (System.Runtime.InteropServices.ExternalException) when (i < 300) { if (i % 10 == 0) Console.WriteLine("WRITER clipboard busy (write), held by " + ClipboardHolder()); Thread.Sleep(100); }
         }
     }
 
     static void Kill(Process? process)
     {
         try { if (process is { HasExited: false }) { process.Kill(true); process.WaitForExit(5000); } } catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception) { }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string? className, string? title);
+
+    /// Consoles, Windows Terminal and PowerShell ISE: what UI Automation shows there (what 0.1.27's paths would
+    /// have done), and that pFlow refuses to type or paste (NoTypePlaces) with the clipboard untouched.
+    static async Task Terminals(IntPtr owner)
+    {
+        async Task Try(string what, ProcessStartInfo start, Func<Process, IntPtr> window, Func<Task>? focus = null, bool required = true)
+        {
+            Process? process = null; IntPtr handle = IntPtr.Zero;
+            try {
+                process = Process.Start(start);
+                for (int i = 0; i < 60 && handle == IntPtr.Zero; i++) { await Task.Delay(250); handle = window(process!); }
+                if (handle == IntPtr.Zero) { Console.WriteLine($"WRITER terminal {what}: NOT RUN (no window)"); return; }
+                await Task.Delay(1500); await Front(handle, what); if (focus != null) await focus(); await Task.Delay(500);
+                var e = AutomationElement.FocusedElement; string facts;
+                try {
+                    var c = e.Current; bool text = e.TryGetCurrentPattern(TextPattern.Pattern, out var tp); object? ro = text ? ((TextPattern)tp).DocumentRange.GetAttributeValue(TextPattern.IsReadOnlyAttribute) : null;
+                    facts = $"window={LiveTextField.ClassName(handle)} element={c.ControlType.ProgrammaticName.Replace("ControlType.", "")}/{c.ClassName}/{c.FrameworkId} id=[{c.AutomationId}] focusable={c.IsKeyboardFocusable} textPattern={text} readOnly={ro} value={e.TryGetCurrentPattern(ValuePattern.Pattern, out _)}";
+                } catch (Exception error) { facts = "facts unreadable: " + error.GetType().Name; }
+                uint sequence = Native.GetClipboardSequenceNumber();
+                string status;
+                try { var t = InsertionTarget.Capture(); status = await t.Insert("Fictional words that must not run.\necho fictional", owner, false, CancellationToken.None) + " (kind " + t.Kind + ")"; }
+                catch (InvalidOperationException error) { status = "refused at the start: " + error.Message; }
+                Console.WriteLine($"WRITER terminal {what}: {facts} -> status=[{status}] clipboard touched={Native.GetClipboardSequenceNumber() != sequence}");
+                if (required) Check($"{what}: pFlow refuses to type or paste there, clipboard untouched", status.StartsWith(NoTypePlaces.Terminal, StringComparison.Ordinal) && Native.GetClipboardSequenceNumber() == sequence);
+            } finally {
+                // Only what this check opened: its window is asked to close, and the program it started ends.
+                if (handle != IntPtr.Zero) { PostMessage(handle, 0x0010, IntPtr.Zero, IntPtr.Zero); await Task.Delay(1500); }
+                Kill(process);
+            }
+        }
+        string title = "pflow-fictional-console-" + Guid.NewGuid().ToString("N")[..6];
+        var console = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "conhost.exe")) { UseShellExecute = false };
+        foreach (string a in new[] { "cmd.exe", "/k", "title " + title }) console.ArgumentList.Add(a);
+        IntPtr ByTitle(string part) { IntPtr found = IntPtr.Zero; foreach (var p in Process.GetProcesses()) { try { if (p.MainWindowTitle.Contains(part)) found = p.MainWindowHandle; } catch { } finally { p.Dispose(); } } return found; }
+        await Try("console (conhost)", console, _ => ByTitle(title));
+        string wtTitle = "pflow-fictional-wt-" + Guid.NewGuid().ToString("N")[..6];
+        var wt = new ProcessStartInfo("wt.exe") { UseShellExecute = true };
+        foreach (string a in new[] { "-w", "new", "--title", wtTitle, "--suppressApplicationTitle", "cmd.exe" }) wt.ArgumentList.Add(a);
+        await Try("Windows Terminal", wt, _ => ByTitle(wtTitle));
+        string ise = Path.Combine(Environment.SystemDirectory, "WindowsPowerShell", "v1.0", "powershell_ise.exe");
+        if (File.Exists(ise)) {
+            // ISE's console pane: by UI Automation, where it can be told from the script pane (printed below).
+            await Try("PowerShell ISE", new ProcessStartInfo(ise, "-NoProfile") { UseShellExecute = false }, p => { p.Refresh(); return p.MainWindowHandle; },
+                async () => { Keys(0x11, 0x44); await Task.Delay(500); }, required: false); // Ctrl+D: Go to Console pane
+        }
     }
 
     static async Task Writer()
@@ -117,6 +166,10 @@ internal static partial class Program
         try {
             await rig.Whisper.Prewarm();
             Console.WriteLine($"WRITER engine '{rig.Whisper.EngineDescription}'");
+            // Clipboard history (Win+V): a copy of the harness's own goes in (positive control); pFlow's words must not.
+            string control = "pflow fictional history control " + Guid.NewGuid().ToString("N")[..8];
+            SetClipboard(control); await Task.Delay(1500);
+            Console.WriteLine("WRITER history control: " + control);
             string name = "pflow-fictional-writer-" + Guid.NewGuid().ToString("N")[..8];
             string file = Path.Combine(rig.Directory, name + ".txt");
             const string prefix = "Fictional prefix.";
@@ -138,6 +191,7 @@ internal static partial class Program
                 int copies = r.Final.Length >= 12 ? Occurrences(Flat(saved), Flat(r.Final)) : -1;
                 string clip = ClipboardText();
                 Console.WriteLine($"WRITER {take}: status=[{r.Status}] live writes={r.Writes} field=[{r.FieldWhy}] file exact={same} copies={copies} clipboard restored={clip == marker} final={r.Report.FinalMs:F0}ms");
+                Console.WriteLine("WRITER final text: " + r.Final.Trim());
                 if (same && copies == 1 && r.Status == "Inserted") exact++;
                 Check($"{take}: the finished text is in the document exactly once, checked ({r.Status})", r.Status == "Inserted" && same && copies == 1);
                 Check($"{take}: no live words typed into Writer", r.Writes == 0 && !r.Typed);
@@ -205,11 +259,34 @@ internal static partial class Program
                     nppExpected += " " + r.Final;
                     bool same = Flat(saved) == Flat(nppExpected); string clip = ClipboardText();
                     Console.WriteLine($"WRITER {take}: status=[{r.Status}] file exact={same} clipboard restored={clip == marker}");
+                    Console.WriteLine("WRITER final text: " + r.Final.Trim());
                     Check($"{take}: the finished text is in the file exactly once ({r.Status})", (r.Status == "Inserted" || r.Status.StartsWith("Pasted into the app", StringComparison.Ordinal)) && same);
                     Check($"{take}: the clipboard holds what it held before", clip == marker);
                 }
+                // Two carets (Scintilla's multiple selection): a paste would land at each one and could not be checked,
+                // so the take is refused at the start and nothing goes in.
+                {
+                    IntPtr sci = FindWindowEx(nppWindow, IntPtr.Zero, "Scintilla", null);
+                    await Front(nppWindow, "npp two carets");
+                    int length = (int)SendMessage(sci, 2006, IntPtr.Zero, IntPtr.Zero); // SCI_GETLENGTH
+                    SendMessage(sci, 2563, (IntPtr)1, IntPtr.Zero);                     // SCI_SETMULTIPLESELECTION
+                    SendMessage(sci, 2572, (IntPtr)length, (IntPtr)length);             // SCI_SETSELECTION caret, anchor
+                    SendMessage(sci, 2573, (IntPtr)9, (IntPtr)9);                       // SCI_ADDSELECTION
+                    int carets = (int)SendMessage(sci, 2570, IntPtr.Zero, IntPtr.Zero); // SCI_GETSELECTIONS
+                    SetClipboard(marker);
+                    // The document was just saved: unmodified (SCI_GETMODIFY 0) and its length are the read-back.
+                    bool cleanBefore = SendMessage(sci, 2159, IntPtr.Zero, IntPtr.Zero) == IntPtr.Zero;
+                    var r = await TypeTake("npp-two-carets", "short-3.wav", rig.Whisper, rig.Store, rig.Text, rig.Preview, rig.Capsule, rig.Owner.Handle, rig.Directory, "notepad++", LiveTextModes.Off);
+                    await Task.Delay(500);
+                    bool unchanged = cleanBefore && SendMessage(sci, 2159, IntPtr.Zero, IntPtr.Zero) == IntPtr.Zero && (int)SendMessage(sci, 2006, IntPtr.Zero, IntPtr.Zero) == length;
+                    string clip = ClipboardText();
+                    Console.WriteLine($"WRITER npp two carets: carets={carets} status=[{r.Status}] document unchanged={unchanged} (clean before={cleanBefore}, length {length} -> {(int)SendMessage(sci, 2006, IntPtr.Zero, IntPtr.Zero)}) clipboard restored={clip == marker}");
+                    Check($"two carets in Notepad++: refused, nothing pasted, the Copy card offers the words ({r.Status})", carets == 2 && unchanged && clip == marker
+                        && !r.Status.StartsWith("Inserted", StringComparison.Ordinal) && InsertionPrompt.Needed(r.Status, false));
+                }
                 Kill(nppProcess);
             }
+            await Terminals(rig.Owner.Handle);
             QuitHost(hostDirectory);
 
             // A locked fictional file: Writer asks for its password. The take is refused; the right password then opens it.

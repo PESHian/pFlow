@@ -384,7 +384,7 @@ public sealed class LiveInlineSession
                 Recorder.Event("typing.final", new DiagField("result", "left"), new DiagField("stop", "selection not confirmed"), new DiagField("mode", "replace own words"));
                 return (LiveFinal.Left, LiveStop.Uncertain);
             }
-            selected = true;
+            selected = true; Selection = new OwnedWords(span.Start, ownership.Owned.Trim());
             Recorder.Event("typing.final", new DiagField("result", "Replace"), new DiagField("mode", "replace own words"), new DiagField("selected", span.Length), new DiagField("chars", text.Length));
             return (LiveFinal.Replace, null);
         }
@@ -400,6 +400,8 @@ public sealed class LiveInlineSession
     }
 
     bool selected;
+    /// After a Replace: pFlow's own words as it selected them, for the insert to check the selection against.
+    public OwnedWords? Selection { get; private set; }
     /// After a Replace that did not go in: pFlow's selection is ended without a key.
     public bool Collapse() => !selected || field.Collapse();
 
@@ -473,6 +475,8 @@ public sealed class LiveInlineSlot
     LiveInlineSession? finished;
     /// Ends the selection a Replace made, when the finished text did not go over it.
     public bool Collapse(string session) => finished is not { } live || live.Id != session || live.Collapse();
+    /// pFlow's own words a Replace selected for this take, or null.
+    public OwnedWords? Selection(string session) => finished is { } live && live.Id == session ? live.Selection : null;
 
     public (LiveCancel Result, LiveStop? Stop) Cancel(string session)
     {

@@ -65,7 +65,7 @@ internal static partial class Program
         finalPriorityOnly = args.Contains("--final-priority"); touchScrollOnly = args.Contains("--touch-scroll"); touchCapsuleOnly = args.Contains("--touch-capsule"); chromiumOnly = args.Contains("--chromium-fields"); chromiumColdOnly = args.Contains("--chromium-cold");
         SpeedArguments(args);
         scrollFramesOnly = args.Contains("--scroll-frames"); ownerStateOnly = args.Contains("--owner-state");
-        diagTakesOnly = args.Contains("--diag-takes"); writerOnly = args.Contains("--writer"); chromeReplaceOnly = args.Contains("--chrome-replace"); reportButtonOnly = args.Contains("--report-button"); chromeGuardOnly = args.Contains("--chrome-live-guard"); chromeLiveOnly = args.Contains("--chrome-live"); slowLiveOnly = args.Contains("--slow-live");
+        diagTakesOnly = args.Contains("--diag-takes"); writerOnly = args.Contains("--writer"); terminalsOnly = args.Contains("--terminals"); historyCopyOnly = args.Contains("--history-copy"); chromeReplaceOnly = args.Contains("--chrome-replace"); reportButtonOnly = args.Contains("--report-button"); chromeGuardOnly = args.Contains("--chrome-live-guard"); chromeLiveOnly = args.Contains("--chrome-live"); slowLiveOnly = args.Contains("--slow-live");
         liveTextOnly = args.Contains("--live-text-only"); liveFocusOnly = args.Contains("--live-focus-only"); inlineOnly = args.Contains("--inline-only"); inlineElevatedOnly = args.Contains("--inline-elevated");
         workerSafetyOnly = args.Contains("--worker-safety-only"); extendedLatencyOnly = args.Contains("--extended-latency-only"); insertionLatencyOnly = args.Contains("--insertion-latency-only"); warmLatencyOnly = args.Contains("--warm-latency-only"); speechOnly = args.Contains("--speech-only");
         if (writerOnly || chromeReplaceOnly || chromeGuardOnly || reportButtonOnly || diagTakesOnly || chromeLiveOnly || slowLiveOnly || scrollFramesOnly || ownerStateOnly || statisticsOnly || templateCatalogOnly || appearanceOnly || appearanceRenderOnly || appearanceColorsOnly || fallbackOnly || settingsOnly || capsuleOnly || compactOnly || compactFixOnly || waveformsOnly || payloadOnly || liveTextOnly || liveFocusOnly || inlineOnly || inlineElevatedOnly || speedOnly || speedInsertOnly || werOnly || finalPriorityOnly || touchScrollOnly || touchCapsuleOnly || chromiumOnly || chromiumColdOnly) _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
@@ -172,6 +172,16 @@ internal static partial class Program
         if (scrollFramesOnly) { await ScrollFramesRun(); return; }
         if (ownerStateOnly) { await OwnerState(); return; }
         if (diagTakesOnly) { await DiagTakes(); return; }
+        if (terminalsOnly) { await Terminals(IntPtr.Zero); return; }
+        if (historyCopyOnly) {
+            // The Copy card's copy stays on the clipboard: clipboard history (Win+V) must still leave it out. A copy of
+            // the harness's own right after it is the positive control (the probe looks for both).
+            string kept = "pflow fictional kept copy " + Guid.NewGuid().ToString("N")[..8], control = "pflow fictional history control " + Guid.NewGuid().ToString("N")[..8];
+            ClipboardLease.KeepCopy(IntPtr.Zero, kept); await Task.Delay(3000);
+            System.Windows.Forms.Clipboard.SetDataObject(control, true, 100, 100); await Task.Delay(3000);
+            Console.WriteLine("HISTORY kept copy: " + kept); Console.WriteLine("HISTORY control: " + control);
+            return;
+        }
         if (writerOnly) { await Writer(); return; }
         if (chromeReplaceOnly) { await ChromeReplace(); return; }
         if (reportButtonOnly) { await ReportButton(); return; }

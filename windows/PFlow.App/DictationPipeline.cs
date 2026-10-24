@@ -105,7 +105,8 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
             else if (final == LiveFinal.Left) result = LiveInlineText.LiveLeft;
             else if (final == LiveFinal.Replace) {
                 // pFlow's own live words are selected: the finished text goes over them through the normal checked path.
-                try { result = await Measure("insertionMs", () => originalTarget.InsertOverSelection(text, owner, preferences.CopyDictationToClipboard, cancel, rtf)); }
+                // Without pFlow's own words to hold the selection to, nothing goes over it.
+                try { result = typing.Selection?.Invoke() is { } own ? await Measure("insertionMs", () => originalTarget.InsertOverSelection(text, own, owner, preferences.CopyDictationToClipboard, cancel, rtf)) : "The field changed. Your text is in History."; }
                 catch (Exception error) when (error is not OperationCanceledException) { result = error.Message; InsertionLog.Record("replace failed: " + InsertionLog.Reason(error)); }
                 if (InsertionPrompt.Needed(result, false)) {
                     // Nothing went over the live words: the selection ends without a key, the words stay, the card offers the text.
@@ -134,4 +135,4 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
 }
 
 /// One take's live typing, as the pipeline sees it at the end of the take.
-internal sealed record LiveTyping(Func<string, (LiveFinal Result, LiveStop? Stop)> Finalize, Func<bool> Typed, Func<(LiveCancel Result, LiveStop? Stop)> Cancel, Func<bool>? Collapse = null);
+internal sealed record LiveTyping(Func<string, (LiveFinal Result, LiveStop? Stop)> Finalize, Func<bool> Typed, Func<(LiveCancel Result, LiveStop? Stop)> Cancel, Func<bool>? Collapse = null, Func<OwnedWords?>? Selection = null);

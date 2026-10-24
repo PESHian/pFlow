@@ -6,7 +6,7 @@ if (args.Contains("--updates-network-only")) { await UpdateChecks.Network(); ret
 if (args.Contains("--capture-only")) { KeyCaptureChecks.Run(); return; }
 if (args.Contains("--learn-keys-only")) { HotkeyChecks.Run(); KeyCaptureChecks.Run(); return; }
 if (args.Contains("--live-text-only")) { await LiveTextChecks.Run(); LiveInlineChecks.Run(); SpeechChecks.Run(); InstalledChecks.Run(); return; }
-if (args.Contains("--installed-only")) { InstalledChecks.Run(); return; }
+if (args.Contains("--installed-only")) { InstalledChecks.Run(); InsertionRuleChecks.Run(); return; }
 if (args.Contains("--diagnostics-only")) { DiagnosticChecks.Run(); ScrollGlideChecks.Run(); return; }
 UpdateChecks.Run();
 if (!args.Contains("--hotkeys-only")) await UpdateChecks.Network();
@@ -20,6 +20,7 @@ SpeechChecks.Run();
 ScrollGlideChecks.Run();
 DiagnosticChecks.Run();
 InstalledChecks.Run();
+InsertionRuleChecks.Run();
 int passed = 0;
 void Check(string name, bool condition) { if (!condition) throw new Exception("FAIL: " + name); passed++; Console.WriteLine("PASS: " + name); }
 string Words(string value) => string.Join(" ", Regex.Split(value.Trim(), @"\s+"));

@@ -75,6 +75,7 @@ internal sealed class ClipboardLease : IDisposable
             incoming.Add((7, Allocate(CodePageText(text, 1))));
             incoming.Add((16, Allocate(BitConverter.GetBytes(Native.GetSystemDefaultLCID()))));
             if (rtf != null) incoming.Add((Native.RegisterClipboardFormat("Rich Text Format"), Allocate(Encoding.ASCII.GetBytes(rtf + "\0"))));
+            foreach (var (name, data) in Private) incoming.Add((Native.RegisterClipboardFormat(name), Allocate(data)));
             Open();
             try {
                 if (preserve && Native.GetClipboardSequenceNumber() != sourceSequence) throw new InvalidOperationException("The clipboard changed. Your text is in History.");
@@ -88,6 +89,15 @@ internal sealed class ClipboardLease : IDisposable
             } finally { installedSequence = Native.GetClipboardSequenceNumber(); Native.CloseClipboard(); }
         } finally { foreach (var item in incoming) Free(item.Format, item.Handle); }
     }
+    /// Every pFlow write (the words it pastes, the card's Copy, "Copy dictation to clipboard") is private:
+    /// Windows' clipboard history (Win+V) and cloud clipboard leave it out. The person's own clipboard,
+    /// put back by Restore, goes back exactly as it was, without these. Windows refuses an empty clipboard
+    /// item, so the first (whose presence is what counts: "any data") carries a DWORD 0 like the others.
+    internal static readonly (string Name, byte[] Data)[] Private = [
+        ("ExcludeClipboardContentFromMonitorProcessing", BitConverter.GetBytes(0)),
+        ("CanIncludeInClipboardHistory", BitConverter.GetBytes(0)),
+        ("CanUploadToCloudClipboard", BitConverter.GetBytes(0)),
+    ];
     static byte[] CodePageText(string text, uint codePage)
     {
         int count = Native.WideCharToMultiByte(codePage, 0, text, -1, null, 0, IntPtr.Zero, IntPtr.Zero);
@@ -123,15 +133,17 @@ internal sealed class ClipboardLease : IDisposable
         using var lease = new ClipboardLease(owner, false);
         lease.Put(text); lease.Keep();
     }
+    /// Ctrl+V, right after the caller's last checks: nothing here waits. The clipboard is not opened (another
+    /// program holding it, such as clipboard history right after Put, would make this wait after the focus
+    /// checks); the sequence number, readable without the lock, says the clipboard still holds pFlow's words.
     public void DispatchPaste()
     {
-        Open();
-        try {
-            if (!installed || Native.GetClipboardSequenceNumber() != installedSequence)
-                throw new InvalidOperationException("The clipboard changed before insertion. Your text is in History.");
-            Native.Send(Native.Key(0x11), Native.Key(0x56), Native.Key(0x56, true), Native.Key(0x11, true));
-        } finally { Native.CloseClipboard(); }
+        if (!installed || Native.GetClipboardSequenceNumber() != installedSequence)
+            throw new InvalidOperationException("The clipboard changed before insertion. Your text is in History.");
+        SendKeys([Native.Key(0x11), Native.Key(0x56), Native.Key(0x56, true), Native.Key(0x11, true)]);
     }
+    /// SendInput; the native checks record the keys instead (their private desktop must not send Ctrl+V anywhere).
+    internal static Action<Native.Input[]> SendKeys { get; set; } = inputs => Native.Send(inputs);
     static IntPtr Clone(uint format, IntPtr handle)
     {
         IntPtr result;

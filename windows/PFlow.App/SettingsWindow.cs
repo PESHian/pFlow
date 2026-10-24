@@ -301,7 +301,12 @@ internal sealed partial class SettingsWindow : Window
         var empty = Text("No dictations yet. Your takes appear here."); empty.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); empty.Margin = new Thickness(10, 8, 10, 8); empty.VerticalAlignment = VerticalAlignment.Top;
         var text = Pannable(new TextBox { AcceptsReturn = true, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MinHeight = 120, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }); System.Windows.Automation.AutomationProperties.SetName(text, "Dictation text");
         var result = Text(""); result.FontSize = 12; result.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); result.Margin = new Thickness(0, 8, 0, 8);
-        var copy = Button("Copy", () => { if (list.SelectedItem is ListBoxItem { Tag: Transcript t }) Clipboard.SetText(t.Text); }); copy.Margin = new Thickness(0, 0, 10, 0); copy.IsEnabled = false;
+        // Through the one clipboard write (ClipboardLease): private to clipboard history and the cloud clipboard.
+        var copy = Button("Copy", () => {
+            if (list.SelectedItem is not ListBoxItem { Tag: Transcript t }) return;
+            try { ClipboardLease.KeepCopy(new System.Windows.Interop.WindowInteropHelper(this).Handle, t.Text); }
+            catch (Exception error) when (error is InvalidOperationException or OutOfMemoryException) { InsertionLog.Record("history copy failed: " + error.Message); }
+        }); copy.Margin = new Thickness(0, 0, 10, 0); copy.IsEnabled = false;
         var delete = Button("Delete", () => { }); delete.Margin = new Thickness(0); delete.IsEnabled = false;
         void Refresh() {
             list.Items.Clear();

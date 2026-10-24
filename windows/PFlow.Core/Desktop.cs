@@ -28,6 +28,7 @@ public static class InsertionPrompt
         ("Clipboard restore was blocked.", "The words went in, but your old clipboard could not be put back."),
         ("Kept in History. Recognition stopped before it finished, so nothing was typed.", "Recognition stopped before it finished, so nothing was typed."),
         ("Click in the app where the words should go", "The cursor was in pFlow's own window. Click where the words should go, then dictate."),
+        ("The clipboard is busy.", "Another app was holding the clipboard, so pFlow did not paste."),
     ];
 
     /// Outcomes where the words were sent into the app: inserted and checked,

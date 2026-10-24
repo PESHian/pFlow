@@ -372,7 +372,7 @@ internal static partial class Program
                 capsule.Set(Phase.Processing); preview.Finishing();
                 string audio = Path.Combine(directory, take + ".wav"); File.Copy(Path.Combine(root, "latency-long.wav"), audio, true);
                 var result = await pipeline.Run(audio, report.AudioMs / 1000, target, directory, owner.Handle, (phase, detail) => capsule.Set(phase, detail), CancellationToken.None, report.LiveWords,
-                    new LiveTyping(text => slot.Finalize(take, text), () => slot.Typed(take), () => slot.Cancel(take)));
+                    new LiveTyping(text => slot.Finalize(take, text), () => slot.Typed(take), () => slot.Cancel(take), () => slot.Collapse(take), () => slot.Selection(take)));
                 preview.Clear();
                 string after = Normalize(Read(field)), final = new StateStore(directory).History[0].Text;
                 string expected = Normalize(before) + Normalize(InsertionSpacing.AtCaret(final, before, before.Length, 0).Apply(final));

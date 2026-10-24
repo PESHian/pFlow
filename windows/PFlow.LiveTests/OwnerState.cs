@@ -59,7 +59,7 @@ internal static partial class Program
                 string audio = Path.Combine(directory, take + ".wav"); File.Copy(Path.Combine(root, "latency-long.wav"), audio, true);
                 var final = Stopwatch.StartNew();
                 var result = await pipeline.Run(audio, report.AudioMs / 1000, target, directory, owner.Handle, (_, _) => { }, CancellationToken.None, report.LiveWords,
-                    new LiveTyping(text => slot.Finalize(take, text), () => slot.Typed(take), () => slot.Cancel(take)));
+                    new LiveTyping(text => slot.Finalize(take, text), () => slot.Typed(take), () => slot.Cancel(take), () => slot.Collapse(take), () => slot.Selection(take)));
                 busy = false;
                 Console.WriteLine($"LIVE OWNER {take}: liveWrites={writes} firstWrite={firstWrite:F0}ms updates={report.Updates.Count} firstWords={report.FirstUpdateMs:F0}ms windows={report.Windows} failedAt={report.FailedAtMs:F0} tooSlowAt={report.TooSlowAtMs:F0} stops={string.Join(",", stops)} final={final.ElapsedMilliseconds}ms status={result.Status}");
                 Check($"{take} live words reached Notepad before the narration ended ({writes} writes, first at {firstWrite:F0} ms)", writes >= 2 && firstWrite > 0 && firstWrite < report.AudioEndMs && stops.Count == 0 && report.FailedAtMs < 0 && report.TooSlowAtMs < 0);
