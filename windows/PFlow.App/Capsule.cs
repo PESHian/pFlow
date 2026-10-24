@@ -22,17 +22,23 @@ internal sealed class Capsule : Window
     public event Action? OpenHistory;
     public Func<double>? AudioLevel;
     public IntPtr Handle => new WindowInteropHelper(this).Handle;
-    internal const double CapsuleWidth = 96, CapsuleHeight = 26, OutlineOpacity = .65;
+    /// Superwhisper's recording pill as measured on Windows (W028): 62 x 34 DIP outside its 1 px outline, fully round.
+    internal const double CapsuleWidth = 62, CapsuleHeight = 34, OutlineOpacity = .65;
+    /// Superwhisper's pill material: no blur or system backdrop (its window has none), a near-black fill at 86%
+    /// (measured over white and over dark grey: #121212, alpha 220), so what is behind shows through a little.
+    internal static readonly Color Fill = Color.FromArgb(220, 0x12, 0x12, 0x12);
+    /// The waveform's room inside the outline: 30 x 16 DIP, about Superwhisper's (22 x 16) with a little more width.
+    internal static readonly Thickness WavePadding = new(15, 8, 15, 8);
     internal Border Shell => shell;
     internal WaveView Wave => wave;
     public Capsule(StateStore store)
     {
         this.store = store; Width = CapsuleWidth; Height = CapsuleHeight; WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.NoResize;
         AllowsTransparency = true; Background = Brushes.Transparent; ShowInTaskbar = false; ShowActivated = false; Topmost = true;
-        shell = new Border { CornerRadius = new CornerRadius(CapsuleHeight / 2), BorderThickness = new Thickness(1), Padding = new Thickness(0), Background = Brushes.Black };
+        shell = new Border { CornerRadius = new CornerRadius(CapsuleHeight / 2), BorderThickness = new Thickness(1), Padding = new Thickness(0), Background = new SolidColorBrush(Fill) };
         wave = new WaveView { IsHitTestVisible = false };
         var template = new ControlTemplate(typeof(Button));
-        var surface = new FrameworkElementFactory(typeof(Border)); surface.SetValue(Border.BackgroundProperty, Brushes.Transparent); surface.SetValue(Border.PaddingProperty, new Thickness(8, 4, 8, 4));
+        var surface = new FrameworkElementFactory(typeof(Border)); surface.SetValue(Border.BackgroundProperty, Brushes.Transparent); surface.SetValue(Border.PaddingProperty, new Thickness(WavePadding.Left, WavePadding.Top, WavePadding.Right, WavePadding.Bottom));
         surface.AppendChild(new FrameworkElementFactory(typeof(ContentPresenter))); template.VisualTree = surface;
         record = new Button { Content = wave, Focusable = false, IsTabStop = false, Template = template, Cursor = Cursors.Hand, HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
         record.Click += (_, _) => { if (canToggle && !dragging) ToggleRecording?.Invoke(); };
@@ -99,12 +105,12 @@ internal sealed class Capsule : Window
         long now = Stopwatch.GetTimestamp(); double seconds = Stopwatch.GetElapsedTime(lastFrame, now).TotalSeconds; lastFrame = now;
         wave.Advance(AudioLevel?.Invoke() ?? 0, store.Preferences.Waveform, seconds);
     }
-    /// Solid black in every theme (no acrylic, no blur), a 1 px outline in the accent at 65%, the
-    /// waveform in the palette's ink, both lifted when too dark for black (PeshTheme.OnBlack);
-    /// the same in every phase. Matches the Mac capsule (96 x 26 pt).
+    /// Superwhisper's glass in every theme (a near-black fill at 86%, no blur), a 1 px outline in the accent at 65%
+    /// (the owner's rule: the accent, never white), the waveform in the palette's ink, both lifted when too dark
+    /// for black (PeshTheme.OnBlack); the same in every phase.
     public void ApplyTheme()
     {
-        shell.Background = Brushes.Black;
+        shell.Background = new SolidColorBrush(Fill);
         shell.BorderBrush = new SolidColorBrush(PeshTheme.OnBlack((Color)ColorConverter.ConvertFromString("#" + store.Preferences.Accent))) { Opacity = OutlineOpacity };
         wave.Color = PeshTheme.OnBlack(PeshTheme.Gradient(store.Preferences));
     }
@@ -145,20 +151,31 @@ internal sealed class WaveView : PeshDrawing
             double length = ActualWidth * .32, x = (ActualWidth - length) * (1 - Math.Cos(sweep)) / 2, y = ActualHeight / 2;
             dc.DrawLine(new Pen(ink, 2) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round }, new Point(x, y), new Point(x + length, y)); return;
         }
-        var levels = Motion.Levels(); double spacing = ActualWidth / levels.Length, mid = ActualHeight / 2, peak = Math.Max(.25, levels.Max());
-        double Amplitude(double value) => Math.Max(.6, Math.Pow(Math.Clamp(value / peak, 0, 1), 1.6) * .9 * mid);
+        var levels = Motion.Levels(); double mid = ActualHeight / 2, peak = Math.Max(.25, levels.Max());
+        // 0..1 of the take's own loudest moment, eased so quiet sounds still show and loud ones do not all max out.
+        double Height(double value) => Math.Pow(Math.Clamp(value / peak, 0, 1), 1.4);
         if (style == "lines") {
-            var pen = new Pen(ink, Math.Min(2, spacing * .65)) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
-            for (int i = 0; i < levels.Length; i++) { double x = (i + .5) * spacing, h = Amplitude(levels[i]); dc.DrawLine(pen, new Point(x, mid - h), new Point(x, mid + h)); } return;
+            // One thin line through the latest levels, swinging up and down around the middle (an oscilloscope trace).
+            int count = Math.Clamp((int)(ActualWidth / 2), 2, levels.Length); double step = ActualWidth / (count - 1), swing = mid - 1;
+            var trace = new StreamGeometry();
+            using (var path = trace.Open()) {
+                for (int i = 0; i < count; i++) {
+                    var point = new Point(i * step, mid + (i % 2 == 0 ? -1 : 1) * Height(levels[levels.Length - count + i]) * swing);
+                    if (i == 0) path.BeginFigure(point, false, false); else path.LineTo(point, true, true);
+                }
+            }
+            trace.Freeze();
+            dc.DrawGeometry(null, new Pen(ink, 1.25) { LineJoin = PenLineJoin.Round, StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round }, trace); return;
         }
-        var points = levels.Select((value, i) => new Point((i + .5) * spacing, mid - Amplitude(value))).ToArray();
-        var shape = new StreamGeometry();
-        using (var path = shape.Open()) {
-            path.BeginFigure(new Point(0, mid), true, true);
-            for (int i = 0; i < points.Length; i++) { var next = i + 1 < points.Length ? points[i + 1] : new Point(ActualWidth, mid); path.QuadraticBezierTo(points[i], new Point((points[i].X + next.X) / 2, (points[i].Y + next.Y) / 2), true, false); }
-            path.LineTo(new Point(ActualWidth, mid), true, false);
-            for (int i = points.Length - 1; i >= 0; i--) { var point = new Point(points[i].X, 2 * mid - points[i].Y); var next = i > 0 ? new Point(points[i - 1].X, 2 * mid - points[i - 1].Y) : new Point(0, mid); path.QuadraticBezierTo(point, new Point((point.X + next.X) / 2, (point.Y + next.Y) / 2), true, false); }
+        // The default: Superwhisper's bars, 2 DIP wide with 2 DIP gaps, as many as fit up to seven (Superwhisper shows six), each as tall as
+        // the voice was at that moment, in the theme's gradient. Silence is a row of 2 x 2 dots.
+        int bars = Math.Clamp((int)((ActualWidth + Gap) / (BarWidth + Gap)), 1, Math.Min(MostBars, levels.Length));
+        double left = Math.Round((ActualWidth - (bars * (BarWidth + Gap) - Gap)) / 2);
+        for (int i = 0; i < bars; i++) {
+            double h = Math.Round(Math.Max(BarWidth, Height(levels[levels.Length - bars + i]) * ActualHeight) / 2) * 2;
+            dc.DrawRoundedRectangle(ink, null, new Rect(left + i * (BarWidth + Gap), mid - h / 2, BarWidth, h), 1, 1);
         }
-        dc.DrawGeometry(ink, new Pen(new SolidColorBrush(System.Windows.Media.Color.FromArgb(128, 0, 0, 0)), .75), shape);
     }
+    internal const double BarWidth = 2, Gap = 2;
+    internal const int MostBars = 7;
 }
