@@ -494,6 +494,38 @@ internal static partial class Program
                         Console.WriteLine($"GUARD replace-person: final={final} status=[{status}] shown=[{Flat(Shown())}]");
                         Check($"the person types over the selection: pFlow writes nothing after it ({status})", final == LiveFinal.Replace && status != "Inserted" && Flat(Shown()) == Flat(before[..^"harbor lights".Length] + "q"));
                     }
+                    // Fix round 2: the person clicks, or Shift+clicks, in the field right after pFlow selected its words (at once,
+                    // and 50 ms later). Chrome's UI Automation can still report pFlow's selection then, so only the person-input
+                    // watch can see it. The harness's own input is marked as the person's (InputWatch.CountedTag).
+                    // -1: at the worst moment, after the last read of the field and before the last checks (InsertionTarget.BeforeReady),
+                    // when Chrome has not even drawn the click yet, so no read of the selection could show it.
+                    foreach (var (take, shift, after) in new[] { ("replace-click", false, 0), ("replace-shift-click", true, 50), ("replace-click-last", false, -1), ("replace-shift-click-last", true, -1) }) {
+                        var (slot, before) = await Begin(take);
+                        var target = InsertionTarget.Capture();
+                        var box = Find("Fictional body").Current.BoundingRectangle;
+                        GetPhysicalCursorPos(out var previous); SetPhysicalCursorPos((int)(box.Left + 6), (int)(box.Top + box.Height / 2));
+                        InputWatch.CountedTag = PersonTag;
+                        string status, readBack = "?"; long clickMs, answerMs; LiveFinal final;
+                        try {
+                            (final, _) = slot.Finalize(take, "Harbor lights glow tonight.");
+                            var clock = Stopwatch.StartNew(); long at = -1;
+                            Native.Input[] person = shift ? [PersonKey(0x10), PersonMouse(2), PersonMouse(4), PersonKey(0x10, true)] : [PersonMouse(2), PersonMouse(4)];
+                            if (after >= 0) {
+                                if (after > 0) Thread.Sleep(after);
+                                Native.Send(person); at = clock.ElapsedMilliseconds;
+                                readBack = Selected();
+                            } else InsertionTarget.BeforeReady = () => { if (at < 0) { Native.Send(person); at = clock.ElapsedMilliseconds; } };
+                            clickMs = after >= 0 ? at : 0;
+                            try { status = await target.InsertOverSelection("Harbor lights glow tonight.", slot.Selection(take)!, IntPtr.Zero, false, CancellationToken.None); } catch (InvalidOperationException error) { status = error.Message; }
+                            answerMs = clock.ElapsedMilliseconds; if (after < 0) clickMs = at;
+                        } finally { InputWatch.CountedTag = 0; InsertionTarget.BeforeReady = null; SetPhysicalCursorPos(previous.X, previous.Y); }
+                        await Task.Delay(600);
+                        string settled = Selected();
+                        bool collapsed = slot.Collapse(take); await Task.Delay(300);
+                        Console.WriteLine($"GUARD {take}: final={final} person at +{clickMs} ms, UI Automation selection then=[{readBack.Replace(' ', '_')}] 600 ms later=[{settled.Replace(' ', '_')}], insert answered at +{answerMs} ms status=[{status}] collapsed={collapsed} shown=[{Flat(Shown())}]");
+                        Check($"{take}: the person's {(shift ? "Shift+click" : "click")} {(after >= 0 ? after + " ms after pFlow's selection" : "right before pFlow's last checks")}: nothing typed over it, live words left ({status})",
+                            final == LiveFinal.Replace && clickMs is >= 0 and <= 100 && status.StartsWith("The field changed", StringComparison.Ordinal) && Shown() == before);
+                    }
                     {
                         // A password box on the page takes focus between the selection and the write.
                         var (slot, before) = await Begin("replace-password");
@@ -577,6 +609,10 @@ internal static partial class Program
             }
         } finally { LiveKeyField.Enabled = wasEnabled; await CloseOurNotepadTab(notepad, noteName); try { Directory.Delete(directory, true); } catch (IOException) { } }
     }
+    /// The live checks' stand-in for the person: input marked with this tag counts as the person's in InputWatch.
+    const nuint PersonTag = 0x50464C57;
+    static Native.Input PersonKey(ushort key, bool up = false) => new() { Type = 1, Data = new() { Keyboard = new() { Vk = key, Flags = up ? Native.KEYEVENTF_KEYUP : 0, Extra = PersonTag } } };
+    static Native.Input PersonMouse(uint flags) => new() { Type = 0, Data = new() { Mouse = new() { Flags = flags, Extra = PersonTag } } };
     /// `part` is empty or the first whole words of `spoken` (never half a word).
     static bool WholeWords(string part, string spoken) => part.Length == 0 || spoken.StartsWith(part, StringComparison.Ordinal) && (part.Length == spoken.Length || spoken[part.Length] == ' ');
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr LoadKeyboardLayout(string id, uint flags);

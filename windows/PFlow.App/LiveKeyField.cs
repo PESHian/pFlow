@@ -104,6 +104,8 @@ internal sealed class LiveKeyField : ILiveTextField
     public bool Select(TextSpan range)
     {
         if (range.Length == 0) return Until(() => Selection() == range, 300);
+        // From here to the first key of the finished text, any key or click of the person's refuses the replace.
+        watch?.Stop(); watch = InputWatch.Start();
         string? why = aborted ? "typing already stopped" : Unsafe();
         if (why != null) { Diagnostics.Recorder.Event("typing.guard", new DiagField("stopped", why), new DiagField("stage", "select own words")); return false; }
         try {
@@ -124,8 +126,19 @@ internal sealed class LiveKeyField : ILiveTextField
     /// Ends any selection in the field at its end, through UI Automation (no keys), only while the field still
     /// has the focus in the window in front: a selection in a field the person left is left alone (in Chrome a
     /// UI Automation select there can pull the caret back). False when nothing was done.
+    /// The person's key or click since Select (InputWatch); asked once, right before the first key, and the watch ends.
+    public bool PersonActedSinceSelect()
+    {
+        var asked = watch; watch = null;
+        bool acted = asked?.End() ?? true;
+        if (acted) Diagnostics.Recorder.Event("typing.guard", new DiagField("stopped", "the person pressed a key or a mouse button after pFlow selected its words"), new DiagField("stage", "replace own words"));
+        return acted;
+    }
+    InputWatch? watch;
+
     public bool Collapse()
     {
+        watch?.Stop(); watch = null;
         if (Native.GetForegroundWindow() != window || !SameElement()) { Diagnostics.Recorder.Event("typing.collapse", new DiagField("result", "left alone: the field no longer has the focus")); return false; }
         try {
             var selections = ((TextPattern)element.GetCurrentPattern(TextPattern.Pattern)).GetSelection();
@@ -161,7 +174,7 @@ internal sealed class LiveKeyField : ILiveTextField
         if (!ReadyToWrite) return "a key is held";
         if (KeyDown()) return "the person is typing";
         if (Composing(window, control)) return "an input method is active";
-        if (InputPanelOpen()) return "the emoji or clipboard panel is open";
+        if (InputComposition.PanelOpen()) return "the emoji or clipboard panel is open";
         return null;
     }
 
@@ -184,27 +197,6 @@ internal sealed class LiveKeyField : ILiveTextField
             if (Native.GetAsyncKeyState(key) < 0) return true;
         return false;
     }
-
-    /// The emoji panel (Win+.) or clipboard history (Win+V): a visible, uncloaked window of Windows'
-    /// text input host. Not verified on the test VM (injected keys do not open the panel there).
-    static bool InputPanelOpen()
-    {
-        bool open = false; var names = new Dictionary<uint, string>();
-        EnumWindows((window, _) => {
-            if (!IsWindowVisible(window)) return true;
-            Native.GetWindowThreadProcessId(window, out uint process);
-            if (!names.TryGetValue(process, out var name)) { try { using var p = Process.GetProcessById((int)process); name = p.ProcessName; } catch (ArgumentException) { name = ""; } names[process] = name; }
-            if (name != "TextInputHost") return true;
-            if (DwmGetWindowAttribute(window, 14, out int cloaked, 4) == 0 && cloaked != 0) return true;
-            if (Native.GetWindowRect(window, out var bounds) && bounds.Right > bounds.Left && bounds.Bottom > bounds.Top) { open = true; return false; }
-            return true;
-        }, IntPtr.Zero);
-        return open;
-    }
-    delegate bool EnumProc(IntPtr window, IntPtr data);
-    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc callback, IntPtr data);
-    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr window);
-    [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out int value, int size);
 
     /// The window's thread types in a language whose input methods compose text (one rule:
     /// InputLanguages.Composes), or its input method reports itself open (WM_IME_CONTROL

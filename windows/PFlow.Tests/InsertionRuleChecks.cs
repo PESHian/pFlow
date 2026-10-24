@@ -21,6 +21,20 @@ internal static class InsertionRuleChecks
         Check("replace: the same place with other text (a script rewrote it) is refused", own.Mismatch("Fictional prefix. harbor nights", 18, 13) != null);
         Check("replace: a collapsed or shrunk selection is refused", own.Mismatch(field, 18, 0) != null && own.Mismatch(field, 18, 12) != null);
         Check("replace: a field shorter than pFlow's words is refused", own.Mismatch("Fictional prefix. harbor", 18, 13) != null);
+        // Fix round 2: the person's own key or click after pFlow's selection (UI Automation may still report the old one).
+        Check("replace: nobody watched the person's input, so it counts as interrupted", own.Interrupted() && (own with { PersonActed = () => true }).Interrupted()
+            && !(own with { PersonActed = () => false }).Interrupted());
+        Check("person input: a key or a mouse button going down counts", PersonInput.Counts(PersonInput.KeyDown, false, false) && PersonInput.Counts(PersonInput.SystemKeyDown, false, false)
+            && PersonInput.Counts(PersonInput.LeftDown, false, false) && PersonInput.Counts(PersonInput.RightDown, false, false) && PersonInput.Counts(PersonInput.MiddleDown, false, false)
+            && PersonInput.Counts(PersonInput.ExtraDown, false, false));
+        Check("person input: the pointer moving, the wheel, a key or button coming up do not count", !PersonInput.Counts(0x200, false, false) && !PersonInput.Counts(0x20A, false, false)
+            && !PersonInput.Counts(0x20E, false, false) && !PersonInput.Counts(0x101, false, false) && !PersonInput.Counts(0x105, false, false) && !PersonInput.Counts(0x202, false, false));
+        Check("person input: a program's injected keys and clicks (pFlow's own) and the activation key do not count",
+            !PersonInput.Counts(PersonInput.KeyDown, true, false) && !PersonInput.Counts(PersonInput.LeftDown, true, false) && !PersonInput.Counts(PersonInput.KeyDown, false, true));
+        Check("input panels: a candidate list (200 px) or the emoji panel (360 px) on a 1728 px screen counts", InputPanels.Counts(true, true, false, 200, 263, 1728) && InputPanels.Counts(true, true, false, 360, 400, 1728));
+        Check("input panels: hidden (cloaked or not visible), empty, another app's window or the touch keyboard (923 px) do not count",
+            !InputPanels.Counts(true, true, true, 200, 263, 1728) && !InputPanels.Counts(true, false, false, 200, 263, 1728) && !InputPanels.Counts(true, true, false, 0, 0, 1728)
+            && !InputPanels.Counts(false, true, false, 200, 263, 1728) && !InputPanels.Counts(true, true, false, 923, 544, 1728) && !InputPanels.Counts(true, true, false, 1728, 400, 1728));
 
         // Apps UI Automation cannot read.
         var paste = new WeakFacts(false, false, true, false, WeakFieldRule.RoleText, WeakFieldRule.StateFocused | WeakFieldRule.StateFocusable, false, false, false, false, 0);
@@ -76,6 +90,9 @@ internal static class InsertionRuleChecks
             Check("deadline: a quick app's focused object is found", !quickStopped && quick == "focused");
             var clockless = new CallDeadline(10, () => now).Start(); now = 11;
             Check("deadline: over once its time is up", clockless.Over);
+            var budget = new CallDeadline(CallDeadline.Default, () => now).Start(); now += 120;
+            uint left = budget.Remaining; now += 180; uint last = budget.Remaining; now += 1;
+            Check("deadline: a call's own timeout is what is left of the limit (180 ms after 120, at least 1 ms at the end, 0 once over)", left == 180 && last == 1 && budget.Remaining == 0);
         }
         Console.WriteLine($"{passed} insertion rule checks passed.");
     }

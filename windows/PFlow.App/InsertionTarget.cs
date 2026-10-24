@@ -259,18 +259,27 @@ internal sealed class InsertionTarget : IInsertionTarget
         // The end-of-take replace: the selection is still exactly pFlow's own words, read back now.
         if (own?.Mismatch(now.before, now.start, now.length) is string mismatch) { Log("replace refused: " + mismatch); throw new InvalidOperationException("The field changed. Your text is in History."); }
     }
-    /// The fast checks, last before a key goes out (after the slow reads in Validate) with nothing between
-    /// them and SendInput: the same window in front, the same process and focused control, no shortcut key
-    /// held, no input method composing (one rule: LiveKeyField.Composing).
-    void Ready()
+    /// The checks last before a key goes out (after the slow reads in Validate), with nothing between them and
+    /// SendInput: no input method in the way, the same window in front, the same process and focused control, no
+    /// shortcut key held, and over pFlow's own selected words, no key or click of the person's since the selection.
+    /// Typed keys (`keys`) go through the input method, so any composing language or open input method refuses them
+    /// (LiveKeyField.Composing, as in 0.1.27). A paste does not: only a composition in progress, or an input method
+    /// list or input panel on screen, refuses it (InputComposition); the keyboard language alone never does.
+    /// Test hook: runs as Ready begins, after the last read of the field (the worst moment for a person's click).
+    internal static Action? BeforeReady { get; set; }
+    void Ready(bool keys)
     {
+        BeforeReady?.Invoke();
+        if (keys && LiveKeyField.Composing(foreground, control)) throw new InvalidOperationException(InputMethodOn);
+        if (!keys && InputComposition.InProgress(control) is string composing) { Log("refused: " + composing); throw new InvalidOperationException(StillComposing); }
         if (Native.GetForegroundWindow() != foreground) throw new InvalidOperationException("Focus changed. Your text is in History.");
         Native.GetWindowThreadProcessId(foreground, out var current);
         if (current != processId || LiveTextField.FocusedControl(foreground) != control) throw new InvalidOperationException("Focus changed. Your text is in History.");
         RequireNoShortcutKeys();
-        if (LiveKeyField.Composing(foreground, control)) throw new InvalidOperationException(InputMethodOn);
+        if (own != null && own.Interrupted()) { Log("replace refused: the person pressed a key or a mouse button after pFlow selected its words"); throw new InvalidOperationException("The field changed. Your text is in History."); }
     }
-    public const string InputMethodOn = "An input method was on, so pFlow did not paste. Your text is in History.";
+    public const string StillComposing = "You were still writing with an input method, so pFlow did not paste. Your text is in History.";
+    public const string InputMethodOn = "An input method was on, so pFlow did not type. Your text is in History.";
     void ValidateFocus()
     {
         if (Native.GetForegroundWindow() != foreground) throw new InvalidOperationException("Focus changed. Your text is in History.");
@@ -411,7 +420,7 @@ internal sealed class InsertionTarget : IInsertionTarget
             // The clipboard first (it may wait for a busy clipboard), then every check, then Ctrl+V with no wait between.
             lease.Put(text, rtf);
             Validate(); cancel.ThrowIfCancellationRequested();
-            Ready();
+            Ready(keys: false);
             lease.DispatchPaste();
             // Do not retry an uncertain paste. Restoration does not shorten when cancellation arrives.
             return await confirm();
@@ -533,7 +542,7 @@ internal sealed class InsertionTarget : IInsertionTarget
         Validate(); cancel.ThrowIfCancellationRequested();
         RequireNoShortcutKeys();
         // Over pFlow's own selected words, the fast checks come last, as for every live key batch.
-        if (own != null) Ready();
+        if (own != null) Ready(keys: true);
         // One SendInput batch cannot interleave another input event. Never retry a partially delivered batch.
         Native.Send(inputs);
         // The app takes the typed characters at its own pace: longer text gets longer to arrive.

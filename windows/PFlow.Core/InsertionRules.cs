@@ -5,6 +5,17 @@ namespace PFlow.Core;
 /// words in this place (a page script or a Shift+click can move it after pFlow selected them).
 public sealed record OwnedWords(int Start, string Text)
 {
+    /// Asked once, right before the first key: true when the person pressed a key or a mouse button since pFlow
+    /// selected these words (PersonInput), or when that cannot be known. A browser's UI Automation can report the
+    /// old selection for about half a second after a click or Shift+click moved it, so the selection read back
+    /// (Mismatch) cannot see such a change in time; this can. Null: nobody watched, which counts as acted.
+    public Func<bool>? PersonActed { get; init; }
+    /// The person did something (or nobody can say they did not) since the selection: nothing goes over it.
+    public bool Interrupted() => PersonActed?.Invoke() ?? true;
+    /// The same words in the same place (the watch is not part of what the words are).
+    public bool Equals(OwnedWords? other) => other is not null && Start == other.Start && Text == other.Text;
+    public override int GetHashCode() => HashCode.Combine(Start, Text);
+
     /// Null when the field's one selection is exactly pFlow's words in their place; otherwise why not. A
     /// no-break space counts as a space (browsers show a typed space at a line end as one).
     public string? Mismatch(string fieldText, int selectionStart, int selectionLength)
@@ -86,6 +97,8 @@ public sealed class CallDeadline(int milliseconds, Func<long>? clock = null)
     readonly Func<long> now = clock ?? (() => Environment.TickCount64);
     long? end;
     public bool Over { get { long t = now(); end ??= t + milliseconds; return t > end; } }
+    /// What is left of the limit, at least 1 ms while it is not over (a call's own timeout: SendMessageTimeout), 0 once over.
+    public uint Remaining { get { long t = now(); end ??= t + milliseconds; return t > end ? 0 : (uint)Math.Max(1, end.Value - t); } }
     /// Starts the clock now (otherwise it starts at the first look).
     public CallDeadline Start() { _ = Over; return this; }
 }
@@ -116,4 +129,25 @@ public static class AccessibleWalk
         }
         return null;
     }
+}
+
+/// The person's own input, as a low-level keyboard or mouse hook sees it, between pFlow's selection of its own
+/// words and the first key it sends: a key going down or a mouse button going down that no program sent. Never
+/// the pointer moving, the wheel, a key or button coming up (the activation key's release ends the take), the
+/// activation key itself (held or repeating), or input a program injected (pFlow's own keys among them).
+public static class PersonInput
+{
+    public const int KeyDown = 0x100, SystemKeyDown = 0x104, LeftDown = 0x201, RightDown = 0x204, MiddleDown = 0x207, ExtraDown = 0x20B;
+    public static bool Counts(int message, bool injected, bool activationKey) =>
+        !injected && !activationKey && message is KeyDown or SystemKeyDown or LeftDown or RightDown or MiddleDown or ExtraDown;
+}
+
+/// Windows' own input panels on screen: an input method's candidate or prediction list, the emoji panel (Win+.),
+/// clipboard history (Win+V), voice typing. All are windows of Windows' text input host (TextInputHost), hidden
+/// (cloaked) while closed. The touch keyboard is one too, but wide (a third of the screen or more): it is not a
+/// panel the person is choosing in, and counting it would refuse every take on a tablet.
+public static class InputPanels
+{
+    public static bool Counts(bool textInputHost, bool visible, bool cloaked, int width, int height, int screenWidth) =>
+        textInputHost && visible && !cloaked && width > 0 && height > 0 && screenWidth > 0 && width * 3 < screenWidth;
 }

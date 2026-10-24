@@ -15,7 +15,7 @@ using Forms = System.Windows.Forms;
 //            box), the clipboard restored after every take; Notepad++ (Scintilla) and a RichEdit box as more apps.
 internal static partial class Program
 {
-    static bool writerOnly, terminalsOnly, historyCopyOnly;
+    static bool writerOnly, imePasteOnly, terminalsOnly, historyCopyOnly;
     const string Soffice = @"C:\Program Files\LibreOffice\program\soffice.exe";
     const string LockedPassword = "fictional-secret";
 
@@ -199,6 +199,23 @@ internal static partial class Program
             }
             Console.WriteLine($"WRITER takes exact once: {exact}/{takes}");
 
+            // Fix round 2: how long capturing Writer's field takes, against the 300 ms limit on calls into the app
+            // (the focus search through LibreOffice's accessibility is most of it).
+            {
+                await Front(writer.Window, "Writer capture timing");
+                var capture = new List<double>(); var search = new List<double>(); int missed = 0;
+                for (int i = 0; i < 40; i++) {
+                    var clock = Stopwatch.StartNew(); var t = InsertionTarget.Capture(); capture.Add(clock.Elapsed.TotalMilliseconds);
+                    var focused = AutomationElement.FocusedElement;
+                    clock.Restart(); var weak = WeakField.Find(Native.GetForegroundWindow(), focused, false, out _); search.Add(clock.Elapsed.TotalMilliseconds);
+                    if (!t.CanInsert || weak == null) missed++;
+                    await Task.Delay(50);
+                }
+                static string Stats(List<double> v) { var o = v.Order().ToList(); return $"max {o[^1]:F0} ms, p95 {o[(int)Math.Ceiling(0.95 * o.Count) - 1]:F0} ms, median {o[o.Count / 2]:F0} ms"; }
+                Console.WriteLine($"WRITER capture timing ({System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}, 40 captures): whole capture {Stats(capture)}; focus search {Stats(search)}; not captured {missed}");
+                Check("Writer's field is captured every time, within the limit", missed == 0);
+            }
+
             // Two lines: Writer makes a second paragraph; the check reads across both.
             await Front(writer.Window, "Writer two lines");
             var two = InsertionTarget.Capture();
@@ -348,5 +365,97 @@ internal static partial class Program
             try { Directory.Delete(rig.Directory, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
             try { Directory.Delete(profile, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
         }
+    }
+
+    /// --ime-paste (fix round 2): a Japanese input method on, not composing: the finished text is pasted into Writer,
+    /// Notepad++ and Notepad (with "Copy dictation to clipboard", a paste), as 0.1.27 did. The same with a
+    /// composition in progress (typed with real key codes, so the input method composes): refused, nothing pasted,
+    /// the clipboard back. What pFlow saw of the composition is printed for each app.
+    static async Task ImePaste()
+    {
+        var rig = Rig("ime");
+        string profile = WriterProfile();
+        var opened = new List<Process>(); AutomationElement? notepad = null; string? notepadName = null;
+        const string marker = "pflow fictional clipboard marker";
+        IntPtr japanese = LoadKeyboardLayout("00000411", 0), english = LoadKeyboardLayout("00000409", 0);
+        int round = 0;
+        async Task Case(string app, IntPtr window, Func<Task<string>> document, bool keep)
+        {
+            round++;
+            await Front(window, app);
+            IntPtr focus = LiveTextField.FocusedControl(window);
+            PostMessage(focus, 0x0050, IntPtr.Zero, japanese); await Task.Delay(800);
+            ImeControl(focus, 6, 1); await Task.Delay(1500);
+            long layout = GetKeyboardLayout(Native.GetWindowThreadProcessId(focus, out _)).ToInt64() & 0xFFFF; long open = ImeControl(focus, 5, 0);
+            Check($"{app}: the Japanese input method is on (layout {layout:X4}, open {open})", layout == 0x0411 && open == 1);
+            string words = $"Fictional {app} words number {round}.";
+            string status;
+            {
+                await Front(window, app); SetClipboard(marker);
+                try { status = await InsertionTarget.Capture().Insert(words, rig.Owner.Handle, keep, CancellationToken.None); } catch (InvalidOperationException error) { status = error.Message; }
+            }
+            // Composing: real key codes K, A, N, A (the input method makes it "かな", not yet committed).
+            string composed = $"Fictional {app} words while composing {round}.";
+            string composing, seen;
+            {
+                await Front(window, app); await Task.Delay(300); SetClipboard(marker); uint sequence = Native.GetClipboardSequenceNumber();
+                foreach (ushort key in new ushort[] { 0x4B, 0x41, 0x4E, 0x41 }) { Native.Send(Native.Key(key), Native.Key(key, true)); await Task.Delay(80); }
+                await Task.Delay(1000);
+                seen = InputComposition.InProgress(LiveTextField.FocusedControl(window)) ?? "nothing";
+                try { composing = await InsertionTarget.Capture().Insert(composed, rig.Owner.Handle, keep, CancellationToken.None); } catch (InvalidOperationException error) { composing = error.Message; }
+                foreach (int _ in new[] { 1, 2, 3 }) { Native.Send(Native.Key(0x1B), Native.Key(0x1B, true)); await Task.Delay(150); }
+            }
+            PostMessage(focus, 0x0050, IntPtr.Zero, english); await Task.Delay(800);
+            string after = Flat(await document()); string clip = ClipboardText();
+            int once = Occurrences(after, Flat(words)), twice = Occurrences(after, Flat(composed));
+            Console.WriteLine($"IME {app} not composing: status=[{status}] in the document {once}x");
+            Console.WriteLine($"IME {app} composing: pFlow saw [{seen}] status=[{composing}] in the document {twice}x clipboard {(clip == marker ? "back" : clip == composed ? "holds the words (Copy dictation to clipboard)" : "changed")}");
+            Check($"{app}: Japanese on, not composing: the finished text is pasted once ({status})", (status == "Inserted" || status.StartsWith(InsertionTarget.Pasted, StringComparison.Ordinal)) && once == 1);
+            // With "Copy dictation to clipboard" the words stay on the clipboard, as that option asks; otherwise the person's comes back.
+            Check($"{app}: Japanese on and composing: refused, nothing pasted, the clipboard {(keep ? "holds the words" : "back")} ({composing})",
+                composing == InsertionTarget.StillComposing && twice == 0 && clip == (keep ? composed : marker));
+        }
+        try {
+            await rig.Whisper.Prewarm();
+            string name = "pflow-fictional-ime-" + Guid.NewGuid().ToString("N")[..8];
+            string file = Path.Combine(rig.Directory, name + ".txt"); File.WriteAllText(file, "Fictional prefix.");
+            var writer = await OpenWriter(profile, file, name); opened.Add(writer.Process);
+            await Front(writer.Window, "Writer"); Keys(0x11, 0x23); await Task.Delay(500);
+            await Case("Writer", writer.Window, () => SavedText(writer.Window, file, "Writer ime"), false);
+
+            string npp = Path.GetFullPath(Path.Combine(root, "..", "npp", "app", "notepad++.exe"));
+            string nppFile = Path.Combine(rig.Directory, "pflow-fictional-ime-npp-" + Guid.NewGuid().ToString("N")[..8] + ".txt"); File.WriteAllText(nppFile, "Fictional prefix.");
+            var start = new ProcessStartInfo(npp) { UseShellExecute = false };
+            foreach (string arg in new[] { "-multiInst", "-nosession", "-notabbar", nppFile }) start.ArgumentList.Add(arg);
+            var nppProcess = Process.Start(start)!; opened.Add(nppProcess);
+            IntPtr nppWindow = IntPtr.Zero;
+            for (int i = 0; i < 100 && nppWindow == IntPtr.Zero; i++) { await Task.Delay(200); nppProcess.Refresh(); if (nppProcess.MainWindowTitle.Contains(Path.GetFileName(nppFile))) nppWindow = nppProcess.MainWindowHandle; }
+            Check("Notepad++ window appeared", nppWindow != IntPtr.Zero);
+            await Task.Delay(1000); await Front(nppWindow, "Notepad++"); Keys(0x11, 0x23); await Task.Delay(300);
+            await Case("Notepad++", nppWindow, () => SavedText(nppWindow, nppFile, "Notepad++ ime"), false);
+
+            notepadName = "pflow-fictional-ime-notepad-" + Guid.NewGuid().ToString("N")[..8];
+            string noteFile = Path.Combine(rig.Directory, notepadName + ".txt"); File.WriteAllText(noteFile, "Fictional prefix.");
+            var note = new ProcessStartInfo("notepad.exe") { UseShellExecute = true }; note.ArgumentList.Add(noteFile); Process.Start(note);
+            notepad = await WindowWith(notepadName); var edit = await Editor(notepad);
+            await Place(notepad, edit); End(edit);
+            await Case("Notepad", (IntPtr)notepad.Current.NativeWindowHandle, () => Task.FromResult(Read(edit)), true);
+        } finally {
+            if (notepad != null && notepadName != null) { try { await CloseOurNotepadTab(notepad, notepadName); } catch (Exception error) { Console.WriteLine("IME notepad close: " + error.GetType().Name); } }
+            foreach (var p in opened) Kill(p);
+            foreach (var p in Process.GetProcessesByName("soffice.bin")) { try { if (p.MainWindowTitle.Contains("pflow-fictional")) Kill(p); } catch { } }
+            rig.Preview.Close(); rig.Capsule.Close(); rig.Owner.Dispose(); await rig.Whisper.DisposeAsync();
+            await Task.Delay(1000);
+            try { Directory.Delete(rig.Directory, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            try { Directory.Delete(profile, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+    }
+    [System.Runtime.InteropServices.DllImport("imm32.dll")] static extern IntPtr ImmGetDefaultIMEWnd(IntPtr window);
+    [System.Runtime.InteropServices.DllImport("user32.dll")] static extern IntPtr SendMessageTimeout(IntPtr window, int message, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
+    /// WM_IME_CONTROL to the window's input method window (works across processes for these scalar commands).
+    static long ImeControl(IntPtr window, int command, long value)
+    {
+        IntPtr ime = ImmGetDefaultIMEWnd(window);
+        return ime == IntPtr.Zero ? -1 : SendMessageTimeout(ime, 0x0283, (IntPtr)command, (IntPtr)value, 0x0002, 500, out IntPtr result) == IntPtr.Zero ? -2 : result.ToInt64();
     }
 }

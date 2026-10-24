@@ -79,6 +79,8 @@ internal sealed partial class Program : Application
             foreach (var floating in new Window[] { capsule, preview, prompt }) floating.SourceInitialized += (sender, _) => InsertionTarget.RefusedWindows.Add(new System.Windows.Interop.WindowInteropHelper((Window)sender!).Handle);
             _ = new DispatcherTimer(TimeSpan.FromMilliseconds(200), DispatcherPriority.Background, (_, _) => ClipboardLease.RestorePending(), Dispatcher);
             keyboard = new KeyboardHook(OnTrigger, store.Preferences.ActivationKey) { Enabled = store.Preferences.Enabled };
+            // The activation key never counts as the person acting after pFlow selected its live words (InputWatch).
+            InputWatch.ActivationKey = keyboard.IsActivationKey;
             var menu = new Forms.ContextMenuStrip();
             menu.Items.Add(TrayMenu.ShowControl, null, (_, _) => Dispatcher.Invoke(capsule.Reveal));
             menu.Items.Add(TrayMenu.Settings, null, (_, _) => Dispatcher.Invoke(OpenSettings));

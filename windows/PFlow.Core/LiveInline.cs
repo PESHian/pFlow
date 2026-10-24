@@ -318,6 +318,9 @@ public interface ILiveTextField
     bool AppendOnly => false;
     /// Ends a selection pFlow made without a key, leaving the caret at its end. True when nothing is selected.
     bool Collapse() => true;
+    /// After Select: whether the person pressed a key or a mouse button since (OwnedWords.PersonActed). Asked once,
+    /// right before the first key; asking ends the watch. A field that does not watch cannot say: true.
+    bool PersonActedSinceSelect() => true;
 }
 
 /// Replace: pFlow's own typed words are selected (no keys) for the finished text to go over them the normal,
@@ -384,7 +387,7 @@ public sealed class LiveInlineSession
                 Recorder.Event("typing.final", new DiagField("result", "left"), new DiagField("stop", "selection not confirmed"), new DiagField("mode", "replace own words"));
                 return (LiveFinal.Left, LiveStop.Uncertain);
             }
-            selected = true; Selection = new OwnedWords(span.Start, ownership.Owned.Trim());
+            selected = true; Selection = new OwnedWords(span.Start, ownership.Owned.Trim()) { PersonActed = field.PersonActedSinceSelect };
             Recorder.Event("typing.final", new DiagField("result", "Replace"), new DiagField("mode", "replace own words"), new DiagField("selected", span.Length), new DiagField("chars", text.Length));
             return (LiveFinal.Replace, null);
         }

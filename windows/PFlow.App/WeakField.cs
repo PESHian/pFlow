@@ -13,13 +13,16 @@ namespace PFlow.Windows;
 ///   way to read it. The words are pasted and the status says pFlow could not check them.
 /// A password box (UI Automation IsPassword or MSAA protected) is reported as Protected and never
 /// written to. Every call into the app goes behind a "still responding" check: COM calls into a hung
-/// app would hang pFlow.
+/// app would hang pFlow. Each run of calls (Find, State, Shown) has one deadline (CallDeadline): a window
+/// message waits only for what is left of it (SendMessageTimeout), and the run stops once it is over. A COM
+/// call into the app (IAccessible, IAccessible2) cannot be given a timeout of its own: the deadline is
+/// checked between those calls, so one slow call can still overrun it by its own length.
 internal sealed class WeakField
 {
     internal enum Kinds { Accessible, Scintilla, PasteOnly }
     const int OBJID_CLIENT = unchecked((int)0xFFFFFFFC), WM_NULL = 0, WM_GETTEXT = 0x000D, WM_GETTEXTLENGTH = 0x000E;
     const int SCI_GETSELECTIONSTART = 2143, SCI_GETSELECTIONEND = 2145, SCI_GETCODEPAGE = 2137, SCI_GETREADONLY = 2140, SCI_GETSELECTIONS = 2570;
-    const uint SMTO_ABORTIFHUNG = 0x2, SMTO_ERRORONEXIT = 0x20, WaitMs = 500;
+    const uint SMTO_BLOCK = 0x1, SMTO_ABORTIFHUNG = 0x2, SMTO_ERRORONEXIT = 0x20, WaitMs = 500;
     static readonly Guid IAccessibleId = new("618736E0-3C3D-11CF-810C-00AA00389B71"), IAccessibleTextId = new("24FD2FFB-3AAD-4a08-8335-A3AD89C0FB4B");
 
     internal Kinds Kind { get; }
@@ -45,13 +48,13 @@ internal sealed class WeakField
     /// The focused field behind `window`'s focused control, or null with the reason (one decision:
     /// WeakFieldRule.Decide). The calls into the app share one deadline (CallDeadline, 300 ms): when it runs
     /// out, nothing is known, and the field is refused rather than written to unchecked.
-    internal static WeakField? Find(IntPtr window, AutomationElement focused, bool chromium, out string why)
+    internal static WeakField? Find(IntPtr window, AutomationElement focused, bool chromium, out string why, int budget = CallDeadline.Default)
     {
         if (chromium) { why = WeakFieldRule.Decide(default(WeakFacts) with { Chromium = true }).Why; return null; }
         IntPtr control = LiveTextField.FocusedControl(window);
         if (control == IntPtr.Zero) { why = "no focused control"; return null; }
-        if (!Responding(control)) { why = "the app is not responding"; return null; }
-        var deadline = new CallDeadline(CallDeadline.Default).Start();
+        var deadline = new CallDeadline(budget).Start();
+        if (!Responding(control, deadline)) { why = "the app is not responding"; return null; }
         bool uiaPassword = false;
         try { uiaPassword = focused.Current.IsPassword; } catch (Exception error) when (error is ElementNotAvailableException or COMException) { }
         // MSAA's focused object: down from the control's client object through accFocus.
@@ -82,7 +85,7 @@ internal sealed class WeakField
         bool scintilla = LiveTextField.BaseClass(control).Equals("Scintilla", StringComparison.OrdinalIgnoreCase);
         IAccessibleText? readable = null; int selections = 0; bool readOnly = false, uiaEditable = false;
         try {
-            if (scintilla) { readOnly = Message(control, SCI_GETREADONLY) is not 0; selections = Message(control, SCI_GETSELECTIONS) ?? 0; }
+            if (scintilla) { readOnly = Message(control, SCI_GETREADONLY, deadline) is not 0; selections = Message(control, SCI_GETSELECTIONS, deadline) ?? 0; }
             else if (acc != null && child == 0 && TextOf(acc) is { } t) { readable = t; selections = t.get_nSelections(out int n) == 0 ? n : 0; }
         } catch (Exception error) when (error is COMException or InvalidCastException or ArgumentException) { readable = null; }
         try {
@@ -118,20 +121,21 @@ internal sealed class WeakField
     /// whole document (Scintilla). Null when it cannot be read.
     internal (string Text, int Start, int Length)? State()
     {
-        if (!Responding(control)) return null;
+        var deadline = new CallDeadline(CallDeadline.Default).Start();
+        if (!Responding(control, deadline)) return null;
         try {
             if (Kind == Kinds.Accessible && text != null) {
-                string? value = Read(text); if (value == null) return null;
-                if (text.get_caretOffset(out int caret) != 0 || caret < 0 || caret > value.Length) return null;
+                string? value = Read(text); if (value == null || deadline.Over) return null;
+                if (text.get_caretOffset(out int caret) != 0 || caret < 0 || caret > value.Length || deadline.Over) return null;
                 int start = caret, length = 0;
                 if (text.get_nSelections(out int count) == 0 && count > 0 && text.get_selection(0, out int a, out int b) == 0) {
                     start = Math.Clamp(Math.Min(a, b), 0, value.Length); length = Math.Clamp(Math.Max(a, b), 0, value.Length) - start;
                 }
-                return (value, start, length);
+                return deadline.Over ? null : (value, start, length);
             }
             if (Kind == Kinds.Scintilla) {
-                string? value = WindowText(); if (value == null) return null;
-                if (Message(control, SCI_GETSELECTIONSTART) is not int a || Message(control, SCI_GETSELECTIONEND) is not int b || Message(control, SCI_GETCODEPAGE) is not int page) return null;
+                string? value = WindowText(control, deadline); if (value == null) return null;
+                if (Message(control, SCI_GETSELECTIONSTART, deadline) is not int a || Message(control, SCI_GETSELECTIONEND, deadline) is not int b || Message(control, SCI_GETCODEPAGE, deadline) is not int page) return null;
                 byte[] bytes = Encoding.UTF8.GetBytes(value);
                 // Scintilla counts bytes of its own encoding: UTF-8, or one byte per character for plain ASCII text.
                 if (page != 65001 && bytes.Length != value.Length) return null;
@@ -148,10 +152,10 @@ internal sealed class WeakField
     /// The calls share one deadline (CallDeadline, 300 ms); when it runs out the answer is null: pFlow could not check.
     internal string? Shown()
     {
-        if (!Responding(control)) return null;
         var deadline = new CallDeadline(CallDeadline.Default).Start();
+        if (!Responding(control, deadline)) return null;
         try {
-            if (Kind == Kinds.Scintilla) return WindowText();
+            if (Kind == Kinds.Scintilla) return WindowText(control, deadline);
             if (Kind != Kinds.Accessible || accessible == null || text == null) return null;
             if (accessible.accParent is IAccessible parent && parent.accChildCount is int count && count > 0 && count < 5000) {
                 var children = new object[count];
@@ -180,17 +184,21 @@ internal sealed class WeakField
         try { return Marshal.GetObjectForIUnknown(pointer) as IAccessibleText; } finally { Marshal.Release(pointer); }
     }
 
-    string? WindowText()
+    /// The control's whole text (WM_GETTEXT), each message waiting only for what is left of the deadline.
+    internal static string? WindowText(IntPtr control, CallDeadline deadline)
     {
-        if (SendMessageTimeout(control, WM_GETTEXTLENGTH, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT, WaitMs, out IntPtr length) == IntPtr.Zero) return null;
+        if (deadline.Over || SendMessageTimeout(control, WM_GETTEXTLENGTH, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG | SMTO_BLOCK, deadline.Remaining, out IntPtr length) == IntPtr.Zero) return null;
         long size = length.ToInt64(); if (size < 0 || size > 16_000_000) return null;
         var buffer = new StringBuilder((int)size + 2);
-        if (SendMessageTimeout(control, WM_GETTEXT, new IntPtr(buffer.Capacity), buffer, SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT, WaitMs * 4, out _) == IntPtr.Zero) return null;
+        if (deadline.Over || SendMessageTimeout(control, WM_GETTEXT, new IntPtr(buffer.Capacity), buffer, SMTO_ABORTIFHUNG | SMTO_BLOCK, deadline.Remaining, out _) == IntPtr.Zero) return null;
         return buffer.ToString();
     }
 
-    static int? Message(IntPtr control, int message) =>
-        SendMessageTimeout(control, message, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT, WaitMs, out IntPtr result) == IntPtr.Zero ? null : (int)result.ToInt64();
+    /// One message to the control (Scintilla's own), waiting only for what is left of the deadline.
+    internal static int? Message(IntPtr control, int message, CallDeadline deadline) =>
+        deadline.Over || SendMessageTimeout(control, message, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG | SMTO_BLOCK, deadline.Remaining, out IntPtr result) == IntPtr.Zero ? null : (int)result.ToInt64();
+    static bool Responding(IntPtr control, CallDeadline deadline) =>
+        control != IntPtr.Zero && !deadline.Over && SendMessageTimeout(control, WM_NULL, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG | SMTO_BLOCK, deadline.Remaining, out _) != IntPtr.Zero;
 
     [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr window, int objectId, ref Guid iid, [MarshalAs(UnmanagedType.IUnknown)] out object accessible);
     [DllImport("oleacc.dll")] static extern int AccessibleChildren(IAccessible container, int start, int count, [Out, MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.Struct, SizeParamIndex = 2)] object[] children, out int obtained);

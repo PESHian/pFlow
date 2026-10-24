@@ -69,13 +69,14 @@ internal sealed class ClipboardLease : IDisposable
     {
         var incoming = new List<(uint Format, IntPtr Handle)>();
         try {
+            // The privacy marking first: if Windows refuses any of it, no text goes on (Restore puts the person's back).
+            foreach (var (name, data) in Private) incoming.Add((Native.RegisterClipboardFormat(name), Allocate(data)));
             incoming.Add((13, Allocate(Encoding.Unicode.GetBytes(text + "\0"))));
             // Materialize Windows' synthesized text formats now, so reads/CloseClipboard cannot advance our ownership sequence.
             incoming.Add((1, Allocate(CodePageText(text, 0))));
             incoming.Add((7, Allocate(CodePageText(text, 1))));
             incoming.Add((16, Allocate(BitConverter.GetBytes(Native.GetSystemDefaultLCID()))));
             if (rtf != null) incoming.Add((Native.RegisterClipboardFormat("Rich Text Format"), Allocate(Encoding.ASCII.GetBytes(rtf + "\0"))));
-            foreach (var (name, data) in Private) incoming.Add((Native.RegisterClipboardFormat(name), Allocate(data)));
             Open();
             try {
                 if (preserve && Native.GetClipboardSequenceNumber() != sourceSequence) throw new InvalidOperationException("The clipboard changed. Your text is in History.");
@@ -83,12 +84,14 @@ internal sealed class ClipboardLease : IDisposable
                 installed = true;
                 for (int i = 0; i < incoming.Count; i++) {
                     var item = incoming[i];
-                    if (Native.SetClipboardData(item.Format, item.Handle) == IntPtr.Zero) throw new InvalidOperationException("Windows blocked the clipboard.");
+                    if (SetData(item.Format, item.Handle) == IntPtr.Zero) throw new InvalidOperationException("Windows blocked the clipboard. Your text is in History.");
                     incoming[i] = (item.Format, IntPtr.Zero);
                 }
             } finally { installedSequence = Native.GetClipboardSequenceNumber(); Native.CloseClipboard(); }
         } finally { foreach (var item in incoming) Free(item.Format, item.Handle); }
     }
+    /// SetClipboardData; the native checks make one format fail.
+    internal static Func<uint, IntPtr, IntPtr> SetData { get; set; } = Native.SetClipboardData;
     /// Every pFlow write (the words it pastes, the card's Copy, "Copy dictation to clipboard") is private:
     /// Windows' clipboard history (Win+V) and cloud clipboard leave it out. The person's own clipboard,
     /// put back by Restore, goes back exactly as it was, without these. Windows refuses an empty clipboard
