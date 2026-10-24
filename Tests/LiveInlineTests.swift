@@ -819,6 +819,8 @@ struct LiveInlineTests {
             #expect(coordinator.state == .idle, "\(mode)")
             #expect(session.startCalled == 0, "\(mode)")
             #expect(hud.phases == [.passwordField], "\(mode)")
+            #expect(hud.reasons.last == RecordingCoordinator.passwordNote, "the card says why: \(mode)")
+            #expect(hud.livePreview)
         }
     }
 

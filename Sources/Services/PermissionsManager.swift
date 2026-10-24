@@ -19,6 +19,10 @@ final class PermissionsManager {
     /// What the last Accessibility Grant press did, for the hint under the step.
     var accessibilityGrant: AccessibilityGrantOutcome?
     private var pollTimer: Timer?
+    /// The key and click watch that follows the grant; tests pass their own.
+    var watch: PersonInput = .shared
+    /// The Accessibility trust check; tests pass their own.
+    var trustCheck: () -> Bool = { AXIsProcessTrusted() }
 
     init() {}
 
@@ -133,11 +137,11 @@ final class PermissionsManager {
     func refresh() {
         microphone = Self.map(AVCaptureDevice.authorizationStatus(for: .audio))
         speech = Self.map(SFSpeechRecognizer.authorizationStatus())
-        accessibility = AXIsProcessTrusted()
+        accessibility = trustCheck()
         // From launch on, so a key the person pressed before a take (an
         // unfinished Japanese composition) is known when the take ends.
         // A tap from before a revoke is replaced once trust comes back.
-        PersonInput.shared.follow(trusted: accessibility)
+        watch.follow(trusted: accessibility)
     }
 
     /// Three signals, because none alone is dependable: the (undocumented)

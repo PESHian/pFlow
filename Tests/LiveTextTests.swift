@@ -228,6 +228,8 @@ struct LiveTextTests {
             #expect(history.saved == [expected!])
             #expect(injector.delivered.isEmpty)
             #expect(hud.phases.last == .liveTextKept)
+            #expect(hud.reasons.last == RecordingCoordinator.keptNote)
+            #expect(hud.offers.last == expected, "the kept words are offered on the card")
             #expect(coordinator.state == .idle)
         }
         // Nothing was recognized: nothing to keep, nothing saved.

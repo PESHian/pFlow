@@ -66,8 +66,7 @@ final class RecordingCoordinator {
         injector.captureTarget()
         guard !injector.targetIsSecure else {
             hud.show(device: nil, livePreview: false)
-            hud.setPhase(.passwordField)
-            hud.hide(after: 2)
+            explain(.passwordField, Self.passwordNote, text: nil)
             return
         }
         applicationName = injector.targetApplicationName
@@ -126,8 +125,7 @@ final class RecordingCoordinator {
                 self.stopAwaitingTyping()
                 self.leaveLiveTyping()
                 _ = try? await self.session.stop()
-                self.hud.setPhase(.failed)
-                self.hud.hide(after: 2)
+                self.explain(.failed, Self.startFailedNote, text: nil)
                 self.state = .idle
             }
         }
@@ -221,8 +219,7 @@ final class RecordingCoordinator {
         if leaveLiveTyping() {
             hud.hide(after: 0)
         } else {
-            hud.setPhase(.typedTextLeft)
-            hud.hide(after: 4)
+            explain(.typedTextLeft, Self.typedLeftNote, text: nil)
         }
     }
 
@@ -524,7 +521,29 @@ final class RecordingCoordinator {
                      spokenWordCount: kept.split(whereSeparator: \.isWhitespace).count,
                      applicationName: applicationName, applicationBundleID: applicationBundleID)
         let typed = take.map { injector.typedLive(session: $0) } ?? false
-        hud.setPhase(typed ? .liveTextKeptTyped : .liveTextKept)
-        hud.hide(after: 4)
+        explain(typed ? .liveTextKeptTyped : .liveTextKept, typed ? Self.keptTypedNote : Self.keptNote, text: kept)
     }
+
+    /// pFlow did not put the text in: the card says why in one plain sentence
+    /// and offers the words when there are any (it stays until closed or the
+    /// next take); with nothing to copy it goes after a few seconds. The
+    /// capsule itself only ever shows an icon.
+    private func explain(_ phase: HUDPhase, _ reason: String, text: String?) {
+        hud.setLivePreview(true)
+        hud.setPhase(phase)
+        hud.setReason(reason)
+        if let text, !text.isEmpty {
+            hud.setPartial(text)
+            hud.offerCopy(text)
+        } else {
+            hud.hide(after: Self.noteSeconds)
+        }
+    }
+
+    static let noteSeconds: Double = 6
+    static let passwordNote = "That's a password field, so pFlow didn't type there."
+    static let startFailedNote = "pFlow couldn't start recording, so nothing was typed."
+    static let typedLeftNote = "Cancelled. The words pFlow already typed are still in the app."
+    static let keptNote = "Speech recognition stopped early. These words are in History; nothing was typed."
+    static let keptTypedNote = "Speech recognition stopped early. The words already typed stay in the app; these are in History."
 }

@@ -658,7 +658,9 @@ private struct ProcessingSweep: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(paused: reduceMotion)) { context in
+        // About 30 frames a second is smooth for a slow sweep; the display's
+        // 120 Hz would redraw four times as often for nothing.
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
             let sweep = reduceMotion ? Double.pi / 2 : context.date.timeIntervalSinceReferenceDate * 2.6
             SweepShape(sweep: sweep)
                 .stroke(palette.gradient, style: StrokeStyle(lineWidth: 2, lineCap: .round))

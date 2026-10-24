@@ -144,6 +144,7 @@ final class TextInjector: TextInjecting {
     private var targetField: AXUIElement?
     private var originalValue: String?
     private var fieldUnreadable = false
+    private var composition: (composing: Bool, at: UInt64) = (false, 0)
     private var originalSelection: CFRange?
     private(set) var targetIsSecure = false
     private var delivering = false
@@ -186,8 +187,11 @@ final class TextInjector: TextInjecting {
     func captureTarget() {
         guard !delivering else { return }
         targetApp = NSWorkspace.shared.frontmostApplication
-        captureField()
         PersonInput.shared.start()
+        // Whether the person was composing when the take started: the end of
+        // the take refuses until a real commit is seen, whatever the time.
+        composition = PersonInput.shared.compositionSnapshot()
+        captureField()
     }
 
     /// The focused field of the captured app and what it holds, so a paste
@@ -211,13 +215,13 @@ final class TextInjector: TextInjecting {
         let check = TargetCheck(pid: pid, element: targetField, bundleID: bundleID)
         // Never in a terminal or a remote viewer, nor while an input method may be composing.
         let composing = InputComposition.composing(markedLength: FocusedElement.markedLength(targetField),
-                                                   inputMethod: PersonInput.inputMethodSelected(),
-                                                   uncommittedKeys: PersonInput.shared.uncommittedKeys)
+                                                   tracked: composition.composing)
         guard !composing, NoTypePlaces.place(bundleID: bundleID, elementClasses: check.classes(targetField)) == nil else {
             return live.begin(id: session, field: nil)
         }
         guard !fieldUnreadable else { return live.begin(id: session, field: nil) }
-        let keys = { KeyLiveTextField(pid: pid, element: targetField, bundleID: bundleID) }
+        let composition = self.composition
+        let keys = { KeyLiveTextField(pid: pid, element: targetField, bundleID: bundleID, composition: composition) }
         let web = WebAppAccessibility.kind(of: targetApp) != nil || FocusedElement.inWebArea(targetField)
         switch LiveFieldMethod.method(webApp: web, bundleID: bundleID) {
         case .keys:
@@ -273,6 +277,13 @@ final class TextInjector: TextInjecting {
 
     func deliver(_ text: String) async -> InjectionOutcome {
         await deliver(text, formatted: nil)
+    }
+
+    /// The paste's clipboard write. Kept ("Copy dictation to clipboard"):
+    /// unmarked, it is the person's copy. Otherwise temporary: marked, and
+    /// the person's clipboard is put back after.
+    static func pasteItem(text: String, formatted: NSAttributedString?, sessionID: String, keepCopy: Bool) -> NSPasteboardItem? {
+        clipboardItem(text: text, formatted: formatted, sessionID: sessionID, private: !keepCopy)
     }
 
     /// pFlow's temporary paste write is marked so clipboard managers skip it
@@ -355,7 +366,9 @@ final class TextInjector: TextInjecting {
     /// The captured app and field as the guard reads them.
     private func targetCheck() -> TargetCheck? {
         guard let targetApp else { return nil }
-        return TargetCheck(pid: targetApp.processIdentifier, element: targetField, bundleID: targetApp.bundleIdentifier)
+        var check = TargetCheck(pid: targetApp.processIdentifier, element: targetField, bundleID: targetApp.bundleIdentifier)
+        check.composition = composition
+        return check
     }
 
     /// A native text field that takes Accessibility writes and shows them at
@@ -400,8 +413,7 @@ final class TextInjector: TextInjecting {
                               extraBlock: () -> InsertionBlock?, read: () -> String?) async -> InjectionOutcome {
         // Prepare rich formats before the snapshot so generation cannot widen
         // the interval that could overwrite a newer clipboard change.
-        // Kept (the person's setting): unmarked. Temporary: marked, and put back after.
-        let prepared = Self.clipboardItem(text: text, formatted: formatted, sessionID: sessionID, private: !keepCopy)
+        let prepared = Self.pasteItem(text: text, formatted: formatted, sessionID: sessionID, keepCopy: keepCopy)
         var saved: [[NSPasteboard.PasteboardType: Data]]?
         if !keepCopy {
             let count = pasteboard.changeCount

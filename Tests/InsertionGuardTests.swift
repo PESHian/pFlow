@@ -115,50 +115,156 @@ struct InsertionGuardTests {
     // MARK: Input methods
 
     @Test func onlyAnUnfinishedCompositionCountsAsComposing() {
-        #expect(InputComposition.composing(markedLength: 6, inputMethod: true, uncommittedKeys: false))
-        #expect(!InputComposition.composing(markedLength: 0, inputMethod: true, uncommittedKeys: true),
-                "the field says nothing is marked: committed, whatever the keys were")
-        #expect(InputComposition.composing(markedLength: nil, inputMethod: true, uncommittedKeys: true))
-        #expect(!InputComposition.composing(markedLength: nil, inputMethod: true, uncommittedKeys: false),
-                "Japanese or Pinyin selected but everything committed: paste as usual")
-        #expect(!InputComposition.composing(markedLength: nil, inputMethod: false, uncommittedKeys: true),
-                "typing in a plain layout is no composition")
+        #expect(InputComposition.composing(markedLength: 6, tracked: false), "AppKit says marked text: composing")
+        #expect(!InputComposition.composing(markedLength: 0, tracked: true), "AppKit says nothing marked: committed")
+        #expect(InputComposition.composing(markedLength: nil, tracked: true))
+        #expect(!InputComposition.composing(markedLength: nil, tracked: false))
     }
 
-    @Test func spaceDigitsPunctuationReturnEscapeTabAndClicksEndAComposition() {
-        let watch = PersonInput()
-        let n: Int64 = 45, i: Int64 = 34, h: Int64 = 4
-        watch.record(keyCode: n)
-        #expect(watch.uncommittedKeys)
-        // Return, Enter, Escape, Tab, Space (Pinyin "nihao" + Space), 1 and 9 (candidates), comma, period.
-        for commit: Int64 in [36, 76, 53, 48, 49, 18, 25, 43, 47] {
-            watch.record(keyCode: n)
-            watch.record(keyCode: i)
-            watch.record(keyCode: h)
-            #expect(watch.uncommittedKeys)
-            watch.record(keyCode: commit)
-            #expect(!watch.uncommittedKeys, "key \(commit)")
+    @Test func inputMethodFamiliesComeFromTheSourceID() {
+        #expect(InputMethodFamily.of(sourceID: "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese") == .japanese)
+        #expect(InputMethodFamily.of(sourceID: "com.apple.inputmethod.SCIM.ITABC") == .chinese)
+        #expect(InputMethodFamily.of(sourceID: "com.apple.inputmethod.TCIM.Zhuyin") == .chinese)
+        #expect(InputMethodFamily.of(sourceID: "com.apple.inputmethod.Korean.2SetKorean") == .korean)
+        #expect(InputMethodFamily.of(sourceID: "com.example.inputmethod.Unknown") == .other)
+    }
+
+    private static let s: UInt64 = 1_000_000_000
+    private static let kyouha: [Int64] = [40, 16, 31, 32, 4, 0]   // k y o u h a
+    private static let space: Int64 = 49, returnKey: Int64 = 36, escape: Int64 = 53, backspace: Int64 = 51
+
+    private func typed(_ keys: [Int64], _ family: InputMethodFamily?, from start: UInt64 = 0) -> CompositionTracker {
+        var tracker = CompositionTracker()
+        for (n, key) in keys.enumerated() { tracker.key(key, shortcut: false, family: family, at: start + UInt64(n) * 1_000_000) }
+        return tracker
+    }
+
+    @Test func kotoeriSpaceConvertsAndDigitsAndPunctuationKeepComposing() {
+        var tracker = typed(Self.kyouha + [Self.space], .japanese)
+        #expect(tracker.snapshot(at: 2 * Self.s), "kyouha + Space is a conversion, not a commit")
+        tracker.key(18, shortcut: false, family: .japanese, at: 2 * Self.s)   // 1
+        tracker.key(47, shortcut: false, family: .japanese, at: 2 * Self.s)   // .
+        #expect(tracker.snapshot(at: 3 * Self.s))
+        tracker.key(Self.returnKey, shortcut: false, family: .japanese, at: 4 * Self.s)
+        #expect(!tracker.snapshot(at: 5 * Self.s), "Return commits")
+        var cancelled = typed(Self.kyouha, .japanese)
+        cancelled.key(Self.escape, shortcut: false, family: .japanese, at: Self.s)
+        #expect(!cancelled.snapshot(at: 2 * Self.s), "Escape cancels")
+    }
+
+    @Test func chineseCommitsOnSpaceDigitsPunctuationReturnEscape() {
+        for commit: Int64 in [Self.space, 18, 25, 43, 47, Self.returnKey, Self.escape] {
+            var tracker = typed([45, 34, 4, 0, 31], .chinese)   // n i h a o
+            #expect(tracker.snapshot(at: Self.s))
+            tracker.key(commit, shortcut: false, family: .chinese, at: Self.s)
+            #expect(!tracker.snapshot(at: 2 * Self.s), "key \(commit)")
         }
-        watch.record(keyCode: n)
-        watch.record(keyCode: nil)
-        #expect(!watch.uncommittedKeys, "a click")
+    }
+
+    @Test func koreanEndsASyllableOnSpacePunctuationArrowsReturnEscape() {
+        for commit: Int64 in [Self.space, 43, 123, 124, 125, 126, Self.returnKey, Self.escape] {
+            var tracker = typed([4, 0], .korean)
+            tracker.key(commit, shortcut: false, family: .korean, at: Self.s)
+            #expect(!tracker.snapshot(at: 2 * Self.s), "key \(commit)")
+        }
+    }
+
+    @Test func anUnknownInputMethodCommitsOnlyOnReturnOrEscape() {
+        for keep: Int64 in [Self.space, 18, 43, 123] {
+            var tracker = typed([4, 0], .other)
+            tracker.key(keep, shortcut: false, family: .other, at: Self.s)
+            #expect(tracker.snapshot(at: 2 * Self.s), "key \(keep) keeps it open")
+        }
+        var tracker = typed([4, 0], .other)
+        tracker.key(Self.returnKey, shortcut: false, family: .other, at: Self.s)
+        #expect(!tracker.snapshot(at: 2 * Self.s))
+    }
+
+    @Test func editingKeysNeverStartACompositionOnlyContinueOne() {
+        for key: Int64 in [Self.backspace, 117, 123, 124, 125, 126, 115, 119, 116, 121] {
+            var committed = typed([45, 34] + [Self.space], .chinese)
+            committed.key(key, shortcut: false, family: .chinese, at: Self.s)
+            #expect(!committed.snapshot(at: 2 * Self.s), "key \(key) after a commit")
+        }
+        var open = typed(Self.kyouha, .japanese)
+        open.key(Self.backspace, shortcut: false, family: .japanese, at: 70 * Self.s)
+        #expect(open.snapshot(at: 71 * Self.s), "Backspace inside a composition continues it")
     }
 
     @Test func shortcutsAndThePflowHotkeyAreNeverPartOfAComposition() {
-        let watch = PersonInput()
-        watch.record(keyCode: 8, flags: .maskCommand)          // ⌘C
-        #expect(!watch.uncommittedKeys)
-        watch.record(keyCode: 2, flags: [.maskCommand, .maskShift])   // ⌘⇧D
-        #expect(!watch.uncommittedKeys)
-        watch.record(keyCode: 8, flags: .maskControl)
-        #expect(!watch.uncommittedKeys)
-        watch.record(keyCode: 8, flags: .maskShift)            // Shift+C may compose
-        #expect(watch.uncommittedKeys)
+        var tracker = CompositionTracker()
+        tracker.key(8, shortcut: true, family: .chinese, at: 0)   // ⌘C
+        tracker.key(2, shortcut: true, family: .chinese, at: 0)   // ⌘⇧D
+        #expect(!tracker.snapshot(at: Self.s))
+        let watch = PersonInput(isTrusted: { false })
+        watch.setFamilyForTesting(.chinese)
+        watch.record(keyCode: 8, flags: .maskCommand, at: 0)
+        watch.record(keyCode: 2, flags: [.maskCommand, .maskShift], at: 0)
+        watch.record(keyCode: 8, flags: .maskControl, at: 0)
+        #expect(!watch.trackerForTesting.snapshot(at: Self.s))
+        watch.record(keyCode: 8, flags: .maskShift, at: 0)          // Shift+C composes
+        #expect(watch.trackerForTesting.snapshot(at: Self.s))
     }
 
-    @Test func aCompositionLeftAloneExpires() {
-        #expect(PersonInput.compositionIdle <= 10_000_000_000)
-        #expect(PersonInput.compositionIdle >= 2_000_000_000)
+    @Test func aPlainLayoutKeyIsNoComposition() {
+        var tracker = typed([4, 0], nil)
+        #expect(!tracker.snapshot(at: Self.s))
+        tracker = typed([4, 0], .japanese)
+        tracker.key(4, shortcut: false, family: nil, at: Self.s)
+        #expect(!tracker.snapshot(at: 2 * Self.s))
+    }
+
+    @Test func aCandidateWindowClickKeepsComposingAnyOtherClickCommits() {
+        var tracker = typed(Self.kyouha + [Self.space, Self.space], .japanese)
+        tracker.click(commits: false, at: Self.s)
+        #expect(tracker.snapshot(at: 2 * Self.s), "a candidate pick is not a commit")
+        tracker.click(commits: true, at: 3 * Self.s)
+        #expect(!tracker.snapshot(at: 4 * Self.s), "a click elsewhere commits (browsers commit on blur)")
+    }
+
+    @Test func aClickOnTheCandidateListIsNoCommitAClickOnAWindowIs() {
+        func window(_ x: CGFloat, _ layer: Int) -> [String: Any] {
+            [kCGWindowBounds as String: CGRect(x: x, y: 0, width: 100, height: 100).dictionaryRepresentation,
+             kCGWindowLayer as String: layer, kCGWindowOwnerPID as String: pid_t(0)]
+        }
+        let windows = [window(0, 20), window(0, 0), window(200, 0)]
+        #expect(!PersonInput.clickCommits(at: CGPoint(x: 50, y: 50), windows: windows), "the raised candidate list")
+        #expect(PersonInput.clickCommits(at: CGPoint(x: 250, y: 50), windows: windows), "a normal window")
+        #expect(PersonInput.clickCommits(at: CGPoint(x: 900, y: 50), windows: windows), "the desktop")
+    }
+
+    @Test func theTakeKeepsItsStartStateWithNoTimeLimitUntilARealCommit() {
+        var tracker = typed(Self.kyouha, .japanese)                 // "nihon" style, left open
+        let start = 2 * Self.s
+        let snapshot = tracker.snapshot(at: start)
+        #expect(snapshot)
+        #expect(tracker.composing(snapshot: snapshot, takeStart: start), "a 6 s, or a 6 min, take: still composing")
+        tracker.key(Self.space, shortcut: false, family: .japanese, at: start + 6 * Self.s)
+        #expect(tracker.composing(snapshot: snapshot, takeStart: start), "Space converts in Kotoeri")
+        tracker.key(Self.returnKey, shortcut: false, family: .japanese, at: start + 7 * Self.s)
+        #expect(!tracker.composing(snapshot: snapshot, takeStart: start), "Return seen during the take: committed")
+        tracker.key(4, shortcut: false, family: .japanese, at: start + 8 * Self.s)
+        #expect(tracker.composing(snapshot: snapshot, takeStart: start), "a new composition during the take")
+        var clean = CompositionTracker()
+        #expect(!clean.composing(snapshot: clean.snapshot(at: start), takeStart: start))
+        clean.key(4, shortcut: false, family: .japanese, at: start - 1)
+        #expect(!clean.composing(snapshot: false, takeStart: start), "keys from before the take count only through the snapshot")
+    }
+
+    @Test func beforeATakeACompositionLeftAloneForAMinuteNoLongerCounts() {
+        let tracker = typed(Self.kyouha, .japanese)
+        #expect(tracker.snapshot(at: 59 * Self.s))
+        #expect(!tracker.snapshot(at: 61 * Self.s))
+        #expect(CompositionTracker.preTakeExpiry == 60 * Self.s)
+    }
+
+    @Test func switchingInputSourceEndsAComposition() {
+        let watch = PersonInput(isTrusted: { false })
+        watch.setFamilyForTesting(.japanese)
+        watch.record(keyCode: 4, at: 0)
+        #expect(watch.trackerForTesting.snapshot(at: 1))
+        watch.inputSourceChanged(to: nil)
+        #expect(!watch.trackerForTesting.snapshot(at: 2))
     }
 
     @Test func typedLiveKeysNeedTheWatchAndNoComposingInputMethod() {
@@ -168,7 +274,7 @@ struct InsertionGuardTests {
     }
 
     @Test func aWatchThatNeverStartedOrWasStoppedIsNotWatching() {
-        let watch = PersonInput()
+        let watch = PersonInput(isTrusted: { false })
         #expect(!watch.watching, "no tap yet")
         watch.stop()
         #expect(!watch.watching)
@@ -176,7 +282,7 @@ struct InsertionGuardTests {
     }
 
     @Test func notWatchingReportsSoAndCountsAsActed() {
-        let watch = PersonInput()
+        let watch = PersonInput(isTrusted: { false })
         watch.overrideWatching(false)
         #expect(!watch.watching)
         #expect(watch.acted(since: 0) == nil)
@@ -186,7 +292,7 @@ struct InsertionGuardTests {
     }
 
     @Test func nobodyWatchingMeansNobodyCanSayThePersonDidNotAct() {
-        let watch = PersonInput()
+        let watch = PersonInput(isTrusted: { false })
         #expect(watch.acted(since: 0) == nil)
     }
 
@@ -219,6 +325,14 @@ struct InsertionGuardTests {
         #expect(pieces.joined() == text)
         #expect(pieces.allSatisfy { $0.utf16.count <= SyntheticKeys.unitsPerEvent })
         #expect(pieces.count > 1)
+    }
+
+    @Test func thePasteWriteIsMarkedOnlyWhenTemporary() throws {
+        let temporary = try #require(TextInjector.pasteItem(text: "fictional", formatted: nil, sessionID: "a", keepCopy: false))
+        #expect(temporary.types.contains(TextInjector.transientType) && temporary.types.contains(TextInjector.concealedType))
+        let kept = try #require(TextInjector.pasteItem(text: "fictional", formatted: nil, sessionID: "b", keepCopy: true))
+        #expect(!kept.types.contains(TextInjector.transientType) && !kept.types.contains(TextInjector.concealedType),
+                "Copy dictation to clipboard: the person's copy, unmarked")
     }
 
     @Test func pflowsTemporaryPasteWriteIsMarkedButAKeptCopyIsNot() throws {
@@ -405,6 +519,65 @@ struct InsertionGuardTests {
         #expect(hud.offers.isEmpty)
     }
 
+    @Test func noTypedKeyAndNoSelectWhileTheWatchIsNotRunning() {
+        let reader = FakeKeyReader("Note:")
+        let watch = PersonInput(isTrusted: { false })
+        var sent: [String] = []
+        let field = KeyLiveTextField(reader: reader, pid: 1, facts: { _ in InsertionFacts() }, watch: watch,
+                                     inputMethod: { false }, send: { sent.append($0); reader.append($0); return true })
+        watch.overrideWatching(false)
+        #expect(!field.canWriteRanges())
+        #expect(!field.replace(NSRange(location: 5, length: 0), with: " the"))
+        #expect(sent.isEmpty, "no key went out")
+        #expect(field.refusal == .notWatching)
+        // A fresh field (nothing typed, nothing refused yet): the select alone is refused too.
+        let selectReader = FakeKeyReader("Note: the")
+        let selectOnly = KeyLiveTextField(reader: selectReader, pid: 1, facts: { _ in InsertionFacts() }, watch: watch,
+                                          inputMethod: { false }, send: { _ in true })
+        #expect(!selectOnly.select(NSRange(location: 6, length: 3)))
+        #expect(selectReader.selects.isEmpty, "nothing selected")
+        #expect(selectOnly.personActedSinceSelect(), "nobody can say the person did nothing")
+    }
+
+    @Test func typedKeysAndTheSelectGoAheadWhileWatched() {
+        let reader = FakeKeyReader("Note:")
+        let watch = PersonInput(isTrusted: { false })
+        watch.overrideWatching(true)
+        var sent: [String] = []
+        let field = KeyLiveTextField(reader: reader, pid: 1, facts: { _ in InsertionFacts() }, watch: watch,
+                                     inputMethod: { false }, send: { sent.append($0); reader.append($0); return true })
+        #expect(field.replace(NSRange(location: 5, length: 0), with: " the"))
+        #expect(sent == [" the"])
+        #expect(field.select(NSRange(location: 6, length: 3)))
+        #expect(reader.selects == [NSRange(location: 6, length: 3)])
+    }
+
+    @Test func aRefusedGuardSendsNoKey() {
+        let reader = FakeKeyReader("Note:")
+        let watch = PersonInput(isTrusted: { false })
+        watch.overrideWatching(true)
+        var sent: [String] = []
+        var facts = InsertionFacts()
+        facts.composing = true
+        let field = KeyLiveTextField(reader: reader, pid: 1, facts: { _ in facts }, watch: watch,
+                                     inputMethod: { false }, send: { sent.append($0); return true })
+        #expect(!field.replace(NSRange(location: 5, length: 0), with: " the"))
+        #expect(sent.isEmpty && field.refusal == .inputMethod)
+    }
+
+    @Test func aTrustChangeRebuildsTheWatchThroughTheRefresh() {
+        let permissions = PermissionsManager()
+        let watch = PersonInput(isTrusted: { false })
+        permissions.watch = watch
+        permissions.trustCheck = { true }
+        permissions.refresh()
+        #expect(watch.followsTrust == true, "trust back: the watch is started again")
+        permissions.trustCheck = { false }
+        permissions.refresh()
+        #expect(watch.followsTrust == false)
+        #expect(!watch.watching)
+    }
+
     @Test func cancellingNeverTakesTypedWordsBackOutWithKeys() async {
         let field = SimulatedKeyField("")
         let session = FakeSession()
@@ -439,4 +612,23 @@ struct InsertionGuardTests {
         edited.value = "Note: tha"
         #expect(ownership.ownSpan(edited) == nil)
     }
+}
+
+/// A field read through Accessibility, for KeyLiveTextField: keys typed land at the caret.
+@MainActor
+final class FakeKeyReader: KeyFieldReader {
+    var current: LiveFieldState
+    var selects: [NSRange] = []
+    init(_ value: String) {
+        current = LiveFieldState(app: 1, element: LiveFieldState.target, secure: false, trusted: true, value: value,
+                                 selection: NSRange(location: (value as NSString).length, length: 0))
+    }
+    func append(_ text: String) {
+        let value = (current.value ?? "") + text
+        current.value = value
+        current.selection = NSRange(location: (value as NSString).length, length: 0)
+    }
+    func state() -> LiveFieldState { current }
+    func select(_ range: NSRange) -> Bool { selects.append(range); current.selection = range; return true }
+    func selectionSettable() -> Bool { true }
 }

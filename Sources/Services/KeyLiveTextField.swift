@@ -12,6 +12,8 @@ struct TargetCheck {
     /// (the focused element then only has to stay a non-password one).
     let element: AXUIElement?
     let bundleID: String?
+    /// The composition state when the take started (PersonInput.compositionSnapshot).
+    var composition: (composing: Bool, at: UInt64) = (false, 0)
 
     private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
         var value: CFTypeRef?
@@ -56,8 +58,7 @@ struct TargetCheck {
         facts.modifiersHeld = PersonInput.modifiersHeld()
         facts.keyDown = PersonInput.somethingHeld()
         facts.composing = InputComposition.composing(markedLength: now.flatMap(FocusedElement.markedLength),
-                                                     inputMethod: PersonInput.inputMethodSelected(),
-                                                     uncommittedKeys: PersonInput.shared.uncommittedKeys)
+                                                     tracked: PersonInput.shared.composing(since: composition))
         facts.personActed = PersonInput.shared.acted(since: since) ?? false
         return facts
     }
@@ -74,17 +75,44 @@ struct TargetCheck {
 /// (`TextInjector.insertOverSelection`); any doubt ends the selection again
 /// without a key and offers the finished text on the Copy card. Every batch of
 /// keys goes out only right after `InsertionGuard` passes.
+/// What KeyLiveTextField reads and selects through (Accessibility; tests use their own).
+@MainActor
+protocol KeyFieldReader: AnyObject {
+    func state() -> LiveFieldState
+    func select(_ range: NSRange) -> Bool
+    func selectionSettable() -> Bool
+}
+
+extension AXLiveTextField: KeyFieldReader {}
+
 @MainActor
 final class KeyLiveTextField: LiveTextField {
-    private let reader: AXLiveTextField
-    private let check: TargetCheck
+    private let reader: KeyFieldReader
+    private let facts: (UInt64) -> InsertionFacts
+    private let watch: PersonInput
+    private let inputMethod: () -> Bool
+    private let send: (String) -> Bool
+    private let pid: pid_t
     private var aborted = false
     private var selectedAt: UInt64?
     private(set) var refusal: InsertionBlock?
 
-    init(pid: pid_t, element: AXUIElement, bundleID: String?) {
-        reader = AXLiveTextField(pid: pid, element: element, plainSpaces: true, bundleID: bundleID)
-        check = TargetCheck(pid: pid, element: element, bundleID: bundleID)
+    init(reader: KeyFieldReader, pid: pid_t, facts: @escaping (UInt64) -> InsertionFacts, watch: PersonInput,
+         inputMethod: @escaping () -> Bool, send: @escaping (String) -> Bool) {
+        self.reader = reader
+        self.pid = pid
+        self.facts = facts
+        self.watch = watch
+        self.inputMethod = inputMethod
+        self.send = send
+    }
+
+    convenience init(pid: pid_t, element: AXUIElement, bundleID: String?, composition: (composing: Bool, at: UInt64)) {
+        var check = TargetCheck(pid: pid, element: element, bundleID: bundleID)
+        check.composition = composition
+        self.init(reader: AXLiveTextField(pid: pid, element: element, plainSpaces: true, bundleID: bundleID), pid: pid,
+                  facts: { check.facts(since: $0) }, watch: .shared,
+                  inputMethod: { PersonInput.inputMethodSelected() }, send: { SyntheticKeys.type($0) })
     }
 
     var appendOnly: Bool { true }
@@ -99,8 +127,8 @@ final class KeyLiveTextField: LiveTextField {
     /// pFlow can set. Never while an input method that composes is selected:
     /// it could turn typed characters into a composition.
     func canWriteRanges() -> Bool {
-        guard LiveFieldMethod.keysAllowed(watching: PersonInput.shared.watching, inputMethod: PersonInput.inputMethodSelected()) else {
-            if !PersonInput.shared.watching { NSLog("pFlow: no typed live words: key presses and clicks are not being watched") }
+        guard LiveFieldMethod.keysAllowed(watching: watch.watching, inputMethod: inputMethod()) else {
+            if !watch.watching { NSLog("pFlow: no typed live words: key presses and clicks are not being watched") }
             return false
         }
         return reader.selectionSettable()
@@ -116,19 +144,19 @@ final class KeyLiveTextField: LiveTextField {
               range.location <= (value as NSString).length else { return false }
         let expected = (value as NSString).replacingCharacters(in: range, with: text)
         let started = PersonInput.now()
-        if !PersonInput.shared.watching {
+        if !watch.watching {
             aborted = true
             refusal = .notWatching
             NSLog("pFlow: live typing stopped before a key went out: key presses and clicks are not being watched")
             return false
         }
-        if let block = InsertionGuard.block(check.facts(since: started)) {
+        if let block = InsertionGuard.block(facts(started)) {
             aborted = true
             refusal = block
             NSLog("pFlow: live typing stopped before a key went out: \(block)")
             return false
         }
-        SyntheticKeys.type(text)
+        guard send(text) else { aborted = true; return false }
         let caret = NSRange(location: range.location + text.utf16.count, length: 0)
         return Self.until(milliseconds: 800 + 15 * text.utf16.count) {
             let state = reader.state()
@@ -142,12 +170,12 @@ final class KeyLiveTextField: LiveTextField {
     func select(_ range: NSRange) -> Bool {
         if range.length == 0 { return Self.until(milliseconds: 300) { reader.state().selection == range } }
         guard !aborted else { return false }
-        guard PersonInput.shared.watching else {
+        guard watch.watching else {
             NSLog("pFlow: pFlow's words were not selected: key presses and clicks are not being watched")
             return false
         }
         let started = PersonInput.now()
-        if let block = InsertionGuard.block(check.facts(since: started)) {
+        if let block = InsertionGuard.block(facts(started)) {
             NSLog("pFlow: pFlow's words were not selected: \(block)")
             return false
         }
@@ -167,7 +195,7 @@ final class KeyLiveTextField: LiveTextField {
     /// left alone.
     func collapse() {
         let state = reader.state()
-        guard state.element == LiveFieldState.target, state.app == check.pid,
+        guard state.element == LiveFieldState.target, state.app == pid,
               let selection = state.selection, selection.length > 0 else { return }
         _ = reader.select(NSRange(location: NSMaxRange(selection), length: 0))
     }
@@ -181,7 +209,7 @@ final class KeyLiveTextField: LiveTextField {
 
     func personActedSinceSelect() -> Bool {
         guard let selectedAt else { return true }
-        return PersonInput.shared.acted(since: selectedAt) ?? true
+        return watch.acted(since: selectedAt) ?? true
     }
 
     /// A browser shows a typed space at a line end as a no-break space.

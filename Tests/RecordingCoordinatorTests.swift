@@ -220,7 +220,9 @@ struct RecordingCoordinatorTests {
         await coordinator.toggle()
         #expect(coordinator.state == .idle)
         #expect(hud.phases.last == .failed)
-        #expect(hud.hideDelays == [2])
+        #expect(hud.reasons.last == RecordingCoordinator.startFailedNote)
+        #expect(hud.livePreview)
+        #expect(hud.hideDelays == [RecordingCoordinator.noteSeconds], "the card with the reason goes after a few seconds")
         #expect(session.stopCalled == 1)
         #expect(injector.delivered.isEmpty)
         session.startError = nil

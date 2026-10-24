@@ -90,11 +90,11 @@ extension TakeHarness {
             for code in [kVK_ANSI_N, kVK_ANSI_I, kVK_ANSI_H, kVK_ANSI_A, kVK_ANSI_O] { personKey(CGKeyCode(code)); usleep(80_000) }
             await pause(0.6)
             dump("composing")
-            result["uncommittedWhileComposing"] = PersonInput.shared.uncommittedKeys
+            result["trackerWhileComposing"] = PersonInput.shared.composing(since: (false, 0))
             personKey(CGKeyCode(parts[2].contains("Pinyin") || parts[2].contains("SCIM") ? kVK_Space : kVK_Return))
             await pause(0.6)
             dump("committed")
-            result["uncommittedAfterCommit"] = PersonInput.shared.uncommittedKeys
+            result["trackerAfterCommit"] = PersonInput.shared.composing(since: (false, 0))
             _ = selectInputSource("com.apple.keylayout.ABC")
         case "keepcopy" where parts.count == 3:
             // "Copy dictation to clipboard" on: the kept copy is the finished text, unmarked.
@@ -161,6 +161,36 @@ extension TakeHarness {
             PersonInput.shared.overrideWatching(false)
             result["take"] = await take(target, mode: .typeInApp, label: spec)
             PersonInput.shared.overrideWatching(nil)
+        case "ime-seq" where parts.count == 6:
+            // ime-seq:<target>:<off|type>:<source>:<keys>:<extra seconds>. Keys: letters, _ Space, ^ Return, - Backspace,
+            // @ a click on the input method's candidate window. Then a take lasting longer by
+            // the extra seconds.
+            guard let target = await openTarget(parts[1]) else { result["error"] = "could not open"; return result }
+            guard selectInputSource(parts[3]) else { result["error"] = "input source not available"; return result }
+            let extra = Double(parts[5]) ?? 0
+            let codes: [Character: Int] = ["a": kVK_ANSI_A, "b": kVK_ANSI_B, "h": kVK_ANSI_H, "i": kVK_ANSI_I, "k": kVK_ANSI_K,
+                                           "n": kVK_ANSI_N, "o": kVK_ANSI_O, "u": kVK_ANSI_U, "y": kVK_ANSI_Y,
+                                           "_": kVK_Space, "^": kVK_Return, "-": kVK_Delete]
+            var clicked = "none"
+            result["take"] = await take(target, mode: parts[2] == "off" ? .off : .typeInApp, label: spec, beforeBegin: { [self] in
+                for key in parts[4] {
+                    if key == "@" {
+                        await pause(0.6)
+                        clicked = clickInputMethodWindow()
+                    } else if let code = codes[key] {
+                        personKey(CGKeyCode(code))
+                    }
+                    usleep(90_000)
+                }
+                await pause(0.6)
+            }, beforeFinish: { [self] in
+                await pause(extra)
+            }, afterFinish: { [self] in
+                personKey(CGKeyCode(kVK_Escape)); personKey(CGKeyCode(kVK_Escape))
+                await pause(0.3)
+            })
+            result["candidateClick"] = clicked
+            _ = selectInputSource("com.apple.keylayout.ABC")
         case "rearm":
             // The tap shut down by the system, and Accessibility followed off and on: never reported as
             // watching while it is not, and watching again (seeing the person) once re-created.
@@ -191,6 +221,22 @@ extension TakeHarness {
             result["error"] = "unknown spec"
         }
         return result
+    }
+
+    /// Clicks the middle of the frontmost on-screen window owned by an input method (its candidate list).
+    func clickInputMethodWindow() -> String {
+        let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+        for window in windows {
+            let layer = window[kCGWindowLayer as String] as? Int ?? 0
+            guard let pid = window[kCGWindowOwnerPID as String] as? pid_t,
+                  PersonInput.isInputMethod(pid) || (pid == frontmost() && layer > 0),
+                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary), rect.width > 20, rect.height > 20 else { continue }
+            personClick(at: CGPoint(x: rect.midX, y: rect.minY + min(rect.height / 2, 14)))
+            return "\(window[kCGWindowOwnerName as String] ?? "?") \(Int(rect.width))x\(Int(rect.height))"
+        }
+        let owners = windows.prefix(10).map { "\($0[kCGWindowOwnerName as String] ?? "?")/\($0[kCGWindowLayer as String] ?? 0)" }
+        return "no input method window; front: " + owners.joined(separator: ", ")
     }
 
     /// A modifier key pressed or released as the person would.

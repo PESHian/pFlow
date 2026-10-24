@@ -77,22 +77,107 @@ enum InsertionGuard {
 /// Chinese, Korean), the same rule as Windows 0.1.28: only a real composition
 /// counts, never the keyboard language alone. AppKit fields say so directly
 /// (AXTextInputMarkedRange, length > 0 while composing); elsewhere (Chrome,
-/// Electron) a composing input method is selected and the person pressed a
-/// key that continues a composition, with no commit key or click since and
-/// not long ago (PersonInput). A paste then could commit or mix with the
-/// person's unfinished characters.
+/// Electron) the key tracker decides (CompositionTracker). A paste then could
+/// commit or mix with the person's unfinished characters.
 enum InputComposition {
-    /// Keys that end a composition: Return, keypad Enter, Escape, Tab, Space
-    /// (Pinyin and Korean commit with it), the candidate digits 1-9 and
-    /// punctuation.
-    static let commitKeys: Set<Int64> = [36, 76, 53, 48, 49,
-                                         18, 19, 20, 21, 23, 22, 26, 28, 25,
-                                         43, 47, 44, 41, 39, 33, 30, 27, 24, 50, 42]
-
     /// `markedLength` is the field's marked text length when it reports one, nil when it cannot say.
-    static func composing(markedLength: Int?, inputMethod: Bool, uncommittedKeys: Bool) -> Bool {
+    static func composing(markedLength: Int?, tracked: Bool) -> Bool {
         if let markedLength { return markedLength > 0 }
-        return inputMethod && uncommittedKeys
+        return tracked
+    }
+}
+
+/// Input method families, by input source ID; each ends a composition with its own keys.
+enum InputMethodFamily: Equatable {
+    case japanese, chinese, korean, other
+
+    static func of(sourceID: String) -> InputMethodFamily {
+        let id = sourceID.lowercased()
+        if id.contains("kotoeri") || id.contains("japanese") || id.contains("atok") { return .japanese }
+        if id.contains("korean") || id.contains("hangul") { return .korean }
+        if id.contains(".scim") || id.contains(".tcim") || id.contains("pinyin") || id.contains("zhuyin")
+            || id.contains("chinese") || id.contains("wubi") || id.contains("cangjie") || id.contains("sogou")
+            || id.contains("stroke") { return .chinese }
+        return .other
+    }
+}
+
+/// Key codes the tracker treats specially.
+enum CompositionKeys {
+    static let `return`: Int64 = 36, enter: Int64 = 76, escape: Int64 = 53, space: Int64 = 49
+    /// 1-9 (candidate picks in Chinese input methods).
+    static let digits: Set<Int64> = [18, 19, 20, 21, 23, 22, 26, 28, 25]
+    static let punctuation: Set<Int64> = [43, 47, 44, 41, 39, 33, 30, 27, 24, 50, 42]
+    static let arrows: Set<Int64> = [123, 124, 125, 126]
+    /// Backspace, forward delete, arrows, Home, End, Page Up, Page Down: they
+    /// edit or move inside a composition but never start one.
+    static let navigation: Set<Int64> = Set<Int64>([51, 117, 115, 119, 116, 121]).union(arrows)
+
+    /// The keys that end a composition in this family. Kotoeri converts with
+    /// Space and keeps digits and punctuation in the composition; Chinese
+    /// input methods commit with Space, a candidate digit or punctuation;
+    /// Korean ends a syllable with Space, punctuation or an arrow. An
+    /// unknown input method: Return and Escape only.
+    static func commits(_ key: Int64, in family: InputMethodFamily) -> Bool {
+        if key == `return` || key == enter || key == escape { return true }
+        switch family {
+        case .japanese, .other: return false
+        case .chinese: return key == space || digits.contains(key) || punctuation.contains(key)
+        case .korean: return key == space || punctuation.contains(key) || arrows.contains(key)
+        }
+    }
+}
+
+/// What the person's keys say about a composition outside AppKit fields. No
+/// time limit runs during a take: the state at the take's start is kept, and
+/// the end of the take refuses until a real commit is seen. Before a take a
+/// composition left alone for `preTakeExpiry` no longer counts: dictation is
+/// started by the person, and a minute is far longer than anyone leaves a
+/// half-typed word open and then starts dictating into the same field
+/// (Windows 0.1.28 reads the open composition itself; this is the stand-in).
+struct CompositionTracker: Equatable {
+    static let preTakeExpiry: UInt64 = 60_000_000_000
+
+    /// When the last key that started or continued a composition was pressed; nil when none is open.
+    private(set) var composingSince: UInt64?
+    /// When a composition last ended (a commit key, a committing click, an input source change).
+    private(set) var lastCommit: UInt64 = 0
+
+    /// A key the person pressed. `family` is nil while a plain layout is selected.
+    mutating func key(_ code: Int64, shortcut: Bool, family: InputMethodFamily?, at time: UInt64) {
+        if shortcut { return }
+        guard let family else { end(at: time); return }
+        if CompositionKeys.commits(code, in: family) { end(at: time); return }
+        if CompositionKeys.navigation.contains(code) {
+            if composingSince != nil { composingSince = time }
+            return
+        }
+        composingSince = time
+    }
+
+    /// A click that commits (anywhere but the input method's own candidate window).
+    mutating func click(commits: Bool, at time: UInt64) {
+        if commits { end(at: time) }
+    }
+
+    mutating func end(at time: UInt64) {
+        if composingSince != nil { lastCommit = time }
+        composingSince = nil
+    }
+
+    /// At the start of a take: a composition is open (and not stale).
+    func snapshot(at time: UInt64) -> Bool {
+        guard let since = composingSince else { return false }
+        return time >= since && time - since < Self.preTakeExpiry
+    }
+
+    /// During and at the end of a take, with no time limit: composing when it
+    /// was at the start and no commit was seen since, or when one began after
+    /// the start.
+    func composing(snapshot: Bool, takeStart: UInt64) -> Bool {
+        if snapshot, lastCommit < takeStart { return true }
+        if let since = composingSince, since >= takeStart { return true }
+        return false
     }
 }
 

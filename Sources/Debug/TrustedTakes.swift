@@ -443,6 +443,7 @@ final class TakeHarness {
         }
         if parts.count == 2, parts[0] == "probe" { return await probe(parts[1]) }
         if parts.first == "capsules" { return await capsules(hold: Double(parts.count > 1 ? parts[1] : "4") ?? 4) }
+        if parts.first == "cards" { return await cards(hold: Double(parts.count > 1 ? parts[1] : "4") ?? 4) }
         return await guardCheck(spec)
     }
 
@@ -469,6 +470,32 @@ final class TakeHarness {
         }
         note("capsules: \(shown)")
         return ["spec": "capsules", "shown": shown]
+    }
+
+    /// The explaining card for each way pFlow does not put the text in, as
+    /// the coordinator shows it (capsule then card, phase, reason, words).
+    func cards(hold: Double) async -> [String: Any] {
+        let hud = HUDController()
+        let words = "Seven blue kites drift over the dunes."
+        let states: [(String, HUDPhase, String, String?)] = [
+            ("password", .passwordField, RecordingCoordinator.passwordNote, nil),
+            ("failed", .failed, RecordingCoordinator.startFailedNote, nil),
+            ("kept", .liveTextKept, RecordingCoordinator.keptNote, words),
+            ("keptTyped", .liveTextKeptTyped, RecordingCoordinator.keptTypedNote, words),
+            ("typedLeft", .typedTextLeft, RecordingCoordinator.typedLeftNote, nil),
+            ("clipboard", .copied, RecordingCoordinator.onClipboardNote, words)]
+        for (name, phase, reason, text) in states {
+            hud.show(device: nil, livePreview: false)
+            hud.setLivePreview(true)
+            hud.setPhase(phase)
+            hud.setReason(reason)
+            if let text { hud.setPartial(text); hud.offerCopy(text) }
+            note("card \(name) shown")
+            await pause(hold)
+            hud.hide(after: 0)
+            await pause(0.3)
+        }
+        return ["spec": "cards"]
     }
 
     /// What Accessibility shows of the target's focused element, and whether

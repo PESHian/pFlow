@@ -17,9 +17,19 @@ final class PersonInput: @unchecked Sendable {
 
     private let lock = NSLock()
     private var lastAction: UInt64 = 0
-    /// When the last key that may continue a composition was pressed; nil
-    /// once a commit key or a click ended it.
-    private var lastComposingKey: UInt64?
+    private var tracker = CompositionTracker()
+    /// The family of the selected input method, nil for a plain layout; kept
+    /// current from the main thread (input source changes), read by the tap.
+    private var family: InputMethodFamily?
+    private var sourceObserver: NSObjectProtocol?
+    /// What `start` and the trust check ask; tests make it false so no tap is made.
+    private let isTrusted: () -> Bool
+    /// The last trust value `follow` was given (tests read it).
+    private(set) var followsTrust: Bool?
+
+    init(isTrusted: @escaping () -> Bool = { AXIsProcessTrusted() }) {
+        self.isTrusted = isTrusted
+    }
     private var tap: CFMachPort?
     private var runLoop: CFRunLoop?
     private var state = State.off
@@ -29,9 +39,6 @@ final class PersonInput: @unchecked Sendable {
     /// Nanoseconds on the clock `acted(since:)` compares against.
     static func now() -> UInt64 { clock_gettime_nsec_np(CLOCK_UPTIME_RAW) }
 
-    /// A composition the person left alone this long no longer counts.
-    static let compositionIdle: UInt64 = 5_000_000_000
-
     /// True only while key presses and clicks are really being seen: the tap
     /// exists, is still valid and enabled, and pFlow is still trusted.
     var watching: Bool {
@@ -40,7 +47,7 @@ final class PersonInput: @unchecked Sendable {
             return (watchingOverride, CFMachPortIsValid(tap) && CGEvent.tapIsEnabled(tap: tap))
         }
         if let override { return override }
-        return healthy && AXIsProcessTrusted()
+        return healthy && isTrusted()
     }
 
     /// Whether the person pressed a key or clicked at or after `time`; nil
@@ -50,26 +57,51 @@ final class PersonInput: @unchecked Sendable {
         return lock.withLock { lastAction >= time }
     }
 
-    /// A key that may continue a composition was pressed, and no commit key
-    /// or click came after it, within the last `compositionIdle`.
-    var uncommittedKeys: Bool {
+    /// At the start of a take: an open composition (CompositionTracker.snapshot) and when.
+    func compositionSnapshot() -> (composing: Bool, at: UInt64) {
+        let now = Self.now()
+        return (lock.withLock { tracker.snapshot(at: now) }, now)
+    }
+
+    /// During or at the end of a take that started with `snapshot`.
+    func composing(since snapshot: (composing: Bool, at: UInt64)) -> Bool {
+        lock.withLock { tracker.composing(snapshot: snapshot.composing, takeStart: snapshot.at) }
+    }
+
+    /// Tests: the tracker as it is now.
+    var trackerForTesting: CompositionTracker { lock.withLock { tracker } }
+
+    /// The selected input source changed: its family from now on, and any
+    /// open composition is ended (switching commits it).
+    func inputSourceChanged(to sourceID: String?) {
         lock.withLock {
-            guard let last = lastComposingKey else { return false }
-            return Self.now() &- last < Self.compositionIdle
+            family = sourceID.map(InputMethodFamily.of(sourceID:))
+            tracker.end(at: Self.now())
         }
+    }
+
+    private func followInputSource() {
+        guard sourceObserver == nil else { return }
+        let read: () -> Void = { [weak self] in self?.inputSourceChanged(to: PersonInput.selectedInputMethodID()) }
+        DispatchQueue.main.async { read() }
+        sourceObserver = DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String),
+            object: nil, queue: .main) { _ in read() }
     }
 
     /// Follows the Accessibility grant: watching while trusted, and a fresh
     /// tap once trust comes back (a tap from before a revoke can stay
     /// "enabled" and see nothing). Called from every permission refresh.
     func follow(trusted: Bool) {
+        followsTrust = trusted
         if trusted { start() } else { stop() }
     }
 
     /// Starts watching once Accessibility is granted; safe to call every
     /// take. A tap that the system disabled or invalidated is replaced.
     func start() {
-        guard AXIsProcessTrusted() else { return }
+        guard isTrusted() else { return }
+        followInputSource()
         let current = lock.withLock { state }
         if current == .starting || (current == .on && watching) { return }
         if current == .on { stop() }
@@ -107,14 +139,50 @@ final class PersonInput: @unchecked Sendable {
     /// What one key press or click by the person records. A key with
     /// Command or Control held is a shortcut (pFlow's own hotkey among them),
     /// never part of a composition.
-    func record(keyCode: Int64?, flags: CGEventFlags = []) {
+    func record(keyCode: Int64?, flags: CGEventFlags = [], clickCommits: Bool = true, at time: UInt64 = PersonInput.now()) {
         lock.withLock {
-            let now = Self.now()
-            lastAction = now
-            guard let keyCode else { lastComposingKey = nil; return }
-            if !flags.intersection([.maskCommand, .maskControl]).isEmpty { return }
-            lastComposingKey = InputComposition.commitKeys.contains(keyCode) ? nil : now
+            lastAction = time
+            guard let keyCode else { tracker.click(commits: clickCommits, at: time); return }
+            let shortcut = !flags.intersection([.maskCommand, .maskControl]).isEmpty
+            tracker.key(keyCode, shortcut: shortcut, family: family, at: time)
         }
+    }
+
+    /// Tests: the input method family keys are recorded under.
+    func setFamilyForTesting(_ family: InputMethodFamily?) { lock.withLock { self.family = family } }
+
+    /// Whether a click at `point` (global, top-left origin) commits an open
+    /// composition. A click on the input method's candidate list does not:
+    /// on macOS 27 that list is a window above the app's normal windows
+    /// (owned by the input method's process, or drawn by the app itself at a
+    /// raised level), so a click on any window above level 0 counts as no
+    /// commit, which errs to the safe side. A click on a normal window
+    /// commits (browsers commit on blur and click). Looked up only while a
+    /// composition is open.
+    private func clickCommits(at point: CGPoint) -> Bool {
+        guard lock.withLock({ tracker.composingSince != nil }) else { return true }
+        let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+        return Self.clickCommits(at: point, windows: windows)
+    }
+
+    /// The rule over a window list, front to back.
+    static func clickCommits(at point: CGPoint, windows: [[String: Any]]) -> Bool {
+        for window in windows {
+            guard let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary), rect.contains(point) else { continue }
+            let layer = window[kCGWindowLayer as String] as? Int ?? 0
+            let pid = window[kCGWindowOwnerPID as String] as? pid_t ?? 0
+            return layer == 0 && !isInputMethod(pid)
+        }
+        return true
+    }
+
+    /// An input method's own process (Kotoeri, Pinyin and other input methods' candidate windows).
+    static func isInputMethod(_ pid: pid_t) -> Bool {
+        guard let app = NSRunningApplication(processIdentifier: pid) else { return false }
+        let id = app.bundleIdentifier?.lowercased() ?? ""
+        let path = app.bundleURL?.path ?? ""
+        return id.contains("inputmethod") || path.contains("/Input Methods/")
     }
 
     private func run() {
@@ -155,7 +223,11 @@ final class PersonInput: @unchecked Sendable {
             record(keyCode: nil)
         case .keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown:
             guard event.getIntegerValueField(.eventSourceUserData) != SyntheticKeys.marker else { return }
-            record(keyCode: type == .keyDown ? event.getIntegerValueField(.keyboardEventKeycode) : nil, flags: event.flags)
+            if type == .keyDown {
+                record(keyCode: event.getIntegerValueField(.keyboardEventKeycode), flags: event.flags)
+            } else {
+                record(keyCode: nil, clickCommits: clickCommits(at: event.location))
+            }
         default:
             break
         }
@@ -181,17 +253,25 @@ final class PersonInput: @unchecked Sendable {
 
     /// The selected keyboard input source composes text (an input method mode,
     /// such as Japanese Hiragana or Chinese Pinyin), not a plain layout.
-    static func inputMethodSelected() -> Bool {
+    static func inputMethodSelected() -> Bool { selectedInputMethodID() != nil }
+
+    /// The selected input method mode's ID, or nil for a plain layout or a
+    /// Roman mode of an input method (which types letters directly).
+    static func selectedInputMethodID() -> String? {
         guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
-              let raw = TISGetInputSourceProperty(source, kTISPropertyInputSourceType) else { return false }
+              let raw = TISGetInputSourceProperty(source, kTISPropertyInputSourceType) else { return nil }
         let type = Unmanaged<CFString>.fromOpaque(raw).takeUnretainedValue() as String
-        guard type == (kTISTypeKeyboardInputMode as String) || type == (kTISTypeKeyboardInputMethodModeEnabled as String) else { return false }
-        // A Roman mode of an input method types letters directly.
+        guard type == (kTISTypeKeyboardInputMode as String) || type == (kTISTypeKeyboardInputMethodModeEnabled as String) else { return nil }
+        var id = ""
+        if let idRaw = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) {
+            id = Unmanaged<CFString>.fromOpaque(idRaw).takeUnretainedValue() as String
+        }
         if let modeRaw = TISGetInputSourceProperty(source, kTISPropertyInputModeID) {
             let mode = Unmanaged<CFString>.fromOpaque(modeRaw).takeUnretainedValue() as String
-            if mode.hasSuffix(".Roman") || mode.hasSuffix(".ABC") { return false }
+            if mode.hasSuffix(".Roman") || mode.hasSuffix(".ABC") { return nil }
+            if id.isEmpty { id = mode }
         }
-        return true
+        return id
     }
 }
 
