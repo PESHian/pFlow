@@ -244,7 +244,12 @@ internal static partial class Program
                     var page = await OpenPage(browser, variant, prefix);
                     try {
                         foreach (string temperature in new[] { "cold", "warm" }) {
-                            if (temperature == "warm") { Front(page.Window); await Task.Delay(500); }
+                            // As DiagTakes: Windows may refuse a plain SetForegroundWindow (desktop in front); UI Automation focus then.
+                            for (int i = 0; i < 5 && Native.GetForegroundWindow() != page.Window; i++) {
+                                Front(page.Window); await Task.Delay(300);
+                                if (Native.GetForegroundWindow() != page.Window) { try { AutomationElement.FromHandle(page.Window).SetFocus(); } catch (InvalidOperationException) { } await Task.Delay(500); }
+                            }
+                            if (temperature == "warm") await Task.Delay(300);
                             string before = Title(page.Window), beforeShown = before.Length > page.Name.Length + 3 ? before[(page.Name.Length + 3)..] : "";
                             string take = $"{browser}-{variant}-{temperature}-{open + 1}";
                             var r = await TypeTake(take, audios[turn++ % audios.Length], rig.Whisper, rig.Store, rig.Text, rig.Preview, rig.Capsule, rig.Owner.Handle, rig.Directory, browser == "chrome" ? "chrome" : "msedge");
