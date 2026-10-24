@@ -96,6 +96,21 @@ extension TakeHarness {
             dump("committed")
             result["trackerAfterCommit"] = PersonInput.shared.composing(since: (false, 0), sourceID: PersonInput.selectedInputMethodID())
             _ = selectInputSource("com.apple.keylayout.ABC")
+        case "phwords" where parts.count == 3:
+            // A web editor whose placeholder is the sentence spoken: the paste is not called
+            // landed before it is seen, so the person's clipboard is never put back early
+            // (an early put-back could be what gets pasted).
+            guard let target = await openTarget(parts[1] + "+empty") else { result["error"] = "could not open"; return result }
+            let board = NSPasteboard.general
+            let marker = "Fictional clipboard marker \(UUID().uuidString.prefix(6))"
+            board.clearContents()
+            board.setString(marker, forType: .string)
+            let take = await take(target, mode: parts[2] == "off" ? .off : .typeInApp, label: spec)
+            result["take"] = take
+            let after = take["after"] as? String ?? ""
+            result["markerPasted"] = after.contains(marker)
+            result["clipboardBack"] = board.string(forType: .string) == marker
+            note("phwords \(parts[1]) \(parts[2]): once \(take["landedOnce"] ?? "?"), outcome \(take["outcome"] ?? "?"), markerPasted \(after.contains(marker)), clipboardBack \(board.string(forType: .string) == marker), reasons \(take["reasons"] ?? [])")
         case "keepcopy" where parts.count == 3:
             // "Copy dictation to clipboard" on: the kept copy is the finished text, unmarked.
             guard let target = await openTarget(parts[1]) else { result["error"] = "could not open"; return result }

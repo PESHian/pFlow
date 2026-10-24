@@ -52,6 +52,10 @@ final class TakeTarget {
     var emptyBeforeTake = false
     /// Types fictional text first when the field is empty, so each take starts with real text.
     var seedText = false
+    /// Empties the field and presses Return before each take (the words belong on line 2).
+    var returnBeforeTake = false
+    /// The take always speaks this sentence (an index into `sentences`).
+    var fixedSentence: Int?
 
     init(name: String, app: NSRunningApplication, windowTitle: String) {
         self.name = name
@@ -247,11 +251,13 @@ final class TakeHarness {
         let bundles = ""
         let body: String
         switch kind {
-        case "tiptap":
+        case "tiptap", "tiptapwords":
+            // "tiptapwords": the placeholder is the very sentence the take speaks.
+            let placeholder = kind == "tiptapwords" ? sentences[placeholderSentence].1 : "Write a message"
             body = """
             <script src="\(bundles)tiptap.bundle.js"></script>
             <div id="ed" class="ed"></div>
-            <script>window.addEventListener('load', () => { makeTiptap(document.getElementById('ed')); });</script>
+            <script>window.addEventListener('load', () => { makeTiptap(document.getElementById('ed'), '\(placeholder)'); });</script>
             """
         case "lexical":
             body = """
@@ -279,15 +285,19 @@ final class TakeHarness {
         """
     }
 
-    static let editorKinds: Set<String> = ["tiptap", "lexical", "gmail"]
+    static let editorKinds: Set<String> = ["tiptap", "tiptapwords", "lexical", "gmail"]
+    /// The sentence used as the placeholder of the "tiptapwords" page.
+    static let placeholderSentence = 6
 
     func openTarget(_ name: String) async -> TakeTarget? {
         // "<target>+empty": emptied before each take; "<target>+text": starts with real text.
         if let plus = name.firstIndex(of: "+") {
             guard let target = await openTarget(String(name[..<plus])) else { return nil }
             let mode = name[name.index(after: plus)...]
-            target.emptyBeforeTake = mode == "empty"
+            target.emptyBeforeTake = mode == "empty" || mode == "return"
+            target.returnBeforeTake = mode == "return"
             target.seedText = mode == "text"
+            target.fixedSentence = target.name.hasSuffix("tiptapwords") ? Self.placeholderSentence : nil
             return target
         }
         if let existing = targets[name], !existing.app.isTerminated { return existing }
@@ -461,11 +471,12 @@ final class TakeHarness {
     func take(_ target: TakeTarget, mode: LiveTextMode, label: String,
               keepCopy: Bool = false, beforeBegin: (() async -> Void)? = nil, during: (() async -> Void)? = nil, beforeFinish: (() async -> Void)? = nil,
               afterFinish: (() async -> Void)? = nil) async -> [String: Any] {
-        let (spoken, final) = Self.sentences[takeIndex % Self.sentences.count]
+        let (spoken, final) = Self.sentences[target.fixedSentence ?? (takeIndex % Self.sentences.count)]
         takeIndex += 1
         var record: [String: Any] = ["target": target.name, "mode": mode.rawValue, "label": label]
         guard await activate(target.app) else { record["error"] = "could not bring the app forward"; return record }
         if target.emptyBeforeTake { await emptyField(target) }
+        if target.returnBeforeTake { personKey(36); await pause(0.5) }
         let seedCheck = await target.readBack() ?? ""
         if target.seedText, seedCheck.isEmpty || EditorPlaceholder.only(seedCheck, placeholderText: nil) {
             await caretToEnd(target)
@@ -474,8 +485,9 @@ final class TakeHarness {
         }
         if target.name != "vscode" { await caretToEnd(target) }
         var before = await target.readBack() ?? ""
-        // The Tiptap page draws "Write a message" with CSS while empty; Chromium reads it out.
-        if target.name.hasSuffix("tiptap"), before.trimmingCharacters(in: .whitespacesAndNewlines) == "Write a message" { before = "" }
+        // The Tiptap pages draw their placeholder with CSS while empty; Chromium reads it out.
+        let shownPlaceholder = target.name.hasSuffix("tiptapwords") ? Self.sentences[Self.placeholderSentence].1 : "Write a message"
+        if target.name.contains("tiptap"), before.trimmingCharacters(in: .whitespacesAndNewlines) == shownPlaceholder { before = "" }
         record["frontmostIsTarget"] = frontmost() == target.app.processIdentifier
         let session = HarnessSession(final: final)
         let injector = TextInjector()
@@ -522,6 +534,10 @@ final class TakeHarness {
         record["reason"] = hud.model.reason ?? NSNull()
         record["copyOffered"] = hud.model.copyOffer != nil
         record["landedOnce"] = Self.landedOnce(before: before, after: after, final: final)
+        if target.returnBeforeTake {
+            // The person's line break first, then the words, on line 2.
+            record["wordsOnLine2"] = after.hasPrefix("\n") && after.dropFirst().trimmingCharacters(in: .whitespaces).hasPrefix(final)
+        }
         record["unchanged"] = after == before
         record["beforeTail"] = String(before.suffix(60))
         record["afterTail"] = String(after.suffix(90))

@@ -113,3 +113,9 @@ struct AXErrorName: LogReason {
     let logName: String
     init(_ error: AXError) { logName = "AXError.\(error.rawValue)" }
 }
+
+/// A count, for the log.
+struct LogCount: LogReason {
+    let logName: String
+    init(_ count: Int) { logName = "\(count)" }
+}

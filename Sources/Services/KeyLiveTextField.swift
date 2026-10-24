@@ -160,10 +160,14 @@ final class KeyLiveTextField: LiveTextField {
         }
         guard send(text) else { aborted = true; return false }
         let caret = NSRange(location: range.location + text.utf16.count, length: 0)
-        return Self.until(milliseconds: 800 + 15 * text.utf16.count) {
+        // Keys that went out may have landed whatever the field shows: the
+        // write counts as made (the take is touched), and the session's own
+        // read-back decides whether it is confirmed.
+        _ = Self.until(milliseconds: 800 + 15 * text.utf16.count) {
             let state = reader.state()
             return EditorPlaceholder.same(state.value, expected, startedAsPlaceholder: false) && state.selection == caret
         }
+        return true
     }
 
     /// An empty range only checks the caret. pFlow's own words at the end of a

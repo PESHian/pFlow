@@ -207,9 +207,14 @@ final class TextInjector: TextInjecting {
         originalSelection = targetField.flatMap(selection)
         placeholder = targetField.flatMap { field in
             EditorPlaceholder.start(value: originalValue, placeholderText: attribute(field, "AXPlaceholderValue") as? String,
-                                    markedEmpty: markedEmpty(field))
+                                    markedEmpty: markedEmpty(field), webContent: isWebContent(field))
         }
         targetIsSecure = targetField.map { attribute($0, kAXSubroleAttribute) as? String == kAXSecureTextFieldSubrole } ?? false
+    }
+
+    /// The field is web content: a Chromium or Electron app, or a page's web area (Safari).
+    private func isWebContent(_ field: AXUIElement) -> Bool {
+        targetApp.map { WebAppAccessibility.kind(of: $0) != nil } == true || FocusedElement.inWebArea(field)
     }
 
     /// The editor marks itself empty (EditorPlaceholder.emptyEditorClasses), on
@@ -258,15 +263,15 @@ final class TextInjector: TextInjecting {
         let composition = self.composition, placeholder = self.placeholder
         let keys = { KeyLiveTextField(pid: pid, element: targetField, bundleID: bundleID, composition: composition,
                                       placeholder: placeholder) }
-        let web = WebAppAccessibility.kind(of: targetApp) != nil || FocusedElement.inWebArea(targetField)
+        let web = isWebContent(targetField)
         switch LiveFieldMethod.method(webApp: web, bundleID: bundleID) {
         case .keys:
             ReasonLog.note("live words by typed keys")
             return beginLive(session: session, field: keys())
         case .ranges:
             ReasonLog.note("live words by Accessibility range writes")
-            let start = beginLive(session: session, field: AXLiveTextField(pid: pid, element: targetField, bundleID: bundleID,
-                                                                           placeholder: placeholder))
+            // Direct writes go to the captured caret and never through a placeholder view.
+            let start = beginLive(session: session, field: AXLiveTextField(pid: pid, element: targetField, bundleID: bundleID))
             return start == .preview(.unsupported) ? beginLive(session: session, field: keys()) : start
         }
     }
@@ -437,11 +442,11 @@ final class TextInjector: TextInjecting {
               AXUIElementSetAttributeValue(targetField, kAXSelectedTextRangeAttribute as CFString, rangeValue) == .success else { return .refused }
         let result = AXUIElementSetAttributeValue(targetField, kAXSelectedTextAttribute as CFString, text as CFString)
         var read = attribute(targetField, kAXValueAttribute) as? String
-        for _ in 0..<20 where !EditorPlaceholder.same(read, expected, startedAsPlaceholder: placeholderStart) {
+        for _ in 0..<20 where !EditorPlaceholder.landed(read, expected: expected, start: before, startedAsPlaceholder: placeholderStart) {
             usleep(50_000)
             read = attribute(targetField, kAXValueAttribute) as? String
         }
-        if EditorPlaceholder.same(read, expected, startedAsPlaceholder: placeholderStart) { return .landed }
+        if EditorPlaceholder.landed(read, expected: expected, start: before, startedAsPlaceholder: placeholderStart) { return .landed }
         if read == before { return result == .success ? .notShown : .refused }
         return .changedOtherwise
     }
@@ -484,14 +489,14 @@ final class TextInjector: TextInjecting {
         // goes back. Once a paste is queued, cancellation must not shorten it.
         let reads = keepCopy ? 30 : 20
         for _ in 0..<reads {
-            if EditorPlaceholder.same(read(), expected, startedAsPlaceholder: placeholderStart) { return .pasted }
+            if EditorPlaceholder.landed(read(), expected: expected, start: before, startedAsPlaceholder: placeholderStart) { return .pasted }
             if !PasteboardSnapshot.isOwned(pasteboard, change: change, session: sessionID) { return .unconfirmed }
             await withCheckedContinuation { continuation in
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { continuation.resume() }
             }
         }
         let now = read()
-        if EditorPlaceholder.same(now, expected, startedAsPlaceholder: placeholderStart) { return .pasted }
+        if EditorPlaceholder.landed(now, expected: expected, start: before, startedAsPlaceholder: placeholderStart) { return .pasted }
         // A field that held text (or a placeholder) and still reads exactly as before took nothing.
         if let before, !before.isEmpty, EditorPlaceholder.same(now, before, startedAsPlaceholder: false) {
             ReasonLog.note("the paste went out and the field still reads as before")

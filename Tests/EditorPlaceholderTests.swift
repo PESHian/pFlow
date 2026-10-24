@@ -17,11 +17,13 @@ final class EditorReader: KeyFieldReader {
     let placeholder: EditorPlaceholder.Start?
     var selects: [NSRange] = []
 
-    init(_ raw: String, caret: Int, shape: Shape = .drops, placeholderText: String? = nil, markedEmpty: Bool = false) {
+    init(_ raw: String, caret: Int, shape: Shape = .drops, placeholderText: String? = nil, markedEmpty: Bool = false,
+         webContent: Bool = true) {
         self.raw = raw
         selection = NSRange(location: caret, length: 0)
         self.shape = shape
-        placeholder = EditorPlaceholder.start(value: raw, placeholderText: placeholderText, markedEmpty: markedEmpty)
+        placeholder = EditorPlaceholder.start(value: raw, placeholderText: placeholderText, markedEmpty: markedEmpty,
+                                              webContent: webContent)
         self.placeholderText = placeholder?.text
     }
 
@@ -50,8 +52,115 @@ final class EditorReader: KeyFieldReader {
     func selectionSettable() -> Bool { true }
 }
 
+/// A native AppKit field written with direct Accessibility range writes, as
+/// AXLiveTextField does: the placeholder decision is the production one
+/// (`EditorPlaceholder.start`, not web content), and a direct write is
+/// refused under a placeholder view.
+@MainActor
+final class NativeRangeField: LiveTextField {
+    var raw: String
+    var selection: NSRange
+    let placeholderText: String?
+    let placeholder: EditorPlaceholder.Start?
+
+    init(_ raw: String, caret: Int, placeholderText: String? = nil) {
+        self.raw = raw
+        selection = NSRange(location: caret, length: 0)
+        self.placeholderText = placeholderText
+        placeholder = EditorPlaceholder.start(value: raw, placeholderText: placeholderText, markedEmpty: false, webContent: false)
+    }
+
+    func state() -> LiveFieldState {
+        let state = LiveFieldState(app: 1, element: LiveFieldState.target, secure: false, trusted: true, value: raw, selection: selection)
+        return placeholder == nil ? state : EditorPlaceholder.seen(state, placeholderText: placeholder?.text)
+    }
+    func canWriteRanges() -> Bool { true }
+    func replace(_ range: NSRange, with text: String) -> Bool {
+        guard placeholder == nil else { return false }
+        raw = (raw as NSString).replacingCharacters(in: range, with: text)
+        selection = NSRange(location: range.location + (text as NSString).length, length: 0)
+        return true
+    }
+    func select(_ range: NSRange) -> Bool { selection = range; return true }
+}
+
 @MainActor
 struct EditorPlaceholderTests {
+    private func nativeTake(_ field: NativeRangeField) -> LiveInlineFinal {
+        guard case .success(let session) = LiveInlineSession.begin(id: "n", field: field, settle: {}) else {
+            return .kept(.unsupported)
+        }
+        for words in ["the harbor", "the harbor lights", "the harbor lights glow", "the harbor lights glow softly"] {
+            if let stop = session.update(words) { return .kept(stop) }
+        }
+        return session.finalize("The harbor lights glow softly.")
+    }
+
+    /// The rule applies only in web content; native fields never report a placeholder as their value.
+    @Test func thePlaceholderRuleAppliesOnlyInWebContent() {
+        #expect(EditorPlaceholder.start(value: "\n", placeholderText: nil, markedEmpty: false, webContent: true) != nil)
+        #expect(EditorPlaceholder.start(value: "Reply", placeholderText: "Reply", markedEmpty: false, webContent: true) != nil)
+        #expect(EditorPlaceholder.start(value: "Write a message\n", placeholderText: nil, markedEmpty: true, webContent: true) != nil)
+        #expect(EditorPlaceholder.start(value: "\n", placeholderText: nil, markedEmpty: false, webContent: false) == nil,
+                "a native line break is the person's")
+        #expect(EditorPlaceholder.start(value: "Search", placeholderText: "Search", markedEmpty: false, webContent: false) == nil,
+                "native text equal to the placeholder is typed text")
+        #expect(EditorPlaceholder.start(value: "Dear Sam,", placeholderText: nil, markedEmpty: false, webContent: true) == nil)
+    }
+
+    /// TextEdit: the person pressed Return, then dictates. The words go on line 2, where the caret is.
+    @Test func aNativeLineBreakIsRealTextAndTheWordsGoAtTheCaret() {
+        let field = NativeRangeField("\n", caret: 1)
+        #expect(nativeTake(field) == .applied)
+        #expect(field.raw.hasPrefix("\n"), "the person's line break stays first: \(field.raw.debugDescription)")
+        #expect(field.raw.dropFirst().hasPrefix("The harbor lights glow softly"))
+        #expect(field.raw.components(separatedBy: "harbor").count == 2, "once")
+    }
+
+    /// A native field whose text equals its placeholder: the text is the person's and stays before the words.
+    @Test func nativeTextEqualToThePlaceholderIsKept() {
+        let field = NativeRangeField("Search", caret: 6, placeholderText: "Search")
+        #expect(nativeTake(field) == .applied)
+        #expect(field.raw.hasPrefix("Search "), "\(field.raw.debugDescription)")
+        #expect(field.raw.components(separatedBy: "harbor").count == 2, "once")
+    }
+
+    /// The finished check never calls a read that looks the same as before a landing.
+    @Test func aReadThatLooksAsBeforeIsNeverLanded() {
+        // Placeholder "Reply" and the words "Reply": the field reads "Reply" either way.
+        #expect(!EditorPlaceholder.landed("Reply", expected: "Reply", start: "Reply", startedAsPlaceholder: true))
+        #expect(!EditorPlaceholder.landed("Reply\n", expected: "Reply", start: "Reply\n", startedAsPlaceholder: true))
+        // A real change: Chromium's read-out placeholder had a line break, the words do not.
+        #expect(EditorPlaceholder.landed("Reply", expected: "Reply", start: "Reply\n", startedAsPlaceholder: true))
+        // The words a prefix of the placeholder, and the placeholder a prefix of the words.
+        #expect(!EditorPlaceholder.landed("Reply", expected: "Rep", start: "Reply", startedAsPlaceholder: true))
+        #expect(EditorPlaceholder.landed("Rep", expected: "Rep", start: "Reply", startedAsPlaceholder: true))
+        #expect(!EditorPlaceholder.landed("Reply", expected: "Reply now", start: "Reply", startedAsPlaceholder: true))
+        #expect(EditorPlaceholder.landed("Reply now", expected: "Reply now", start: "Reply", startedAsPlaceholder: true))
+        // Native: a selected word replaced by the same word cannot be seen to land.
+        #expect(!EditorPlaceholder.landed("Dear Reply,", expected: "Dear Reply,", start: "Dear Reply,", startedAsPlaceholder: false))
+        #expect(EditorPlaceholder.landed("Dear Sam, Reply", expected: "Dear Sam, Reply", start: "Dear Sam,", startedAsPlaceholder: false))
+    }
+
+    /// Web placeholder "Reply" and the spoken word "Reply": the typed key lands
+    /// and the field reads as before. Typing stops as unconfirmed, the take counts
+    /// as typed (no second copy by paste), and the card offers the text.
+    @Test func webWordsEqualToThePlaceholderAreNeverConfirmedAndNeverPastedAgain() {
+        let reader = EditorReader("Reply", caret: 0, shape: .drops, placeholderText: "Reply")
+        let watch = PersonInput(isTrusted: { false })
+        watch.overrideWatching(true)
+        let field = KeyLiveTextField(reader: reader, pid: 1, facts: { _ in InsertionFacts() }, watch: watch,
+                                     inputMethod: { false }, send: { reader.type($0); return true })
+        guard case .success(let session) = LiveInlineSession.begin(id: "r", field: field, settle: {}) else {
+            Issue.record("begin refused"); return
+        }
+        _ = session.update("Reply")
+        _ = session.update("Reply")
+        #expect(reader.raw == "Reply", "the key went out and landed")
+        #expect(session.touched, "the take counts as typed")
+        guard case .kept = session.finalize("Reply") else { Issue.record("not kept: a second copy would be pasted"); return }
+    }
+
     /// One take of typed live words, then the end: pFlow's own words selected for the checked paste.
     private func take(_ reader: EditorReader) -> LiveInlineFinal {
         let watch = PersonInput(isTrusted: { false })
@@ -118,7 +227,7 @@ struct EditorPlaceholderTests {
         let reader = EditorReader("Write a message\n", caret: 0, shape: .drops, markedEmpty: true)
         guard case .replace = take(reader) else { Issue.record("typing stopped"); return }
         #expect(reader.raw == "the harbor lights glow")
-        #expect(EditorPlaceholder.start(value: "Write a message\n", placeholderText: nil, markedEmpty: false) == nil,
+        #expect(EditorPlaceholder.start(value: "Write a message\n", placeholderText: nil, markedEmpty: false, webContent: true) == nil,
                 "unmarked text is real text")
     }
 

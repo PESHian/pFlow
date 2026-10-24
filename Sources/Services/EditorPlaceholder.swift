@@ -8,6 +8,21 @@ import Foundation
 /// began is treated as empty: placeholder characters at either end of what
 /// it reads are set aside, and pFlow's words must then be everything in it,
 /// exactly once. A field that held real text keeps the exact check.
+///
+/// Where the rule applies: only in web content (Chromium, Electron and WebKit
+/// pages), where browsers have been seen reporting an empty editor's
+/// placeholder as its value (T3 Code and Gmail-like bodies read "\n", Tiptap's
+/// CSS placeholder is read out as text). A native AppKit field never puts its
+/// placeholder in its value: there a lone "\n" is a line the person made and
+/// a value equal to the placeholder is text the person typed.
+///
+/// The rule never changes where pFlow writes: keys go to the caret, the
+/// paste goes to the caret, and direct Accessibility writes (native fields
+/// only) never see a placeholder view.
+///
+/// A write is never called landed when the field reads exactly as it did
+/// before (EditorPlaceholder.landed): a placeholder equal to the words, or a
+/// selection replaced by the same text, cannot show that anything went in.
 enum EditorPlaceholder {
     /// Characters an empty editor shows in place of nothing.
     static func isResidue(_ scalar: Unicode.Scalar) -> Bool {
@@ -28,7 +43,8 @@ enum EditorPlaceholder {
     /// what the field reports as its placeholder; `markedEmpty` is true when
     /// the editor marks itself empty (`emptyEditorClasses`), in which case the
     /// whole value it shows is its placeholder.
-    static func start(value: String?, placeholderText: String?, markedEmpty: Bool) -> Start? {
+    static func start(value: String?, placeholderText: String?, markedEmpty: Bool, webContent: Bool) -> Start? {
+        guard webContent else { return nil }
         let text = placeholderText.flatMap { $0.isEmpty ? nil : $0 }
             ?? (markedEmpty ? value?.trimmingCharacters(in: .whitespacesAndNewlines) : nil)
         return only(value, placeholderText: text) ? Start(text: text) : nil
@@ -100,6 +116,15 @@ enum EditorPlaceholder {
         guard startedAsPlaceholder else { return false }
         return plain(view(read, selection: nil, placeholderText: nil).value)
             == plain(view(expected, selection: nil, placeholderText: nil).value)
+    }
+
+    /// A write landed: the field shows exactly `expected` (as `same`) and does
+    /// not read exactly as it did when the take began (`start`). A read that
+    /// would look the same whether or not pFlow's text went in proves nothing.
+    static func landed(_ read: String?, expected: String?, start: String?, startedAsPlaceholder: Bool) -> Bool {
+        guard same(read, expected, startedAsPlaceholder: startedAsPlaceholder) else { return false }
+        if let read, let start, plain(read) == plain(start) { return false }
+        return true
     }
 
     static func plain(_ text: String) -> String { text.replacingOccurrences(of: "\u{00A0}", with: " ") }

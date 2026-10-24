@@ -293,7 +293,8 @@ final class AXLiveTextField: LiveTextField {
     }
 
     func replace(_ range: NSRange, with text: String) -> Bool {
-        guard select(range) else { return false }
+        // A direct write goes to the field's own positions only, never through a placeholder view.
+        guard placeholder == nil, select(range) else { return false }
         return AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success
     }
 }

@@ -132,7 +132,7 @@ enum InstalledCopies {
         guard let bundleID = Bundle.main.bundleIdentifier, actsForInstall(running) else { return }
         let found = older(than: running, among: installed(bundleID: bundleID))
         guard !found.isEmpty else { return }
-        NSLog("pFlow: older copies installed: \(found.map { "\($0.version) at \($0.url.path)" })")
+        ReasonLog.note("older copies installed:", LogCount(found.count))
         _ = pointLoginItemAtThisCopy(status: SMAppService.mainApp.status,
                                      register: { try SMAppService.mainApp.register() },
                                      refresh: { login.refresh() })
