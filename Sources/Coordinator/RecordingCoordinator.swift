@@ -123,6 +123,7 @@ final class RecordingCoordinator {
             do { try await self.session.start(take: take, live: self.takeLiveTextMode.showsPreview) }
             catch {
                 NSLog("pFlow: failed to start recording: \(error)")
+                ReasonLog.note("take ended: recording could not start")
                 self.transcript.cancel()
                 self.stopAwaitingTyping()
                 self.leaveLiveTyping()
