@@ -127,7 +127,7 @@ final class LiveFakeInjector: TextInjecting {
     }
     func beginLive(session: String) -> LiveInlineStart {
         if fieldReadyAfterRetries != nil { return .waiting }
-        return live.begin(id: session, field: field)
+        return live.begin(id: session, field: liveField ?? field)
     }
     func retryLive(session: String) -> LiveInlineStart {
         retries += 1
@@ -142,6 +142,23 @@ final class LiveFakeInjector: TextInjecting {
     func typedLive(session: String) -> Bool { live.typed(session: session) }
     func finalizeLive(session: String, text: String) -> LiveInlineFinal { live.finalize(session: session, text: text) }
     func cancelLive(session: String) -> LiveInlineCancel { live.cancel(session: session) }
+    /// The end replace: what it was given, and what it answers.
+    var overSelection: [(String, OwnedWords)] = []
+    var overSelectionOutcome: InjectionOutcome?
+    func insertOverSelection(_ text: String, own: OwnedWords, formatted: NSAttributedString?) async -> InjectionOutcome {
+        overSelection.append((text, own))
+        if let overSelectionOutcome {
+            if case .savedToHistory = overSelectionOutcome { own.collapse() }
+            return overSelectionOutcome
+        }
+        // The paste goes over the selected words, as the real checked paste would.
+        if let keys = keyField { keys.paste(text, over: own.range) }
+        return .pasted
+    }
+    /// Set when the field is a typed-keys one, so the end replace lands in it.
+    var keyField: SimulatedKeyField?
+    /// Any other live field in place of `field`.
+    var liveField: LiveTextField?
 }
 
 @MainActor

@@ -423,6 +423,11 @@ final class RecordingCoordinator {
                 switch injector.finalizeLive(session: take, text: text) {
                 case .applied: outcome = .pasted
                 case .notTyped: outcome = await injector.deliver(text, formatted: formattedText)
+                case .replace(let own):
+                    // pFlow's own typed words are selected: the finished text goes over them, or,
+                    // if anything is in doubt, they stay and the card offers the finished text.
+                    outcome = await injector.insertOverSelection(text, own: own, formatted: formattedText)
+                    if case .savedToHistory = outcome { typingStopped = true }
                 case .kept(let stop):
                     outcome = .savedToHistory(.typingStopped(stop))
                     typingStopped = true

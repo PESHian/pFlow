@@ -389,17 +389,41 @@ struct LiveTextTests {
         #expect(hud.model.reason == nil && hud.model.copyOffer == nil)
     }
 
+    /// The capsule is Superwhisper's measured pill (58x30 pt) while a take
+    /// records and finishes; a status after the take keeps the height and
+    /// widens only as far as its words need, never clipping them.
+    @Test func capsuleIsThePillSizeWhileRecordingAndFinishing() throws {
+        #expect(RecordingHUDView.capsuleSize == CGSize(width: 58, height: 30))
+        for phase in [HUDPhase.listening, .confirmCancel, .transcribing, .cleaning] {
+            for style in WaveformStyle.allCases {
+                let model = HUDModel()
+                model.phase = phase
+                model.waveformStyle = style
+                model.levels = (0..<HUDModel.waveformSampleCount).map { Float($0 % 5) / 5 }
+                let host = NSHostingView(rootView: RecordingHUDView(model: model))
+                #expect(host.fittingSize == NSSize(width: 58, height: 30), "\(phase) \(style): \(host.fittingSize)")
+            }
+        }
+        for phase in [HUDPhase.copied, .pasteUnconfirmed, .savedToHistory, .failed, .liveTextKept, .liveTextKeptTyped,
+                      .passwordField, .typingStopped, .typedTextLeft] {
+            let model = HUDModel()
+            model.phase = phase
+            let host = NSHostingView(rootView: RecordingHUDView(model: model))
+            #expect(host.fittingSize.height == 30, "\(phase): \(host.fittingSize)")
+            #expect(host.fittingSize.width >= 58 && host.fittingSize.width <= 120, "\(phase): \(host.fittingSize)")
+        }
+    }
+
     /// The panel is measured again when the card's content changes after it
     /// is on screen: the whole text and the Grant row make it taller, and it
-    /// stays inside the screen. The capsule keeps 96x26 in every phase.
+    /// stays inside the screen. A status in the capsule keeps its height.
     @Test func panelGrowsWithTheCopyCardAndStaysOnScreen() throws {
         let hud = HUDController(pasteboard: NSPasteboard(name: .init("pflow.panel.tests.\(UUID().uuidString)")))
         hud.show(device: nil, livePreview: false)
         let panel = try #require(hud.panelForTesting)
         hud.setPhase(.copied)
-        panel.reposition()
-        #expect(panel.frame.size == NSSize(width: RecordingHUDView.capsuleSize.width, height: RecordingHUDView.capsuleSize.height),
-                "the capsule is one size in every phase: \(panel.frame.size)")
+        #expect(panel.frame.height == RecordingHUDView.capsuleSize.height && panel.frame.width > RecordingHUDView.capsuleSize.width,
+                "a status keeps the capsule's height and is measured again for its words: \(panel.frame.size)")
         hud.setLivePreview(true)
         hud.setPhase(.savedToHistory)
         let card = panel.frame.height

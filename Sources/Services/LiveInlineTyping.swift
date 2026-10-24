@@ -13,6 +13,28 @@ protocol LiveTextField: AnyObject {
     /// text-range operation, never with keys or the clipboard.
     func replace(_ range: NSRange, with text: String) -> Bool
     func select(_ range: NSRange) -> Bool
+    /// Typed keys (KeyLiveTextField): while words come pFlow only adds
+    /// characters at the caret after its own words, and a revised word ends
+    /// live typing. At the end pFlow's own words are selected (no keys) and the
+    /// finished text is pasted over them the checked way.
+    var appendOnly: Bool { get }
+    /// False while a write cannot be made safely right now (a key the person
+    /// holds would change typed characters): the update is skipped.
+    var readyToWrite: Bool { get }
+    /// Why the last refused write sent nothing, when the field knows.
+    var refusal: InsertionBlock? { get }
+    /// Ends a selection pFlow made, without a key.
+    func collapse()
+    /// The person pressed a key or clicked since pFlow selected its words.
+    func personActedSinceSelect() -> Bool
+}
+
+extension LiveTextField {
+    var appendOnly: Bool { false }
+    var readyToWrite: Bool { true }
+    var refusal: InsertionBlock? { nil }
+    func collapse() {}
+    func personActedSinceSelect() -> Bool { true }
 }
 
 /// How a take's live typing turned out.
@@ -29,6 +51,9 @@ enum LiveInlineFinal: Equatable {
     case applied
     /// Nothing was typed, so the finished text can be delivered the normal way.
     case notTyped
+    /// pFlow's own typed words are selected; the finished text goes over them
+    /// through the checked paste (`TextInjecting.insertOverSelection`).
+    case replace(OwnedWords)
     /// pFlow could not safely put the finished text in; it stays in History.
     case kept(LiveInlineOwnership.Stop)
 }
@@ -78,21 +103,58 @@ final class LiveInlineSession {
     func update(_ transcript: String) -> LiveInlineOwnership.Stop? {
         // Once typing has stopped for the take, the field is not read again.
         guard ownership.stopped == nil else { return nil }
-        return perform(ownership.update(transcript: transcript, observed: field.state()))
+        // A key the person holds now: no read, no write; the next update tries again.
+        guard field.readyToWrite else { return nil }
+        var step = ownership.update(transcript: transcript, observed: field.state())
+        // Append only: a write that would change pFlow's own typed words, move
+        // the selection or add a line break ends live typing; no key is sent.
+        if field.appendOnly, case .write(let write) = step,
+           write.range.length > 0 || write.select != nil || write.text.contains(where: \.isNewline) {
+            step = ownership.halt(.revised)
+        }
+        return perform(step)
     }
 
     func finalize(_ text: String) -> LiveInlineFinal {
         // Nothing of pFlow's is in the field, so the finished text goes in
         // exactly as in Preview mode, whatever stopped the typing.
         if confirmNothingTyped() { return .notTyped }
+        if field.appendOnly { return finalizeOwnWords(text) }
         if let stop = perform(ownership.finalize(text: text, observed: field.state())) { return .kept(stop) }
         return .applied
     }
 
+    /// Typed keys: pFlow's own words, exactly as it left them, are selected
+    /// without a key and read back for the finished text to go over them.
+    private func finalizeOwnWords(_ text: String) -> LiveInlineFinal {
+        let now = field.state()
+        guard let span = ownership.ownSpan(now) else {
+            let stopped = ownership.stopped.flatMap { $0 == .revised ? nil : $0 }
+            return .kept(stopped ?? ownership.check(now) ?? .uncertain)
+        }
+        if ownership.finished(text) { return .applied }
+        guard field.select(span) else {
+            field.collapse()
+            return .kept(.uncertain)
+        }
+        let words = ((now.value ?? "") as NSString).substring(with: span)
+        let field = self.field
+        return .replace(OwnedWords(range: span, text: words,
+                                   personActed: { field.personActedSinceSelect() },
+                                   collapse: { field.collapse() }))
+    }
+
     func cancel() -> LiveInlineCancel {
         if confirmNothingTyped() { return .nothingTyped }
+        // Append only: what pFlow typed is never taken back out with keys.
+        if field.appendOnly { return .left(.revised) }
         if let stop = perform(ownership.cancel(observed: field.state())) { return .left(stop) }
         return .removed
+    }
+
+    private func stop(_ step: LiveInlineOwnership.Step) -> LiveInlineOwnership.Stop? {
+        if case .stopped(let stop) = step { return stop }
+        return nil
     }
 
     private func perform(_ step: LiveInlineOwnership.Step) -> LiveInlineOwnership.Stop? {
@@ -101,6 +163,9 @@ final class LiveInlineSession {
         case .stopped(let stop): return stop
         case .write(let write):
             var accepted = field.replace(write.range, with: write.text)
+            // The field refused before sending anything (the guard): typing
+            // stops for that reason, and nothing of this write is in the field.
+            if !accepted, let refusal = field.refusal { return stop(ownership.halt(LiveInlineOwnership.Stop(refusal))) }
             if accepted, let select = write.select { accepted = field.select(select) }
             var state = field.state()
             // Chromium and Electron apply an accepted write a moment later:
@@ -134,10 +199,16 @@ final class AXLiveTextField: LiveTextField {
     private let pid: pid_t
     private let element: AXUIElement
     private let application: AXUIElement
+    /// Browsers show a typed space at a line end as a no-break space: read as a space.
+    private let plainSpaces: Bool
 
-    init(pid: pid_t, element: AXUIElement) {
+    private let bundleID: String?
+
+    init(pid: pid_t, element: AXUIElement, plainSpaces: Bool = false, bundleID: String? = nil) {
         self.pid = pid
         self.element = element
+        self.plainSpaces = plainSpaces
+        self.bundleID = bundleID
         application = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(application, 0.3)
         AXUIElementSetMessagingTimeout(element, 0.3)
@@ -151,7 +222,7 @@ final class AXLiveTextField: LiveTextField {
     func state() -> LiveFieldState {
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? -1
         var same = false
-        if let focused = attribute(application, kAXFocusedUIElementAttribute), CFGetTypeID(focused) == AXUIElementGetTypeID() {
+        if let focused = FocusedElement.of(pid: pid, bundleID: bundleID) {
             same = CFEqual(focused, element)
         }
         let secure = SecureInput.isEnabled
@@ -165,7 +236,8 @@ final class AXLiveTextField: LiveTextField {
     private func boundedValue() -> String? {
         if let count = attribute(element, kAXNumberOfCharactersAttribute) as? Int,
            count > LiveInlineOwnership.maxFieldLength { return nil }
-        return attribute(element, kAXValueAttribute) as? String
+        let value = attribute(element, kAXValueAttribute) as? String
+        return plainSpaces ? value?.replacingOccurrences(of: "\u{00A0}", with: " ") : value
     }
 
     /// The one selection, or nil when there is none or more than one (several
@@ -187,6 +259,9 @@ final class AXLiveTextField: LiveTextField {
     func canWriteRanges() -> Bool {
         settable(kAXSelectedTextRangeAttribute) && settable(kAXSelectedTextAttribute)
     }
+
+    /// pFlow can select a range here (the end replace of typed keys).
+    func selectionSettable() -> Bool { settable(kAXSelectedTextRangeAttribute) }
 
     func select(_ range: NSRange) -> Bool {
         var cf = CFRange(location: range.location, length: range.length)
@@ -217,10 +292,10 @@ extension LiveInlineOwnership.Stop {
         case .permission: return "Accessibility is off, so the finished text was not put in."
         case .app: return "You switched apps, so the finished text was not put in."
         case .focus: return "You moved to another field, so the finished text was not put in."
-        case .secure: return "That is a password field, so the finished text was not put in."
+        case .secure: return "A password field or secure typing was on, so the finished text was not put in."
         case .text: return "The text in the field changed, so the finished text was not put in."
         case .caret: return "The cursor moved, so the finished text was not put in."
-        case .unsupported, .uncertain: return "pFlow could not check this field, so the finished text was not put in."
+        case .unsupported, .uncertain, .revised: return "pFlow could not check this field, so the finished text was not put in."
         }
     }
 
@@ -229,6 +304,7 @@ extension LiveInlineOwnership.Stop {
     var stoppedNote: String {
         switch self {
         case .unsupported, .uncertain: return "Stopped: couldn't check"
+        case .revised: return "Stopped: words changed"
         case .permission: return "Stopped: no permission"
         case .app: return "Stopped: app changed"
         case .focus: return "Stopped: field changed"
@@ -281,5 +357,18 @@ struct LiveInlineSlot {
         guard let current, current.id == session else { return .nothingTyped }
         self.current = nil
         return current.cancel()
+    }
+}
+
+extension LiveInlineOwnership.Stop {
+    /// The stop for a guard refusal before any key went out.
+    init(_ block: InsertionBlock) {
+        switch block {
+        case .appChanged: self = .app
+        case .fieldChanged: self = .focus
+        case .passwordField, .secureInput: self = .secure
+        case .accessibilityOff: self = .permission
+        default: self = .uncertain
+        }
     }
 }

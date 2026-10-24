@@ -141,6 +141,9 @@ final class PermissionsManager {
         microphone = Self.map(AVCaptureDevice.authorizationStatus(for: .audio))
         speech = Self.map(SFSpeechRecognizer.authorizationStatus())
         accessibility = AXIsProcessTrusted()
+        // From launch on, so a key the person pressed before a take (an
+        // unfinished Japanese composition) is known when the take ends.
+        if accessibility { PersonInput.shared.start() }
 
         Self.wakeSystemEvents()
         let latestAutomation = Self.automationStatus(prompt: false)

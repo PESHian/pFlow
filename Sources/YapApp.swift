@@ -24,6 +24,10 @@ enum YapMain {
             InlineSelfTest.start(arguments: CommandLine.arguments)
             return
         }
+        if CommandLine.arguments.contains(TrustedTakes.flag) {
+            TrustedTakes.start(arguments: CommandLine.arguments)
+            return
+        }
         #endif
         if RuntimeMode.isTesting {
             let app = NSApplication.shared

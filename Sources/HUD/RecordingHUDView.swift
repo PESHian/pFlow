@@ -11,13 +11,19 @@ struct RecordingHUDView: View {
         }
     }
 
-    /// The recording capsule, the same control in every phase and for every
-    /// Live text choice: solid black (no material, no glass, no blur, so
-    /// Reduce Transparency changes nothing), a hairline outline in the
-    /// person's colour palette, the waveform or a short status inside. One
-    /// size for the whole take.
-    static let capsuleSize = CGSize(width: 96, height: 26)
+    /// The recording capsule, the same control for every Live text choice:
+    /// Superwhisper's pill size (58x30 pt, measured on macOS 27) and its
+    /// material, dark Liquid Glass (an opaque dark fill with Reduce
+    /// Transparency), with a hairline outline in the person's colour palette
+    /// and the waveform or the spinner inside. One size while the take
+    /// records and finishes; a short status after the take widens it only
+    /// as far as its words need.
+    static let capsuleSize = CGSize(width: 58, height: 30)
     static let capsuleOutlineOpacity = 0.65
+    /// The capsule's waveform, inside its rounded ends.
+    static let capsuleWaveform = CGSize(width: 34, height: 16)
+    /// Samples the capsule's waveform shows: about one bar per two points.
+    static let capsuleSamples = 14
 
     /// The Copy card shows all of the text up to this many lines, then scrolls.
     static let wholeTextLines = 10
@@ -35,14 +41,12 @@ struct RecordingHUDView: View {
     private var compact: some View {
         status
         .foregroundStyle(.white.opacity(0.9))
-        .padding(.horizontal, Theme.s2)
-        .frame(width: Self.capsuleSize.width, height: Self.capsuleSize.height)
+        .padding(.horizontal, Theme.s2 + 2)
+        // The waveform and the dots fit the pill; a status widens it for its words.
+        .frame(minWidth: Self.capsuleSize.width, minHeight: Self.capsuleSize.height, maxHeight: Self.capsuleSize.height)
         .contentShape(Capsule())
-        .background {
-            Capsule().fill(Color.black)
-                .overlay(Capsule().strokeBorder(model.palette.gradient.opacity(Self.capsuleOutlineOpacity), lineWidth: 1))
-        }
-        // Everything inside draws for a black background, the spinner included.
+        .background { CapsuleBackground(palette: model.palette) }
+        // Everything inside draws for a dark background, the spinner included.
         .environment(\.colorScheme, .dark)
         .preferredColorScheme(.dark)
         .accessibilityLabel(title)
@@ -51,8 +55,9 @@ struct RecordingHUDView: View {
     private var status: some View {
         Group {
             if isRecordingPhase {
-                RecordingWaveform(levels: Array(model.levels.suffix(25)),
-                                  style: model.waveformStyle, compact: true, palette: model.palette)
+                RecordingWaveform(levels: Array(model.levels.suffix(Self.capsuleSamples)),
+                                  style: model.waveformStyle, compact: true, palette: model.palette,
+                                  size: Self.capsuleWaveform)
             } else if model.phase == .pasteUnconfirmed {
                 capsuleLabel("Check paste", "info.circle")
                     .help("The app could not verify the paste. Check your text before pasting again.")
@@ -79,7 +84,9 @@ struct RecordingHUDView: View {
                 capsuleLabel("Words stay", "info.circle")
                     .help(title)
             } else {
-                ProgressView().controlSize(.small).tint(Theme.accent)
+                // The system spinner draws for the window's light or dark
+                // look, which is dark on the capsule's dark glass.
+                WorkingDots(palette: model.palette)
             }
         }
     }
@@ -119,7 +126,7 @@ struct RecordingHUDView: View {
             return "Speech recognition stopped early. The words already typed stay in your app, and the words so far are saved in History."
         case .passwordField: return "Dictation is off in password fields."
         case .typingStopped: return "Typing stopped, so the finished text was not put in. Copy it here; it is also in History."
-        case .typedTextLeft: return "Cancelled. The app changed, so words pFlow already typed are still there."
+        case .typedTextLeft: return "Cancelled. Words pFlow already typed are still in the app."
         }
     }
 }
@@ -453,15 +460,17 @@ struct RecordingWaveform: View {
     var compact = false
     /// The palette read when the take started; nil draws the app's current one.
     var palette: ThemePalette?
+    /// Overrides the drawing size (the capsule's is smaller than the card's).
+    var size: CGSize?
 
     var body: some View {
         switch style {
         case .wave:
-            Waveform(levels: levels, compact: compact, gradient: palette?.gradient ?? Theme.gradient)
+            Waveform(levels: levels, compact: compact, gradient: palette?.gradient ?? Theme.gradient, size: size)
         case .lines:
             WaveformLines(levels: AudioLevel.waveformLevels(levels))
                 .fill(palette?.gradient ?? Theme.gradient)
-                .frame(width: compact ? 84 : 100, height: compact ? 16 : 20)
+                .frame(width: size?.width ?? (compact ? 84 : 100), height: size?.height ?? (compact ? 16 : 20))
                 .shadow(color: .black.opacity(compact ? 0 : 0.25), radius: 1.5, x: 0, y: 1)
         }
     }
@@ -490,13 +499,14 @@ private struct Waveform: View {
     let levels: [Float]
     var compact = false
     var gradient: LinearGradient = Theme.gradient
+    var size: CGSize?
 
     var body: some View {
         let outline = WaveformOutline(levels: AudioLevel.waveformLevels(levels))
         outline
             .fill(gradient)
             .overlay(outline.stroke(.black.opacity(compact ? 0 : 0.5), lineWidth: 0.75))
-            .frame(width: compact ? 84 : 100, height: compact ? 16 : 20)
+            .frame(width: size?.width ?? (compact ? 84 : 100), height: size?.height ?? (compact ? 16 : 20))
             .shadow(color: .black.opacity(compact ? 0 : 0.25), radius: 1.5, x: 0, y: 1)
     }
 }
@@ -528,5 +538,56 @@ private struct WaveformOutline: Shape {
                                          y: (previous.y + current.y) / 2), control: previous)
         }
         if let last = points.last { path.addLine(to: last) }
+    }
+}
+
+/// The capsule's material: dark Liquid Glass, as Superwhisper's pill uses
+/// (SwiftUI glassEffect, regular), tinted so the white waveform and labels
+/// read over any background; with Reduce Transparency an opaque dark fill.
+/// The outline is the person's palette.
+private struct CapsuleBackground: View {
+    let palette: ThemePalette
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    /// Superwhisper's pill reads #2B2B2A over a light desktop.
+    static let solidFill = Color(red: 0x2B / 255, green: 0x2B / 255, blue: 0x2A / 255)
+    static let glassTint = Color.black.opacity(0.72)
+
+    var body: some View {
+        let shape = Capsule()
+        Group {
+            if reduceTransparency {
+                shape.fill(Self.solidFill)
+            } else {
+                // Glass alone follows the window's light appearance; the dark
+                // layer over it gives the pill's near-black read, the glass
+                // its blur and edge light.
+                Color.clear.glassEffect(.regular, in: shape)
+                    .overlay(shape.fill(Self.glassTint))
+            }
+        }
+        .overlay(shape.strokeBorder(palette.gradient.opacity(RecordingHUDView.capsuleOutlineOpacity), lineWidth: 1))
+    }
+}
+
+/// The capsule's "still working" sign: three dots in the person's palette,
+/// one brighter at a time. With Reduce Motion they stay still.
+private struct WorkingDots: View {
+    let palette: ThemePalette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 0.12, paused: reduceMotion)) { context in
+            let step = reduceMotion ? -1 : Int(context.date.timeIntervalSinceReferenceDate / 0.3) % 3
+            HStack(spacing: 4) {
+                ForEach(0..<3, id: \.self) { index in
+                    Circle()
+                        .fill(palette.gradient)
+                        .frame(width: 5, height: 5)
+                        .opacity(step < 0 || step == index ? 1 : 0.5)
+                }
+            }
+        }
+        .accessibilityHidden(true)
     }
 }

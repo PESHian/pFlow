@@ -93,6 +93,8 @@ final class HUDController: HUDControlling {
 
     func setPhase(_ phase: HUDPhase) {
         model.phase = phase
+        // A status after the take may be wider than the recording capsule.
+        if !model.livePreview, let panel, panel.isVisible { panel.reposition() }
     }
 
     func setLevel(_ level: Float) {
