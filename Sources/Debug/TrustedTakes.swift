@@ -48,6 +48,8 @@ final class TakeTarget {
     /// What the field (or the saved document) holds now.
     var readBack: () async -> String? = { nil }
     var windowTitle: String
+    /// Empties the field before each take (a fresh message each time).
+    var emptyBeforeTake = false
 
     init(name: String, app: NSRunningApplication, windowTitle: String) {
         self.name = name
@@ -189,6 +191,14 @@ final class TakeHarness {
         for down in [true, false] { CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down)?.post(tap: .cghidEventTap) }
     }
 
+    /// Deletes what the field holds with Backspace (no modifier keys), before a take starts.
+    func emptyField(_ target: TakeTarget) async {
+        await caretToEnd(target)
+        let count = (await target.readBack() ?? "").count
+        for _ in 0..<(count + 2) { personKey(51); try? await Task.sleep(nanoseconds: 15_000_000) }
+        await pause(0.6)
+    }
+
     func center(of element: AXUIElement) -> CGPoint? {
         guard let p = attribute(element, kAXPositionAttribute), let s = attribute(element, kAXSizeAttribute) else { return nil }
         var point = CGPoint.zero, size = CGSize.zero
@@ -263,6 +273,14 @@ final class TakeHarness {
             WebAppAccessibility.enable(app)
             await pause(1.5)
             made = TakeTarget(name: name, app: app, windowTitle: pageTitle)
+        case "t3", "t3empty":
+            // T3 Code (Electron): its composer, a new thread without a project.
+            guard let app = await open([], bundle: "com.t3tools.t3code") else { return nil }
+            _ = await waitFor(20) { title(app.processIdentifier) != nil }
+            WebAppAccessibility.enable(app)
+            await pause(3)
+            made = TakeTarget(name: name, app: app, windowTitle: title(app.processIdentifier) ?? "T3 Code")
+            made?.emptyBeforeTake = name == "t3empty"
         case "terminal":
             guard let app = await open([], bundle: "com.apple.Terminal") else { return nil }
             await pause(3)
@@ -372,6 +390,7 @@ final class TakeHarness {
         takeIndex += 1
         var record: [String: Any] = ["target": target.name, "mode": mode.rawValue, "label": label]
         guard await activate(target.app) else { record["error"] = "could not bring the app forward"; return record }
+        if target.emptyBeforeTake { await emptyField(target) }
         if target.name != "vscode" { await caretToEnd(target) }
         let before = await target.readBack() ?? ""
         record["frontmostIsTarget"] = frontmost() == target.app.processIdentifier
@@ -442,6 +461,8 @@ final class TakeHarness {
             return ["spec": spec, "takes": takes, "exactlyOnce": once, "withLiveWords": live, "count": count]
         }
         if parts.count == 2, parts[0] == "probe" { return await probe(parts[1]) }
+        if parts.count == 2, parts[0] == "im" { return await imSpike(parts[1]) }
+        if parts.count == 2, parts[0] == "imside" { return await imSide(parts[1]) }
         if parts.first == "capsules" { return await capsules(hold: Double(parts.count > 1 ? parts[1] : "4") ?? 4) }
         if parts.first == "cards" { return await cards(hold: Double(parts.count > 1 ? parts[1] : "4") ?? 4) }
         return await guardCheck(spec)
