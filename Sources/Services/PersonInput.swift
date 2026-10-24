@@ -24,6 +24,8 @@ final class PersonInput: @unchecked Sendable {
     var healthForTesting: (() -> Bool)?
     /// Tests: how often the watch was stopped.
     private(set) var stops = 0
+    /// Tests: how often a click's window was looked up.
+    private(set) var windowLookups = 0
     /// What `start` and the trust check ask; tests make it false so no tap is made.
     private let isTrusted: () -> Bool
     /// The last trust value `follow` was given (tests read it).
@@ -152,8 +154,9 @@ final class PersonInput: @unchecked Sendable {
     /// commit, which errs to the safe side. A click on a normal window
     /// commits (browsers commit on blur and click). Looked up only while a
     /// composition is open.
-    private func clickCommits(at point: CGPoint) -> Bool {
-        guard lock.withLock({ !tracker.keys.isEmpty }) else { return true }
+    func clickCommits(at point: CGPoint) -> Bool {
+        guard lock.withLock({ tracker.mayBeComposing }) else { return true }
+        lock.withLock { windowLookups += 1 }
         let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
         return Self.clickCommits(at: point, windows: windows)
     }

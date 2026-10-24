@@ -155,7 +155,7 @@ struct InsertionGuardTests {
     }
 
     @Test func chineseCommitsOnSpaceDigitsPunctuationReturnEscape() {
-        for commit: Int64 in [Self.space, 18, 25, 43, 47, Self.returnKey, Self.escape] {
+        for commit: Int64 in [Self.space, 18, 25, Self.returnKey, Self.escape] {
             var tracker = typed([45, 34, 4, 0, 31])   // n i h a o
             #expect(tracker.snapshot(at: Self.s, sourceID: Self.P))
             tracker.key(commit, shortcut: false, at: Self.s)
@@ -171,17 +171,34 @@ struct InsertionGuardTests {
         }
     }
 
-    @Test func vietnameseHindiRimeAndCantoneseEndAWordOnSpaceAndPunctuation() {
+    @Test func vietnameseAndHindiEndAWordOnSpaceOnly() {
         for id in ["com.apple.inputmethod.VietnameseIM.VietnameseTelex", "com.apple.inputmethod.VietnameseIM.VietnameseVNI",
-                   "com.apple.inputmethod.TransliterationIM.Hindi", "im.rime.inputmethod.Squirrel.Hans",
-                   "com.apple.inputmethod.TYIM.Cantonese"] {
-            let family = InputMethodFamily.of(sourceID: id)
-            #expect(family == .phonetic, "\(id)")
-            for commit: Int64 in [Self.space, 43, 47, Self.returnKey, Self.escape] {
+                   "com.example.inputmethod.VietnameseVIQR", "com.apple.inputmethod.TransliterationIM.Hindi"] {
+            #expect(InputMethodFamily.of(sourceID: id) == .phonetic, "\(id)")
+            for commit: Int64 in [Self.space, Self.returnKey, Self.escape] {
                 var tracker = typed([4, 0])
                 tracker.key(commit, shortcut: false, at: Self.s)
                 #expect(!tracker.snapshot(at: 2 * Self.s, sourceID: id), "\(id) key \(commit)")
             }
+        }
+        #expect(InputMethodFamily.of(sourceID: "im.rime.inputmethod.Squirrel.Hans") == .chinese)
+        #expect(InputMethodFamily.of(sourceID: "com.apple.inputmethod.TYIM.Cantonese") == .chinese)
+    }
+
+    /// Punctuation that is part of a word in these input methods never counts as its end.
+    @Test func toneMarksAndPagingKeysKeepTheWordOpen() {
+        let cases: [(String, [Int64], String)] = [
+            ("com.example.inputmethod.VietnameseVIQR", [8, 31, 39], "VIQR c o ' (a tone mark)"),
+            ("com.apple.inputmethod.VietnameseIM.VietnameseTelex", [45, 4, 32, 33], "Telex n h u [ (ư)"),
+            ("im.rime.inputmethod.Squirrel.Hans", [45, 34, 4, 0, 31, 24], "Rime nihao = (next page)"),
+            (Self.P, [45, 34, 4, 0, 31, 24], "Pinyin nihao = (next page)"),
+            (Self.P, [45, 34, 4, 0, 31, 27], "Pinyin nihao - (previous page)"),
+        ]
+        for (id, keys, label) in cases {
+            let tracker = typed(keys)
+            let start = tracker.snapshot(at: Self.s, sourceID: id)
+            #expect(start, "\(label): still being typed")
+            #expect(tracker.composing(snapshot: start, takeStart: Self.s, sourceID: id), "\(label): the take is refused")
         }
     }
 
@@ -268,6 +285,21 @@ struct InsertionGuardTests {
         #expect(CompositionTracker.preTakeExpiry == 60 * Self.s)
     }
 
+    @Test func englishTypingLeavesNothingStoredAndAClickLooksNothingUp() {
+        let watch = PersonInput(isTrusted: { false })
+        let now = PersonInput.now()
+        for (n, key) in [4, 14, 37, 37, 31].enumerated() {   // h e l l o, ABC selected
+            watch.record(keyCode: Int64(key), at: now + UInt64(n))
+            watch.stampSource(at: now + UInt64(n), source: "")
+        }
+        #expect(watch.trackerForTesting.keys.isEmpty)
+        #expect(watch.clickCommits(at: CGPoint(x: 10, y: 10)))
+        #expect(watch.windowLookups == 0, "no window list is read for a click after English typing")
+        watch.record(keyCode: 4, at: now + 10)                 // a key not read yet
+        _ = watch.clickCommits(at: CGPoint(x: 10, y: 10))
+        #expect(watch.windowLookups == 1)
+    }
+
     @Test func keysTypedUnderAnotherSourceBelongToBeforeTheSwitch() {
         // English "hello" under ABC, then Kotoeri selected: nothing typed under Kotoeri yet, nothing open.
         var tracker = CompositionTracker()
@@ -305,7 +337,7 @@ struct InsertionGuardTests {
         tracker.key(0, shortcut: false, at: 2)
         tracker.stamp(at: 1, source: "")
         tracker.stamp(at: 2, source: Self.K)
-        #expect(tracker.keys.map(\.source) == ["", Self.K])
+        #expect(tracker.keys.map(\.source) == [Self.K], "a key typed with a plain layout is not kept")
         #expect(tracker.snapshot(at: Self.s, sourceID: Self.K), "only the key typed under Kotoeri counts, and it is open")
     }
 

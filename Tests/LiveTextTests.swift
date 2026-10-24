@@ -438,11 +438,27 @@ struct LiveTextTests {
         #expect(!RecordingCoordinator.keptNote.contains("History"), "History is named once, in the card's footer")
     }
 
-    @Test func everyCardCanBeClosed() {
+    /// The reason-only card's close button, clicked, hides the panel.
+    @Test func aReasonOnlyCardClosesWithItsCloseButton() throws {
         let hud = HUDController(pasteboard: NSPasteboard(name: .init("pflow.close.tests.\(UUID().uuidString)")))
         hud.show(device: nil, livePreview: false)
-        #expect(hud.model.onClose != nil, "a reason-only card has its close too")
-        hud.hide(after: 0)
+        hud.setLivePreview(true)
+        hud.setPhase(.passwordField)
+        hud.setReason(RecordingCoordinator.passwordNote)
+        let panel = try #require(hud.panelForTesting)
+        panel.reposition()
+        panel.contentView?.layoutSubtreeIfNeeded()
+        panel.displayIfNeeded()
+        #expect(panel.isVisible)
+        // The × sits at the row's trailing end, inside the card's padding.
+        let size = try #require(panel.contentView).bounds.size
+        let point = NSPoint(x: size.width - Theme.s4 - 9, y: size.height / 2)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                        windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            panel.sendEvent(event)
+        }
+        #expect(!panel.isVisible, "Close hides the card")
     }
 
     /// A status after the take shows only its icon in the capsule; its words

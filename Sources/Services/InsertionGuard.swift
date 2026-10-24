@@ -89,17 +89,16 @@ enum InputComposition {
 
 /// Input method families, by input source ID; each ends a composition with its own keys.
 enum InputMethodFamily: Equatable {
-    /// `phonetic`: Vietnamese (Telex, VNI), Hindi transliteration, Rime,
-    /// Cantonese: Space and punctuation end a word.
+    /// `phonetic`: Vietnamese (Telex, VNI, VIQR), Hindi transliteration.
     case japanese, chinese, korean, phonetic, other
 
     static func of(sourceID: String) -> InputMethodFamily {
         let id = sourceID.lowercased()
         if id.contains("kotoeri") || id.contains("japanese") || id.contains("atok") { return .japanese }
         if id.contains("korean") || id.contains("hangul") { return .korean }
-        if id.contains("vietnamese") || id.contains("telex") || id.contains("vni") || id.contains("transliteration")
-            || id.contains("hindi") || id.contains("rime") || id.contains("squirrel") || id.contains("cantonese")
-            || id.contains("jyutping") { return .phonetic }
+        if id.contains("rime") || id.contains("squirrel") || id.contains("cantonese") || id.contains("jyutping") { return .chinese }
+        if id.contains("vietnamese") || id.contains("telex") || id.contains("vni") || id.contains("viqr")
+            || id.contains("transliteration") || id.contains("hindi") { return .phonetic }
         if id.contains(".scim") || id.contains(".tcim") || id.contains("pinyin") || id.contains("zhuyin")
             || id.contains("chinese") || id.contains("wubi") || id.contains("cangjie") || id.contains("sogou")
             || id.contains("stroke") { return .chinese }
@@ -118,18 +117,21 @@ enum CompositionKeys {
     /// edit or move inside a composition but never start one.
     static let navigation: Set<Int64> = Set<Int64>([51, 117, 115, 119, 116, 121]).union(arrows)
 
-    /// The keys that end a composition in this family. Kotoeri converts with
-    /// Space and keeps digits and punctuation in the composition; Chinese
-    /// input methods commit with Space, a candidate digit or punctuation;
-    /// Korean ends a syllable with Space, punctuation or an arrow. An
-    /// unknown input method: Return and Escape only.
+    /// The keys that end a composition in this family: only keys that do so
+    /// in every input method of the family; when unsure, none (the take is
+    /// refused and the Copy card offers the text). Kotoeri converts with
+    /// Space and keeps digits and punctuation; Chinese input methods commit
+    /// with Space or a candidate digit, but Rime and Pinyin page with - and =,
+    /// so no punctuation; Korean ends a syllable with Space, punctuation or
+    /// an arrow; Vietnamese (VIQR tone marks ' . - `, Telex [ ]) and Hindi
+    /// transliteration end a word with Space only. Unknown: Return and Escape.
     static func commits(_ key: Int64, in family: InputMethodFamily) -> Bool {
         if key == `return` || key == enter || key == escape { return true }
         switch family {
         case .japanese, .other: return false
-        case .chinese: return key == space || digits.contains(key) || punctuation.contains(key)
+        case .chinese: return key == space || digits.contains(key)
         case .korean: return key == space || punctuation.contains(key) || arrows.contains(key)
-        case .phonetic: return key == space || punctuation.contains(key)
+        case .phonetic: return key == space
         }
     }
 }
@@ -177,10 +179,17 @@ struct CompositionTracker: Equatable {
         if keys.count > Self.keptKeys { keys.removeFirst(keys.count - Self.keptKeys) }
     }
 
-    /// The input source read for the key pressed at `time`.
+    /// The input source read for the key pressed at `time`. A key typed
+    /// with a plain layout (source "") can be part of no composition and is
+    /// not kept.
     mutating func stamp(at time: UInt64, source: String) {
-        if let index = keys.lastIndex(where: { $0.at == time && $0.source == nil }) { keys[index].source = source }
+        guard let index = keys.lastIndex(where: { $0.at == time && $0.source == nil }) else { return }
+        if source.isEmpty { keys.remove(at: index) } else { keys[index].source = source }
     }
+
+    /// Keys that may belong to an open composition (typed under an input
+    /// method, or not read yet). Only then is a click's window looked up.
+    var mayBeComposing: Bool { keys.contains { $0.source != "" } }
 
     /// A click that commits (anywhere but the input method's own candidate window).
     mutating func click(commits: Bool, at time: UInt64) {

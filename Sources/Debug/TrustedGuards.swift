@@ -163,6 +163,7 @@ extension TakeHarness {
             PersonInput.shared.overrideWatching(nil)
         case "ime-seq" where parts.count == 6:
             // ime-seq:<target>:<off|type>:<source>:<keys>:<extra seconds>. Keys: letters, _ Space, ^ Return, - Backspace,
+            // Q ' (quote), L [ , E = ,
             // @ a click on the input method's candidate window. Then a take lasting longer by
             // the extra seconds.
             guard let target = await openTarget(parts[1]) else { result["error"] = "could not open"; return result }
@@ -170,7 +171,8 @@ extension TakeHarness {
             let extra = Double(parts[5]) ?? 0
             let codes: [Character: Int] = ["a": kVK_ANSI_A, "b": kVK_ANSI_B, "h": kVK_ANSI_H, "i": kVK_ANSI_I, "k": kVK_ANSI_K,
                                            "n": kVK_ANSI_N, "o": kVK_ANSI_O, "u": kVK_ANSI_U, "y": kVK_ANSI_Y,
-                                           "_": kVK_Space, "^": kVK_Return, "-": kVK_Delete]
+                                           "c": kVK_ANSI_C, "_": kVK_Space, "^": kVK_Return, "-": kVK_Delete,
+                                           "Q": kVK_ANSI_Quote, "L": kVK_ANSI_LeftBracket, "E": kVK_ANSI_Equal]
             var clicked = "none"
             result["take"] = await take(target, mode: parts[2] == "off" ? .off : .typeInApp, label: spec, beforeBegin: { [self] in
                 for key in parts[4] {
@@ -263,6 +265,29 @@ extension TakeHarness {
             result["endedByClick"] = composed.count > before.count && after.count > before.count
             _ = selectInputSource("com.apple.keylayout.ABC")
             note("clickprobe \(parts[1]): \(result)")
+        case "eisu" where parts.count == 2:
+            // Does 英数 end an open Kotoeri word? Compose "nihon", press 英数, then Escape: a word still open
+            // is cancelled (gone), an ended one stays. Also: which source is selected after 英数.
+            guard let target = await openTarget(parts[1]), let field = target.field else { result["error"] = "could not open"; return result }
+            _ = selectInputSource("com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese")
+            _ = await activate(target.app)
+            await caretToEnd(target)
+            let before = string(field, kAXValueAttribute) ?? ""
+            for code in [kVK_ANSI_N, kVK_ANSI_I, kVK_ANSI_H, kVK_ANSI_O, kVK_ANSI_N] { personKey(CGKeyCode(code)); usleep(80_000) }
+            await pause(0.5)
+            result["composed"] = String((string(field, kAXValueAttribute) ?? "").dropFirst(before.count))
+            result["markedBefore"] = FocusedElement.markedLength(field) ?? -1
+            personKey(CGKeyCode(kVK_JIS_Eisu))
+            await pause(0.6)
+            result["markedAfterEisu"] = FocusedElement.markedLength(field) ?? -1
+            result["sourceAfterEisu"] = PersonInput.selectedInputMethodID() ?? "plain layout or Roman mode"
+            personKey(CGKeyCode(kVK_Escape))
+            await pause(0.6)
+            let after = String((string(field, kAXValueAttribute) ?? "").dropFirst(before.count))
+            result["wordAfterEscape"] = after
+            result["endedByEisu"] = !after.isEmpty
+            _ = selectInputSource("com.apple.keylayout.ABC")
+            note("eisu \(parts[1]): \(result)")
         case "rearm":
             // The tap shut down by the system, and Accessibility followed off and on: never reported as
             // watching while it is not, and watching again (seeing the person) once re-created.
@@ -329,8 +354,9 @@ extension TakeHarness {
         }
         let suffix = "." + (id.split(separator: ".").last.map(String.init) ?? id)
         guard let source = all.first(where: { sourceID($0) == id })
-                ?? all.first(where: { id.contains("Kotoeri") && sourceID($0).contains("Kotoeri") && sourceID($0).hasSuffix(suffix) }) else {
-            note("input sources: " + all.map(sourceID).filter { $0.contains("Kotoeri") || $0.contains("Japanese") }.joined(separator: ", "))
+                ?? all.first(where: { id.contains("Kotoeri") && sourceID($0).contains("Kotoeri") && sourceID($0).hasSuffix(suffix) })
+                ?? all.first(where: { id.contains("Vietnamese") && sourceID($0).lowercased().hasSuffix(suffix.lowercased()) }) else {
+            note("input sources: " + all.map(sourceID).filter { $0.contains("inputmethod") }.joined(separator: ", "))
             return false
         }
         let found = sourceID(source)
