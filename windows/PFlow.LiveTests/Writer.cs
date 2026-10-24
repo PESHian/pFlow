@@ -235,6 +235,9 @@ internal static partial class Program
             var away = InsertionTarget.Capture();
             await Place(host, rich);
             string richBefore = Read(rich);
+            // The VM's clipboard agent echoes a change about a second later (the two-line paste just restored the clipboard):
+            // wait until the clipboard has been quiet for a second, so only a change made from here on counts.
+            for (int i = 0; i < 20; i++) { uint quiet = Native.GetClipboardSequenceNumber(); await Task.Delay(1000); if (Native.GetClipboardSequenceNumber() == quiet) break; }
             uint sequence = Native.GetClipboardSequenceNumber();
             string moved;
             try { moved = await away.Insert("Fictional words that must not land.", rig.Owner.Handle, false, CancellationToken.None); }
