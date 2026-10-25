@@ -340,7 +340,8 @@ final class InputMethodLink {
                 var on: Int32 = 1
                 setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
                 DispatchQueue.main.async { self?.adopt(client) }
-                self?.readLoop(client)
+                // Each connection reads on its own thread, so the next one is always answered (or refused).
+                Thread.detachNewThread { self?.readLoop(client) }
             }
         }
         thread.start()
