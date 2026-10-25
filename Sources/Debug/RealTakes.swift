@@ -46,6 +46,9 @@ final class RealPipeline {
 
 extension TakeHarness {
     private static var pipeline: RealPipeline?
+    /// Quick re-takes: when the last take finished, and what its field held then.
+    private static var lastIdleAt: Date?
+    private static var lastAfter: [String: String] = [:]
 
     func realPipeline() -> RealPipeline {
         if let pipeline = Self.pipeline { return pipeline }
@@ -79,8 +82,10 @@ extension TakeHarness {
     }
 
     /// One take as the owner makes it. `way`: "hold" or "tap". `during` runs about a second in (a guard's action).
-    func realTake(_ target: TakeTarget, way: String, label: String, frames: URL? = nil,
+    func realTake(_ target: TakeTarget, way: String, label: String, frames: URL? = nil, quickRun: Bool = false,
                   during: (() async -> Void)? = nil, beforeStart: (() async -> Void)? = nil) async -> [String: Any] {
+        // A quick re-take follows the last one at once: no setup, the field as the last take left it.
+        let quick = quickRun && Self.lastAfter[target.name] != nil
         let pipeline = realPipeline()
         let recordings = Self.recordings()
         guard !recordings.isEmpty else { return ["error": "no recordings in ~/pflow-audio"] }
@@ -94,9 +99,9 @@ extension TakeHarness {
             AXUIElementSetAttributeValue(field, kAXFocusedAttribute as CFString, kCFBooleanTrue)
             await pause(0.6)
         }
-        if target.emptyBeforeTake { await emptyField(target) }
-        if target.name != "vscode", target.field != nil { await caretToEnd(target) }
-        var before = await target.readBack() ?? ""
+        if target.emptyBeforeTake, !quick { await emptyField(target) }
+        if target.name != "vscode", target.field != nil, !quick { await caretToEnd(target) }
+        var before = quick ? Self.lastAfter[target.name] ?? "" : await target.readBack() ?? ""
         if target.name.contains("tiptap"), before.trimmingCharacters(in: .whitespacesAndNewlines) == "Write a message" { before = "" }
         try? audio.path.write(to: pipeline.next, atomically: true, encoding: .utf8)
         let sourceBefore = InputMethodInstall.currentSourceID() ?? "?"
@@ -116,6 +121,7 @@ extension TakeHarness {
         let framesOn = folder.appendingPathComponent("frames-on")
         if let frames { try? frames.path.write(to: framesOn, atomically: true, encoding: .utf8) }
         // Start: hold Right Command, or double-tap it.
+        record["gapMs"] = quick ? Self.lastIdleAt.map { Int(Date().timeIntervalSince($0) * 1000) } ?? -1 : -1
         if way == "hold" {
             rightCommand(down: true)
         } else {
@@ -150,9 +156,11 @@ extension TakeHarness {
             rightCommand(down: true); await pause(0.06); rightCommand(down: false)
         }
         _ = await waitFor(25) { pipeline.coordinator.state == .idle }
-        await pause(1.0)
+        Self.lastIdleAt = Date()
+        await pause(quickRun ? 0.25 : 1.0)
         try? FileManager.default.removeItem(at: framesOn)
         let after = await target.readBack() ?? ""
+        Self.lastAfter[target.name] = after
         let final = pipeline.history.saved.last ?? ""
         record["liveWordsSeen"] = liveSeen
         // From the moment the recording began to play (speech starts within 10 ms of it).
@@ -178,11 +186,12 @@ extension TakeHarness {
         record["keyTrace"] = KeyLiveTextField.trace
         record["startError"] = pipeline.coordinator.lastStartError ?? NSNull()
         pipeline.coordinator.lastStartError = nil
-        // Used, not only tried: the input method became active in the app.
-        record["inputMethod"] = ReasonLog.recent.contains("input method active in the app")
-        note("\(label) \(target.name) \(way): live \(liveSeen) first \(firstLiveMs) ms, preview \(previewSeen), once \(record["landedOnce"]!), outcome \(record["outcome"]!), source \(sourceBefore)→\(sourceDuring)→\(record["sourceAfter"]!), clipboard \(record["clipboardUntouched"]!), im \(record["inputMethod"]!)")
+        // Used, not only tried: the finished text went in through the input method.
+        record["inputMethod"] = ReasonLog.recent.contains { $0.hasPrefix("finished text committed") }
+        record["probation"] = ReasonLog.recent.contains("input method on probation: no activation came for this take")
+        note("\(label) \(target.name) \(way)\(quick ? " quick gap \(record["gapMs"]!) ms" : ""): live \(liveSeen) first \(firstLiveMs) ms, preview \(previewSeen), once \(record["landedOnce"]!), outcome \(record["outcome"]!), source \(sourceBefore)→\(sourceDuring)→\(record["sourceAfter"]!), clipboard \(record["clipboardUntouched"]!), im \(record["inputMethod"]!)")
         pipeline.hud.hide(after: 0)
-        await pause(0.5)
+        if !quickRun { await pause(0.5) }
         return record
     }
 
@@ -269,16 +278,42 @@ extension TakeHarness {
     /// between them; each take's words must land in its own window and the other stay unchanged.
     func twoWindows(_ parts: [String]) async -> [String: Any] {
         let spec = parts.joined(separator: ":")
-        guard parts.count == 5, let one = await openTarget(parts[1]), let two = await openTarget(parts[2]),
+        guard parts.count >= 5, let one = await openTarget(parts[1]), let two = await openTarget(parts[2]),
               let rounds = Int(parts[4]) else { return ["spec": spec, "error": "could not open"] }
         one.raiseWindow = true
         two.raiseWindow = true
+        // "leftover": from the second take on, the input method acts as if macOS sent no activation, so
+        // the client still active is the OTHER window's (the last take's). "frames": frames of take 2.
+        let leftover = parts.contains("leftover"), withFrames = parts.contains("frames")
+        // "side": the two windows side by side, so a frame shows both.
+        if parts.contains("side") {
+            for (n, target) in [one, two].enumerated() {
+                guard let field = target.field, let window = element(field, kAXWindowAttribute) else { continue }
+                var origin = CGPoint(x: 8 + CGFloat(n) * 508, y: 60), size = CGSize(width: 500, height: 560)
+                if let position = AXValueCreate(.cgPoint, &origin) { AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, position) }
+                if let extent = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, extent) }
+            }
+            await pause(0.8)
+        }
+        defer { UserDefaults.standard.removeObject(forKey: "pflow.debug.simulateNoActivation") }
         var takes: [[String: Any]] = []
         for n in 0..<rounds {
             for (target, other) in [(one, two), (two, one)] {
                 let otherBefore = await other.readBack() ?? ""
-                var take = await realTake(target, way: parts[3], label: "\(spec)#\(n + 1)-\(target.name)")
+                UserDefaults.standard.set(leftover && !takes.isEmpty, forKey: "pflow.debug.simulateNoActivation")
+                let frames = withFrames && takes.count == 1 ? folder.appendingPathComponent("frames-twowin-\(parts[3])") : nil
+                // The other window's live state during the take: anything of this take's words showing there.
+                var otherShowed = false
+                let watch = Task { @MainActor in
+                    while !Task.isCancelled {
+                        if let now = await other.readBack(), now != otherBefore { otherShowed = true }
+                        try? await Task.sleep(for: .milliseconds(50))
+                    }
+                }
+                var take = await realTake(target, way: parts[3], label: "\(spec)#\(n + 1)-\(target.name)", frames: frames)
+                watch.cancel()
                 let otherAfter = await other.readBack() ?? ""
+                take["otherShowedDuring"] = otherShowed
                 take["otherUnchanged"] = otherAfter == otherBefore
                 take["refused"] = (take["outcome"] as? String ?? "").contains("savedToHistory") && otherAfter == otherBefore
                 takes.append(take)
@@ -286,7 +321,9 @@ extension TakeHarness {
         }
         let right = takes.filter { ($0["landedOnce"] as? Bool == true && $0["otherUnchanged"] as? Bool == true) || $0["refused"] as? Bool == true }.count
         let wrong = takes.filter { $0["otherUnchanged"] as? Bool == false }.count
-        note("SUMMARY \(spec): own window once or refused \(right)/\(takes.count), other window changed \(wrong)/\(takes.count)")
+        let flashed = takes.filter { $0["otherShowedDuring"] as? Bool == true }.count
+        let used = takes.filter { $0["inputMethod"] as? Bool == true }.count
+        note("SUMMARY \(spec): own window once or refused \(right)/\(takes.count), other window changed \(wrong)/\(takes.count), other window showed words during the take \(flashed)/\(takes.count), input method \(used)/\(takes.count)")
         return ["spec": spec, "takes": takes]
     }
 
@@ -303,12 +340,14 @@ extension TakeHarness {
             return ["spec": spec, "take": await realTake(target, way: parts[2], label: spec, frames: frames)]
         }
         let count = Int(parts.count > 3 ? parts[3] : "5") ?? 5
+        let quick = parts.count > 4 && parts[4] == "quick"
         var takes: [[String: Any]] = []
-        for n in 0..<count { takes.append(await realTake(target, way: parts[2], label: "\(spec)#\(n + 1)")) }
+        Self.lastAfter[target.name] = nil
+        for n in 0..<count { takes.append(await realTake(target, way: parts[2], label: "\(spec)#\(n + 1)", quickRun: quick)) }
         func tally(_ key: String) -> Int { takes.filter { $0[key] as? Bool == true }.count }
         let live = takes.filter { ($0["liveWordsSeen"] as? Int ?? 0) > 0 }.count
         let preview = takes.filter { ($0["previewWordsSeen"] as? Int ?? 0) > 0 }.count
-        note("SUMMARY \(spec): exactly once \(tally("landedOnce"))/\(takes.count), live words \(live)/\(takes.count), preview \(preview)/\(takes.count), source restored \(tally("sourceRestored"))/\(takes.count), clipboard untouched \(tally("clipboardUntouched"))/\(takes.count), input method \(tally("inputMethod"))/\(takes.count)")
+        note("SUMMARY \(spec): exactly once \(tally("landedOnce"))/\(takes.count), live words \(live)/\(takes.count), preview \(preview)/\(takes.count), source restored \(tally("sourceRestored"))/\(takes.count), clipboard untouched \(tally("clipboardUntouched"))/\(takes.count), input method \(tally("inputMethod"))/\(takes.count), probation \(tally("probation"))/\(takes.count)\(quick ? ", gap under 1 s \(takes.filter { ($0["gapMs"] as? Int ?? -1) >= 0 && ($0["gapMs"] as? Int ?? 9999) < 1000 }.count)/\(takes.count - 1)" : "")")
         return ["spec": spec, "takes": takes]
     }
 }

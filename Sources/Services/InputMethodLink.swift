@@ -87,23 +87,42 @@ enum InputMethodFinish {
         return result == .applied || result == .unconfirmed
     }
 
-    /// The target field shows one of the texts pFlow marked this take: it
-    /// holds that text more often than it did before the take (an editor may
-    /// add a line break or a zero-width character around marked text). The
-    /// take's client is then the target, not another window of the same app,
-    /// which would leave the target as it was.
-    static func showsInTarget(read: String?, candidates: [String], original: String?) -> Bool {
+    /// The target field shows one of `texts` (this take's newest marked text,
+    /// or a newer one) exactly at the captured caret: the field's text before
+    /// the caret, then the words, then the field's text after the selection.
+    /// An editor's own line breaks at the ends and zero-width characters are
+    /// set aside; a no-break space counts as a space. Words the field held
+    /// before the take, or that show anywhere else, do not count.
+    static func showsAtCaret(read: String?, texts: [String], before prefix: String, after suffix: String) -> Bool {
         guard let read else { return false }
-        let before = original ?? ""
-        return candidates.contains { text in
-            let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !words.isEmpty else { return false }
-            return occurrences(of: words, in: EditorPlaceholder.plain(read)) > occurrences(of: words, in: EditorPlaceholder.plain(before))
+        let head = clean(prefix)
+        var shown = clean(read)
+        if head.isEmpty { shown = String(shown.drop(while: { $0.isNewline })) }
+        guard shown.hasPrefix(head) else { return false }
+        let rest = String(shown.dropFirst(head.count))
+        let tail = clean(suffix).trimmingCharacters(in: .newlines)
+        return texts.contains { text in
+            let words = clean(text)
+            guard !words.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, rest.hasPrefix(words) else { return false }
+            return String(rest.dropFirst(words.count)).trimmingCharacters(in: .newlines) == tail
         }
     }
 
-    static func occurrences(of text: String, in value: String) -> Int {
-        value.components(separatedBy: text).count - 1
+    /// At the end of a take whose target can be read: the finished text goes through the input method
+    /// only when its marks were seen at the caret this take (`confirmed`) and still are. Otherwise the
+    /// marks are taken back out first.
+    static func takesBackFirst(targetReadable: Bool, confirmed: Bool, marksAtCaret: Bool) -> Bool {
+        targetReadable && !(confirmed && marksAtCaret)
+    }
+
+    /// After marks were taken back out: the usual checked paste only once the input method reported
+    /// them gone; otherwise they may still show somewhere, and the finished text stays on the Copy card.
+    static func afterTakeBack(cleared: Bool) -> LiveInlineFinal {
+        cleared ? .notTyped : .kept(.uncertain)
+    }
+
+    static func clean(_ text: String) -> String {
+        EditorPlaceholder.plain(text).filter { !["\u{200B}", "\u{200C}", "\u{200D}", "\u{FEFF}"].contains($0) }
     }
 
     /// After the commit. Landed only when the target field itself shows the
@@ -173,6 +192,15 @@ final class InputMethodLink {
         /// Texts marked, by sequence number, and the newest one the input method confirmed.
         var sent: [Int: String] = [:]
         var lastAcked: (seq: Int, at: TimeInterval)?
+        /// pFlow can read the target field: a leftover client may go on probation, and the take
+        /// commits only after its marks showed there. `window`: the target window (Cocoa screen frame).
+        var readable = false
+        var window: [Double]?
+        var probeSent = false
+        /// The client is on probation (still active from before; no activation came for this take).
+        var provisional = false
+        /// The mark pFlow saw in the target field (0 where the target cannot be read and the client is fresh).
+        var confirmedSeq: Int?
     }
 
     private(set) var take: Take?
@@ -181,6 +209,8 @@ final class InputMethodLink {
     static let attachTimeout: TimeInterval = 1.8
     static let reselectAfter: TimeInterval = 0.5
     static let reselectGap: TimeInterval = 0.3
+    /// How long pFlow waits for a fresh activation before it puts the client still active on probation.
+    static let probeAfter: TimeInterval = 0.12
     static let restoreKey = "inputMethodRestoreSource"
 
     // The outside world, replaceable in tests.
@@ -195,6 +225,8 @@ final class InputMethodLink {
     private var peer: Int32 = -1
     private var commitWaiter: CheckedContinuation<(ok: Bool, seen: Bool), Never>?
     private var commitTake: String?
+    private var clearWaiter: CheckedContinuation<Bool, Never>?
+    private var clearTake: String?
 
     #if DEBUG
     var connectedForTesting: Bool {
@@ -216,7 +248,7 @@ final class InputMethodLink {
     // MARK: Take
 
     /// Selects pFlow's input source for a take in `bundle`. False when it cannot be used.
-    func begin(id: String, bundle: String) -> Bool {
+    func begin(id: String, bundle: String, readable: Bool = false, window: CGRect? = nil) -> Bool {
         end()
         guard usable else { return false }
         var previous = currentSource()
@@ -231,6 +263,8 @@ final class InputMethodLink {
         defaults.set(previous, forKey: Self.restoreKey)
         defaults.synchronize()
         take = Take(id: id, bundle: bundle, previous: previous, started: clock())
+        take?.readable = readable
+        take?.window = window.map { [$0.origin.x, $0.origin.y, $0.width, $0.height] }
         // The input method binds only to a client activated from this moment on.
         take?.selectedAt = clock()
         sendBegin()
@@ -244,8 +278,12 @@ final class InputMethodLink {
     }
 
     private func sendBegin() {
-        guard let take, !take.beginSent, connected,
-              transmit(.init(.begin, take: take.id, bundle: take.bundle, source: take.previous, at: take.selectedAt)) else { return }
+        guard let take, !take.beginSent, connected else { return }
+        var message = InputMethodWire.Message(.begin, take: take.id, bundle: take.bundle, source: take.previous, at: take.selectedAt)
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "pflow.debug.simulateNoActivation") { message.simulateNoActivation = true }
+        #endif
+        guard transmit(message) else { return }
         self.take?.beginSent = true
         self.take?.beganAt = clock()
     }
@@ -259,6 +297,15 @@ final class InputMethodLink {
             self.take = take
         } else if take.attach == .pending, let previous = take.previous, let beganAt = take.beganAt {
             let waited = clock() - beganAt
+            // No fresh activation yet (macOS can leave the last take's client active and send none):
+            // where pFlow can read the target, the client still active goes on probation. Its first
+            // marked words must show in the target field before anything more is written through it.
+            if take.readable, !take.probeSent, take.reselect == 0, waited > Self.probeAfter {
+                take.probeSent = true
+                self.take = take
+                _ = transmit(.init(.probe, take: take.id, frame: take.window))
+                return take.attach
+            }
             // macOS sometimes leaves this source selected-but-inactive in the app (VM logs: no
             // activation at all after the select). Select the person's source, give the
             // deactivation a moment to arrive, then select pFlow's again: that brings a fresh one.
@@ -291,6 +338,17 @@ final class InputMethodLink {
     }
 
 
+    var provisional: Bool { take?.provisional == true }
+    var confirmed: Bool { take?.confirmedSeq != nil }
+
+    /// The target field showed mark `seq`: the client is the take's and may commit.
+    func confirm(seq: Int) {
+        guard let take, take.confirmedSeq == nil else { return }
+        self.take?.confirmedSeq = seq
+        self.take?.provisional = false
+        _ = transmit(.init(.confirm, take: take.id, seq: seq))
+    }
+
     /// The whole current transcript as replaceable marked text.
     func mark(_ text: String) -> Bool {
         guard var take, take.attach == .attached, take.interrupted == nil else { return false }
@@ -310,19 +368,21 @@ final class InputMethodLink {
 
     func noteHeldSkip() { take?.heldSkips += 1 }
 
-    /// The texts that may be showing now: the newest confirmed mark and any sent after it.
-    /// Nil until a mark was confirmed at least `settled` ago (the app draws it a moment later).
-    func showingCandidates(settled: TimeInterval = 0.15) -> [String]? {
-        // Any of this take's marks: the app may still draw an older one for a moment.
+    /// The marks that must be showing now, by sequence number: before the take is confirmed, the
+    /// newest one the input method marked (or a newer one); after, any from the confirmed one on.
+    /// Nil until a mark was acknowledged at least `settled` ago (the app draws it a moment later).
+    func showingCandidates(settled: TimeInterval = 0.15) -> [(seq: Int, text: String)]? {
         guard let take, let acked = take.lastAcked, clock() - acked.at >= settled else { return nil }
-        return take.sent.sorted { $0.key < $1.key }.map(\.value)
+        let from = take.confirmedSeq ?? acked.seq
+        return take.sent.filter { $0.key >= from }.sorted { $0.key < $1.key }.map { ($0.key, $0.value) }
     }
 
     var interrupted: String? { take?.interrupted }
 
     /// Commits the finished text once over the marked text; waits for the input method's answer.
     func commit(_ text: String) async -> (ok: Bool, seen: Bool) {
-        guard let take, take.attach == .attached, take.interrupted == nil else { return (false, false) }
+        // Only through a client confirmed this take (its marks seen in the target, or fresh where it cannot be read).
+        guard let take, take.attach == .attached, take.interrupted == nil, take.confirmedSeq != nil else { return (false, false) }
         guard currentSource() == InputMethodWire.sourceID else { interrupt("notSelected"); return (false, false) }
         guard transmit(.init(.commit, take: take.id, text: text)) else { return (false, false) }
         self.take?.marked = true
@@ -351,6 +411,31 @@ final class InputMethodLink {
         guard let take, take.marked, take.interrupted == nil else { return }
         _ = transmit(.init(.cancel, take: take.id))
         self.take?.marked = false
+    }
+
+    /// Takes the marked words back out and waits for the input method to report them gone.
+    /// False when it does not (refused, no answer, channel lost): the words may still be showing.
+    func clear() async -> Bool {
+        guard let take else { return true }
+        guard take.marked || take.seq > 0 else { return true }
+        guard transmit(.init(.cancel, take: take.id)) else { return false }
+        self.take?.marked = false
+        clearTake = take.id
+        let id = take.id
+        return await withCheckedContinuation { continuation in
+            clearWaiter = continuation
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                guard self?.clearTake == id else { return }
+                self?.answerClear(false)
+            }
+        }
+    }
+
+    private func answerClear(_ ok: Bool) {
+        guard let waiter = clearWaiter else { return }
+        clearWaiter = nil
+        clearTake = nil
+        waiter.resume(returning: ok)
     }
 
     /// Ends the take: the person's input source comes back. Safe to call more than once.
@@ -391,9 +476,18 @@ final class InputMethodLink {
         case .client:
             // While re-selecting, the person's source is selected for a moment: an activation then is a
             // late one from before, not the take's (marks would go to a client that shows nothing).
-            guard var take, take.attach == .pending, message.take == take.id, take.reselect != 1 else { return }
+            guard var take, message.take == take.id else { return }
+            if take.attach == .attached {
+                // A fresh activation replaced the client on probation before any words.
+                if take.provisional, message.provisional != true { self.take?.provisional = false }
+                return
+            }
+            guard take.attach == .pending, take.reselect != 1 else { return }
             take.attach = message.bundle == take.bundle ? .attached : .failed("other app")
+            take.provisional = message.provisional == true
             self.take = take
+            // Where the target cannot be read, a client activated for this take is the only check there is.
+            if take.attach == .attached, !take.readable, !take.provisional { confirm(seq: 0) }
         case .marked:
             guard message.take == take?.id else { return }
             guard message.ok == true else { interrupt("clientChanged"); return }
@@ -410,6 +504,9 @@ final class InputMethodLink {
         case .committed:
             guard message.take == commitTake else { return }
             answerCommit(ok: message.ok == true, seen: message.seen == true)
+        case .cleared:
+            guard message.take == clearTake else { return }
+            answerClear(message.ok == true)
         default:
             break
         }
@@ -434,6 +531,7 @@ final class InputMethodLink {
         connected = false
         interrupt("linkLost")
         answerCommit(ok: false, seen: false)
+        answerClear(false)
     }
 
     // MARK: Socket

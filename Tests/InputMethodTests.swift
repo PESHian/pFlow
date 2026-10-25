@@ -413,9 +413,9 @@ struct InputMethodBindingTests {
         var binding = InputMethodBinding()
         _ = binding.activated(activation(window1, at: 10))
         #expect(binding.begin(bundle: "com.google.Chrome", after: 20) == .none, "the leftover from an earlier take is not bound")
-        #expect(!binding.mayWrite(ObjectIdentifier(window1)))
+        #expect(!binding.mayMark(ObjectIdentifier(window1)))
         #expect(binding.activated(activation(window2, at: 21)) == .bound)
-        #expect(binding.mayWrite(ObjectIdentifier(window2)) && !binding.mayWrite(ObjectIdentifier(window1)))
+        #expect(binding.mayMark(ObjectIdentifier(window2)) && !binding.mayMark(ObjectIdentifier(window1)))
     }
 
     /// An activation from before this take's select that reaches the input method late is still a leftover.
@@ -423,7 +423,7 @@ struct InputMethodBindingTests {
         var binding = InputMethodBinding()
         _ = binding.begin(bundle: "com.google.Chrome", after: 20)
         #expect(binding.activated(activation(window1, at: 19.5)) == .none)
-        #expect(!binding.mayWrite(ObjectIdentifier(window1)))
+        #expect(!binding.mayMark(ObjectIdentifier(window1)))
     }
 
     @Test func anActivationJustAfterTheSelectBindsAtBegin() {
@@ -431,7 +431,7 @@ struct InputMethodBindingTests {
         _ = binding.activated(activation(window2, at: 20.1))
         #expect(binding.begin(bundle: "com.google.Chrome", after: 20) == .bound, "the input method started by this select")
         _ = binding.activated(activation(window1, "com.apple.TextEdit", at: 19))
-        #expect(binding.mayWrite(ObjectIdentifier(window2)))
+        #expect(binding.mayMark(ObjectIdentifier(window2)))
     }
 
     @Test func anotherClientAfterWordsBreaksTheTakeBeforeWordsRebinds() {
@@ -441,7 +441,7 @@ struct InputMethodBindingTests {
         #expect(binding.activated(activation(window2, at: 22)) == .rebound, "nothing shown yet, same app, this take's select")
         binding.marked = true
         #expect(binding.activated(activation(window1, at: 23)) == .changed, "words shown: never moved to another client")
-        #expect(binding.mayWrite(ObjectIdentifier(window2)))
+        #expect(binding.mayMark(ObjectIdentifier(window2)))
         var other = InputMethodBinding()
         _ = other.begin(bundle: "com.google.Chrome", after: 20)
         #expect(other.activated(activation(window1, "com.apple.Notes", at: 21)) == .none, "another app never binds")
@@ -452,7 +452,7 @@ struct InputMethodBindingTests {
         _ = binding.begin(bundle: "com.apple.Notes", after: 20)
         _ = binding.activated(activation(window1, "com.apple.Notes", at: 20.5))
         #expect(binding.rebind(after: 21) == .none, "an activation from before the re-selection no longer counts")
-        #expect(!binding.mayWrite(ObjectIdentifier(window1)))
+        #expect(!binding.mayMark(ObjectIdentifier(window1)))
         #expect(binding.activated(activation(window2, "com.apple.Notes", at: 21.2)) == .bound)
     }
 
@@ -469,14 +469,61 @@ struct InputMethodBindingTests {
 /// pFlow's checks of the target field around the input method.
 @MainActor
 struct InputMethodTargetTests {
-    /// Window 2 (the target) shows nothing of the marks: they went to another client.
-    @Test func marksMissingFromTheTargetAreNotInTheTarget() {
-        #expect(!InputMethodFinish.showsInTarget(read: "Dear Sam,", candidates: ["the harbor", "the harbor lights"], original: "Dear Sam,"))
-        #expect(InputMethodFinish.showsInTarget(read: "Dear Sam, the harbor", candidates: ["the harbor", "the harbor lights"], original: "Dear Sam,"))
-        #expect(InputMethodFinish.showsInTarget(read: "the harbor\n", candidates: [" the harbor"], original: ""), "an editor's own line break")
-        #expect(!InputMethodFinish.showsInTarget(read: "the harbor", candidates: ["the harbor"], original: "the harbor"),
-                "words the field already had are not pFlow's marks")
-        #expect(!InputMethodFinish.showsInTarget(read: nil, candidates: ["the harbor"], original: ""))
+    /// The target shows the take's newest marked words exactly at the captured caret, or it does not count.
+    @Test func marksCountOnlyAtTheCaretInTheTarget() {
+        func at(_ read: String?, _ texts: [String], _ before: String, _ after: String) -> Bool {
+            InputMethodFinish.showsAtCaret(read: read, texts: texts, before: before, after: after)
+        }
+        #expect(!at("Dear Sam,", [" the harbor"], "Dear Sam,", ""), "window 2 has them: the target is as it was")
+        #expect(at("Dear Sam, the harbor", [" the harbor"], "Dear Sam,", ""))
+        #expect(at("Dear Sam, the harbor\nSee you", [" the harbor"], "Dear Sam,", "\nSee you"), "the text after the caret stays after it")
+        #expect(at("the harbor\n", ["the harbor"], "", ""), "an editor's own line break")
+        #expect(at("\nthe harbor", ["the harbor"], "", ""), "an empty editor's line break before")
+        #expect(at("Dear\u{00A0}Sam, the\u{200B} harbor", [" the harbor"], "Dear Sam,", ""), "no-break and zero-width characters")
+        #expect(!at(nil, ["the harbor"], "", ""))
+    }
+
+    /// Words the field held before the take, or the words anywhere but the caret, are not pFlow's marks.
+    @Test func aMatchThatWasThereBeforeOrElsewhereDoesNotCount() {
+        func at(_ read: String, _ texts: [String], _ before: String, _ after: String) -> Bool {
+            InputMethodFinish.showsAtCaret(read: read, texts: texts, before: before, after: after)
+        }
+        #expect(!at("the harbor", ["the harbor"], "the harbor", ""), "already there before the take")
+        #expect(!at("the harbor", ["the harbor"], "", "the harbor"), "already there, after the caret")
+        #expect(!at("Dear Sam, the harbor", ["the harbor"], "", "Dear Sam,"), "the words, but not at the caret")
+        #expect(!at("Dear Sam, the harbor lights", [" the harbor"], "Dear Sam,", ""), "a shorter, older mark inside newer words")
+    }
+
+    /// Before the take is confirmed, only the newest acknowledged mark (or a newer one) counts.
+    @Test func onlyTheNewestMarkCanConfirmTheTake() {
+        let world = World()
+        let link = InputMethodLink()
+        link.enabled = { true }
+        link.currentSource = { world.current }
+        link.selectSource = { world.current = $0; return true }
+        link.clock = { world.now }
+        link.transmit = { world.sent.append($0); return true }
+        link.defaults = UserDefaults(suiteName: "pflow.im.tests.\(UUID().uuidString)")!
+        link.connectedForTesting = true
+        #expect(link.begin(id: "t", bundle: "com.apple.TextEdit", readable: true))
+        link.receive(.init(.client, take: "t", bundle: "com.apple.TextEdit"))
+        #expect(link.mark("the"))
+        #expect(link.mark("the harbor lights"))
+        link.receive(.init(.marked, take: "t", seq: 1, ok: true))
+        link.receive(.init(.marked, take: "t", seq: 2, ok: true))
+        world.now += 0.2
+        #expect(link.showingCandidates()?.map(\.text) == ["the harbor lights"], "the short first mark no longer counts")
+        link.confirm(seq: 2)
+        #expect(link.mark("the harbor lights are on"))
+        link.receive(.init(.marked, take: "t", seq: 3, ok: true))
+        world.now += 0.2
+        #expect(link.showingCandidates()?.map(\.seq) == [2, 3], "after the confirmation, any from the confirmed one on")
+    }
+
+    private final class World {
+        var current = "com.apple.keylayout.ABC"
+        var sent: [InputMethodWire.Message] = []
+        var now: TimeInterval = 100
     }
 
     /// The commit counts only when the target shows it; the input method's own read-back only for an unreadable target.

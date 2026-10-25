@@ -35,8 +35,15 @@ enum InputMethodWire {
             case commit
             /// input method → pFlow: how the commit went, and whether the client shows it before the caret (`seen`).
             case committed
-            /// pFlow → input method: take the marked text back out (a cancelled take).
+            /// pFlow → input method: take the marked text back out with an empty mark; answered by `cleared`.
             case cancel
+            /// input method → pFlow: the marked text is out (`ok`: the client reports nothing marked).
+            case cleared
+            /// pFlow → input method: no activation came; put the client active in the take's app on
+            /// probation (`frame`: the target window), answered by `client` with `provisional`.
+            case probe
+            /// pFlow → input method: the take's marked words show in the target field; the client may commit.
+            case confirm
             /// pFlow → input method: live words stop here; commit the marked text exactly as it is.
             case keep
             /// pFlow → input method: the take is over.
@@ -59,13 +66,19 @@ enum InputMethodWire {
         var seen: Bool?
         /// System uptime when pFlow selected its source for the take (begin, rebind).
         var at: Double?
+        /// The client is on probation (client).
+        var provisional: Bool?
+        /// The target window, x y width height in Cocoa screen coordinates (probe).
+        var frame: [Double]?
+        /// Debug builds only: the input method acts as if macOS sent no activation for this take.
+        var simulateNoActivation: Bool?
 
         init(_ kind: Kind, take: String? = nil, text: String? = nil, seq: Int? = nil, bundle: String? = nil, uid: String? = nil,
              ok: Bool? = nil, source: String? = nil, reason: String? = nil, markedLength: Int? = nil, seen: Bool? = nil,
-             at: Double? = nil) {
+             at: Double? = nil, provisional: Bool? = nil, frame: [Double]? = nil) {
             self.kind = kind; self.take = take; self.text = text; self.seq = seq; self.bundle = bundle; self.uid = uid
             self.ok = ok; self.source = source; self.reason = reason; self.markedLength = markedLength; self.seen = seen
-            self.at = at
+            self.at = at; self.provisional = provisional; self.frame = frame
         }
     }
 
@@ -183,6 +196,12 @@ struct InputMethodBinding {
     private(set) var bundle: String?
     private(set) var after: TimeInterval = .infinity
     private(set) var bound: ObjectIdentifier?
+    /// A client still active from before this take (macOS sent no new activation), on probation:
+    /// it may show marked text, which pFlow then looks for in the target field. Never committed through.
+    private(set) var provisional: ObjectIdentifier?
+    /// pFlow saw this take's marked words in the target field (or, where the target cannot be read,
+    /// the client was activated for this take): only then may the take commit.
+    private(set) var confirmed = false
     private(set) var last: Activation?
     /// Words were marked in the bound client: it can no longer be swapped for another.
     var marked = false
@@ -191,13 +210,15 @@ struct InputMethodBinding {
         self.bundle = bundle
         self.after = after
         bound = nil
+        provisional = nil
+        confirmed = false
         marked = false
         return bindLast()
     }
 
     /// pFlow selected the source again: only an activation from `after` on counts.
     mutating func rebind(after: TimeInterval) -> Event {
-        guard bundle != nil, !marked else { return .none }
+        guard bundle != nil, !marked, provisional == nil else { return .none }
         self.after = after
         bound = nil
         return bindLast()
@@ -207,6 +228,15 @@ struct InputMethodBinding {
         last = activation
         guard let bundle else { return .none }
         let fresh = activation.at >= after && activation.bundle == bundle
+        if let provisional {
+            if activation.controller == provisional { return .none }
+            // A fresh activation before any words replaces the leftover; after words, nothing moves.
+            guard !marked else { return .changed }
+            guard fresh else { return .none }
+            self.provisional = nil
+            bound = activation.controller
+            return .bound
+        }
         guard let bound else {
             guard fresh else { return .none }
             self.bound = activation.controller
@@ -215,17 +245,44 @@ struct InputMethodBinding {
         if activation.controller == bound { return .none }
         if fresh, !marked {
             self.bound = activation.controller
+            confirmed = false
             return .rebound
         }
         return .changed
     }
 
-    func mayWrite(_ controller: ObjectIdentifier?) -> Bool { controller != nil && controller == bound }
+    /// No activation came for this take: the client still active in the take's app goes on probation.
+    mutating func probe(_ controller: ObjectIdentifier, bundle clientBundle: String?) -> Bool {
+        guard let bundle, clientBundle == bundle, bound == nil, provisional == nil, !marked else { return false }
+        provisional = controller
+        return true
+    }
+
+    /// pFlow saw the take's words in the target field: the client is the take's, and may commit.
+    mutating func confirm() {
+        if let provisional {
+            bound = provisional
+            self.provisional = nil
+        }
+        if bound != nil { confirmed = true }
+    }
+
+    /// Marked text may go only to the bound client or the one on probation.
+    func mayMark(_ controller: ObjectIdentifier?) -> Bool {
+        controller != nil && (controller == bound || controller == provisional)
+    }
+
+    /// The finished text goes in only through a bound client that passed pFlow's check this take.
+    func mayCommit(_ controller: ObjectIdentifier?) -> Bool {
+        controller != nil && controller == bound && confirmed
+    }
 
     mutating func end() {
         bundle = nil
         after = .infinity
         bound = nil
+        provisional = nil
+        confirmed = false
         marked = false
     }
 

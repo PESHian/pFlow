@@ -416,7 +416,7 @@ final class TakeHarness {
             t.readBack = { [weak self] in
                 guard let self else { return nil }
                 _ = self.pressMenu(app.processIdentifier, "File", "Save")
-                await self.pause(0.8)
+                await self.pause(0.45)
                 return try? String(contentsOf: file, encoding: .utf8)
             }
             made = t

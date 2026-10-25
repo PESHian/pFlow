@@ -13,21 +13,24 @@ final class Link {
     private var fd: Int32 = -1
     private var buffer = Data()
     private var current: PFlowInputController?
-    private var currentClient: (IMKTextInput & NSObjectProtocol)?
+    private var currentClient: IMKClient?
     private var activatedAt: TimeInterval = 0
-    /// Which client the take writes to (InputMethodBinding: only one activated for this take).
-    private var binding = InputMethodBinding()
+    /// Which client the take writes to, and what it wrote (InputMethodTakeCore, shared and tested).
+    private let core = InputMethodTakeCore()
 
-    /// The take pFlow started: the app it must be in, the client it is bound
-    /// to (once activated there), the person's source to restore if pFlow goes away.
+    /// The take pFlow started: the app it must be in, the person's source to restore if pFlow goes away.
     private struct Take {
         let id: String
         let bundle: String
         let source: String?
-        var marked = ""
         var broken: String?
+        var simulateNoActivation = false
     }
     private var take: Take?
+    #if DEBUG
+    /// The client of the last take, for the simulation of macOS sending no activation.
+    private var lastTakeClient: (PFlowInputController, IMKClient)?
+    #endif
 
     func start() {
         connectSoon(after: 0)
@@ -93,10 +96,10 @@ final class Link {
     private func lost(_ socket: Int32) {
         if fd == socket { close(fd); fd = -1 }
         if take != nil {
-            commitMarkedAsIs()
+            core.keepAsIs()
             restoreSource()
             take = nil
-            binding.end()
+            core.end()
         }
         connectSoon(after: 0.5)
     }
@@ -108,46 +111,61 @@ final class Link {
         case .begin:
             guard let id = message.take, let bundle = message.bundle else { return }
             take = Take(id: id, bundle: bundle, source: message.source)
+            #if DEBUG
+            if message.simulateNoActivation == true {
+                take?.simulateNoActivation = true
+                if let (controller, client) = lastTakeClient { current = controller; currentClient = client }
+            }
+            #endif
             // Only a client activated since pFlow selected the source for this take.
-            let event = binding.begin(bundle: bundle, after: message.at ?? .infinity)
+            let event = core.begin(bundle: bundle, after: message.at ?? .infinity)
             if event == .none { reasons.notice("begin: no activation for this take yet") }
             apply(event)
         case .rebind:
             guard message.take == take?.id else { return }
-            let event = binding.rebind(after: message.at ?? .infinity)
+            let event = core.rebind(after: message.at ?? .infinity)
             if event == .none { reasons.notice("rebind: no activation for this take yet") }
             apply(event)
+        case .probe:
+            guard let take, message.take == take.id, take.broken == nil, let current, let client = currentClient else { return }
+            let window = message.frame.flatMap { $0.count == 4 ? CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) : nil }
+            #if DEBUG
+            let caret = client.caretRect ?? .zero
+            reasons.notice("trace probe: caret \(Int(caret.midX), privacy: .public),\(Int(caret.midY), privacy: .public) window \(Int(window?.minX ?? -1), privacy: .public),\(Int(window?.minY ?? -1), privacy: .public) \(Int(window?.width ?? -1), privacy: .public)x\(Int(window?.height ?? -1), privacy: .public) same app \(client.bundle == take.bundle ? "yes" : "no", privacy: .public)")
+            #endif
+            if core.probe(ObjectIdentifier(current), client: client, window: window) {
+                reasons.notice("probation: the client still active in the app, until pFlow sees the words in the target")
+                reportClient()
+            } else {
+                reasons.notice("probation refused: another app or another window")
+            }
+        case .confirm:
+            guard message.take == take?.id else { return }
+            core.confirm()
         case .mark:
             guard let text = message.text else { return }
-            let ok = write { client in
-                let length = (text as NSString).length
-                client.setMarkedText(text, selectionRange: NSRange(location: length, length: 0),
-                                     replacementRange: NSRange(location: NSNotFound, length: 0))
-                take?.marked = text
-                binding.marked = true
-            }
+            let ok = write { controller, client in core.mark(text, controller: controller, client: client) }
             send(.init(.marked, take: message.take, seq: message.seq, ok: ok))
         case .commit:
             guard let text = message.text else { return }
-            let ok = write { client in
-                client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
-                take?.marked = ""
-            }
+            let ok = write { controller, client in core.commit(text, controller: controller, client: client) }
             guard ok else { send(.init(.committed, take: message.take, ok: false)); return }
             readBack(text, take: message.take, tries: 4)
         case .cancel:
-            _ = write { client in
-                client.setMarkedText("", selectionRange: NSRange(location: 0, length: 0),
-                                     replacementRange: NSRange(location: NSNotFound, length: 0))
-                take?.marked = ""
-            }
+            // Back out of the very client that shows the words, with an empty mark, and confirmed gone.
+            let ok = core.clear()
+            if !ok { reasons.notice("marked text still reported after taking it back out") }
+            send(.init(.cleared, take: message.take, ok: ok))
         case .keep:
-            commitMarkedAsIs()
+            core.keepAsIs()
         case .end:
-            // Words shown are never left half-done: anything still marked is committed as it is.
-            commitMarkedAsIs()
+            // Words shown are never left half-done: kept as they are where confirmed, taken out elsewhere.
+            core.keepAsIs()
+            #if DEBUG
+            if let current, let currentClient, core.mayCommit(ObjectIdentifier(current)) { lastTakeClient = (current, currentClient) }
+            #endif
             take = nil
-            binding.end()
+            core.end()
         default:
             break
         }
@@ -157,7 +175,7 @@ final class Link {
     private func readBack(_ text: String, take id: String?, tries: Int) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
             var seen = false
-            if let client = currentClient, take?.broken == nil, binding.mayWrite(current.map(ObjectIdentifier.init)) {
+            if let client = currentClient?.client, take?.broken == nil, core.mayCommit(current.map(ObjectIdentifier.init)) {
                 let caret = client.selectedRange().location
                 let length = (text as NSString).length
                 if caret != NSNotFound, caret >= length {
@@ -176,13 +194,12 @@ final class Link {
         }
     }
 
-    /// Runs `body` only against the take's own client, never another one.
-    private func write(_ body: (IMKTextInput & NSObjectProtocol) -> Void) -> Bool {
+    /// Runs `body` only while a take is on and not interrupted, with the client active now.
+    private func write(_ body: (ObjectIdentifier, IMKClient) -> Bool) -> Bool {
         guard let take else { reasons.notice("write refused: no take"); return false }
         guard take.broken == nil else { reasons.notice("write refused: take interrupted"); return false }
         guard let client = currentClient, let current else { reasons.notice("write refused: no active client"); return false }
-        guard binding.mayWrite(ObjectIdentifier(current)) else { reasons.notice("write refused: not the take's client"); return false }
-        body(client)
+        guard body(ObjectIdentifier(current), client) else { reasons.notice("write refused: not the take's client"); return false }
         return true
     }
 
@@ -201,15 +218,16 @@ final class Link {
         #if DEBUG
         let same = current.map { $0 === controller } ?? false
         reasons.notice("trace activated: \(same ? "same controller" : "new controller", privacy: .public), take \(self.take != nil ? "yes" : "no", privacy: .public)")
+        if take?.simulateNoActivation == true { return }
         #endif
         current = controller
-        currentClient = client
+        currentClient = client.map(IMKClient.init)
         activatedAt = ProcessInfo.processInfo.systemUptime
         if take == nil { checkOrphanedSoon(); reasons.debug("activated with no take") }
         let activation = InputMethodBinding.Activation(controller: ObjectIdentifier(controller), bundle: client?.bundleIdentifier(), at: activatedAt)
-        let event = binding.activated(activation)
-        if event == .none, take != nil, binding.bound == nil {
-            let why = activation.bundle == binding.bundle ? "before the take's selection" : "another app"
+        let event = core.activated(activation)
+        if event == .none, take != nil, core.binding.bound == nil, core.binding.provisional == nil {
+            let why = activation.bundle == core.binding.bundle ? "before the take's selection" : "another app"
             reasons.notice("activation not bound: \(why, privacy: .public)")
         }
         apply(event)
@@ -266,14 +284,14 @@ final class Link {
     }
 
     func personInput(_ kind: String, controller: PFlowInputController) {
-        guard binding.mayWrite(ObjectIdentifier(controller)), take?.broken == nil else { return }
-        commitMarkedAsIs()
+        guard core.mayMark(ObjectIdentifier(controller)), take?.broken == nil else { return }
+        core.keepAsIs()
         broken(kind)
     }
 
     func appCommits(_ controller: PFlowInputController) {
-        guard binding.mayWrite(ObjectIdentifier(controller)), let take, take.broken == nil, !take.marked.isEmpty else { return }
-        commitMarkedAsIs()
+        guard core.mayMark(ObjectIdentifier(controller)), let take, take.broken == nil, core.hasMarks else { return }
+        core.keepAsIs()
         broken("appCommit")
     }
 
@@ -284,16 +302,10 @@ final class Link {
         send(.init(.interrupted, take: take?.id, reason: reason))
     }
 
-    /// The words shown stay in the field exactly as they are, in the take's own client only.
-    private func commitMarkedAsIs() {
-        guard let marked = take?.marked, !marked.isEmpty, let client = currentClient, let current,
-              binding.mayWrite(ObjectIdentifier(current)) else { return }
-        client.insertText(marked, replacementRange: NSRange(location: NSNotFound, length: 0))
-        take?.marked = ""
-    }
-
     private func reportClient() {
-        send(.init(.client, take: binding.bound != nil ? take?.id : nil, bundle: currentClient?.bundleIdentifier()))
+        let provisional = core.binding.provisional != nil
+        send(.init(.client, take: core.binding.bound != nil || provisional ? take?.id : nil, bundle: currentClient?.bundle,
+                   provisional: provisional))
     }
 
     private func restoreSource() {
@@ -301,5 +313,36 @@ final class Link {
               let list = TISCreateInputSourceList([kTISPropertyInputSourceID: id] as CFDictionary, false)?.takeRetainedValue() as? [TISInputSource],
               let source = list.first else { return }
         TISSelectInputSource(source)
+    }
+}
+
+/// The IMK text client, as the shared take core sees it.
+final class IMKClient: MarkedTextClient {
+    let client: IMKTextInput & NSObjectProtocol
+    init(_ client: IMKTextInput & NSObjectProtocol) { self.client = client }
+
+    var bundle: String? { client.bundleIdentifier() }
+
+    func setMarked(_ text: String) {
+        let length = (text as NSString).length
+        client.setMarkedText(text, selectionRange: NSRange(location: length, length: 0),
+                             replacementRange: NSRange(location: NSNotFound, length: 0))
+    }
+
+    func insert(_ text: String) {
+        client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+    }
+
+    var markedLength: Int {
+        let range = client.markedRange()
+        return range.location == NSNotFound ? 0 : range.length
+    }
+
+    var caretRect: CGRect? {
+        let selected = client.selectedRange()
+        guard selected.location != NSNotFound else { return nil }
+        var actual = NSRange()
+        let rect = client.firstRect(forCharacterRange: selected, actualRange: &actual)
+        return rect == .zero ? nil : rect
     }
 }

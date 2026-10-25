@@ -171,6 +171,12 @@ final class TextInjector: TextInjecting {
     private var inputMethodNothingShown = false
     /// Cleared for the take once the input method could not be used.
     private var inputMethodAllowed = true
+    /// Looking for the first marks in the target field, or taking marks back out: finishing waits for it.
+    private var inputMethodCheck: Task<Void, Never>?
+    /// Words heard while the first marks are being looked for; marked once they are seen.
+    private var inputMethodPending: String?
+    /// How long the first marks have to show in the target field before they are taken back out.
+    static let confirmWithin: TimeInterval = 0.7
     var inputMethod: InputMethodLink { InputMethodLink.shared }
 
     private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
@@ -214,6 +220,9 @@ final class TextInjector: TextInjecting {
         inputMethodStopped = nil
         inputMethodNothingShown = false
         inputMethodAllowed = true
+        inputMethodCheck?.cancel()
+        inputMethodCheck = nil
+        inputMethodPending = nil
         targetApp = NSWorkspace.shared.frontmostApplication
         PersonInput.shared.start()
         // Whether the person was composing when the take started: the end of
@@ -281,7 +290,7 @@ final class TextInjector: TextInjecting {
             inputMethodAllowed = false
             return nil
         }
-        guard inputMethod.begin(id: session, bundle: bundle) else {
+        guard inputMethod.begin(id: session, bundle: bundle, readable: targetReadable, window: targetWindowFrame()) else {
             ReasonLog.note("input method could not be selected")
             inputMethodAllowed = false
             return nil
@@ -346,6 +355,7 @@ final class TextInjector: TextInjecting {
             switch inputMethod.attachState() {
             case .attached:
                 ReasonLog.note("input method active in the app")
+                if inputMethod.provisional { ReasonLog.note("input method on probation: no activation came for this take") }
                 return .typing
             case .pending:
                 return .waiting
@@ -405,18 +415,90 @@ final class TextInjector: TextInjecting {
         if let block = InsertionGuard.markedTextBlock(check.facts(since: inputMethodStarted)) {
             return stopInputMethod(LiveInlineOwnership.Stop(block))
         }
-        // Before every mark: the earlier marks show in the target field itself (a client of another
-        // window of the same app would take them too, and read them back to itself).
-        if targetReadable, let candidates = inputMethod.showingCandidates(), let targetField {
-            let read = attribute(targetField, kAXValueAttribute) as? String
-            if !InputMethodFinish.showsInTarget(read: read, candidates: candidates, original: originalValue) {
-                return notInTarget()
-            }
-        }
         let words = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !words.isEmpty else { return nil }
+        if targetReadable {
+            guard inputMethod.confirmed else {
+                // The first words go out once; nothing more is written through the client until
+                // they show in the target field at the caret (a client of another window would take them too).
+                if inputMethod.take?.seq == 0 {
+                    guard inputMethod.mark(prepared(words).text) else { return stopInputMethod(.uncertain) }
+                    lookForFirstMarks()
+                } else {
+                    inputMethodPending = words
+                }
+                return nil
+            }
+            // Before every further mark: the earlier ones show at the caret in the target field.
+            if inputMethod.showingCandidates() != nil, marksAtCaret() == nil { return notInTarget() }
+        }
         guard inputMethod.mark(prepared(words).text) else { return stopInputMethod(.uncertain) }
         return nil
+    }
+
+    /// The field's text before the captured caret and after the selection (both empty over a placeholder).
+    private var caretContext: (before: String, after: String)? {
+        if placeholderStart { return ("", "") }
+        guard let value = originalValue, let range = originalSelection, range.location >= 0, range.length >= 0 else { return nil }
+        let text = value as NSString
+        guard range.location + range.length <= text.length else { return nil }
+        return (text.substring(to: range.location), text.substring(from: range.location + range.length))
+    }
+
+    /// The mark the target field shows at the captured caret: the newest acknowledged one or a newer
+    /// one before the take is confirmed, any from the confirmed one on after. Nil when none shows.
+    private func marksAtCaret(settled: TimeInterval = 0.15) -> Int? {
+        guard let targetField, let context = caretContext, let candidates = inputMethod.showingCandidates(settled: settled) else { return nil }
+        let read = attribute(targetField, kAXValueAttribute) as? String
+        return candidates.reversed().first { InputMethodFinish.showsAtCaret(read: read, texts: [$0.text], before: context.before, after: context.after) }?.seq
+    }
+
+    /// The first marks are looked for in the target field. Seen: the client is the take's (it may now
+    /// commit) and the words heard meanwhile go in. Not seen in time: they are taken back out of that
+    /// client and the take goes on by pFlow's other live paths, once the input method reports them gone.
+    private func lookForFirstMarks() {
+        guard let session = inputMethodTake else { return }
+        let started = Date()
+        inputMethodCheck = Task { [weak self] in
+            while let self, self.inputMethodTake == session, self.inputMethodStopped == nil, !Task.isCancelled {
+                if let seq = self.marksAtCaret(settled: 0.05) {
+                    let probation = self.inputMethod.provisional
+                    self.inputMethod.confirm(seq: seq)
+                    ReasonLog.note(probation ? "input method words seen in the target: the client on probation is the take's"
+                                             : "input method words seen in the target")
+                    if let words = self.inputMethodPending {
+                        self.inputMethodPending = nil
+                        if !self.inputMethod.mark(self.prepared(words).text) { _ = self.stopInputMethod(.uncertain) }
+                    }
+                    return
+                }
+                if Date().timeIntervalSince(started) > Self.confirmWithin {
+                    await self.withdrawToOtherPaths(session: session)
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(40))
+            }
+        }
+    }
+
+    /// The first marks never showed in the target: out of that client they come, and only once the
+    /// input method reports them gone does the take go on another way. Not reported gone: nothing
+    /// more is written, and the finished text is kept for the Copy card, never pasted beside them.
+    private func withdrawToOtherPaths(session: String) async {
+        ReasonLog.note("input method words not seen in the target field: taken back out")
+        let cleared = await inputMethod.clear()
+        inputMethod.end()
+        guard inputMethodTake == session else { return }
+        guard cleared else {
+            ReasonLog.note("input method words not confirmed gone: the finished text stays on the card")
+            inputMethodStopped = .uncertain
+            return
+        }
+        inputMethodTake = nil
+        inputMethodAllowed = false
+        inputMethodPending = nil
+        let start = beginLiveOverCapturedField(session: session)
+        ReasonLog.note("live typing after the input method:", start)
     }
 
     /// Live words stop for the take: the words shown stay as they are, the person's source comes back.
@@ -430,6 +512,8 @@ final class TextInjector: TextInjecting {
     }
 
     func finishInputMethod(session: String, text: String) async -> LiveInlineFinal? {
+        // The first marks may still be looked for, or marks taken back out: that decides first.
+        await inputMethodCheck?.value
         guard inputMethodTake == session else { return nil }
         inputMethodTake = nil
         // Nothing was ever marked (pFlow's source was not the selected one): the text goes in the usual way.
@@ -451,8 +535,18 @@ final class TextInjector: TextInjecting {
             return .kept(stopInputMethod(LiveInlineOwnership.Stop(block)))
         }
         let final = prepared(text).text
-        // The marked words must be in the target itself before the finished text goes over them.
-        if targetReadable, !(await targetShowsMarks(waiting: 0.5)) { _ = notInTarget(); return .notTyped }
+        // The finished text goes through the input method only after its marks were seen at the caret in
+        // the target this take, and are still there. Otherwise they come back out, and the usual checked
+        // paste follows only once the input method reports them gone; if it does not, the Copy card.
+        let atCaret = targetReadable && inputMethod.confirmed ? await targetShowsMarks(waiting: 0.5) : false
+        if InputMethodFinish.takesBackFirst(targetReadable: targetReadable, confirmed: inputMethod.confirmed, marksAtCaret: atCaret) {
+            ReasonLog.note(inputMethod.confirmed ? "input method words no longer at the caret: taken back out"
+                                                 : "input method words never seen in the target: taken back out")
+            let cleared = await inputMethod.clear()
+            inputMethod.end()
+            if !cleared { ReasonLog.note("input method words not confirmed gone: the finished text stays on the card") }
+            return InputMethodFinish.afterTakeBack(cleared: cleared)
+        }
         let result = await inputMethod.commit(final)
         inputMethod.end()
         if !result.ok { ReasonLog.note("input method commit refused") }
@@ -472,28 +566,44 @@ final class TextInjector: TextInjecting {
     /// The target field can be read, so what it shows decides (never the input method's own client).
     private var targetReadable: Bool { targetField != nil && !fieldUnreadable && originalValue != nil }
 
-    /// The target field shows one of this take's marks (waiting up to `waiting` seconds for it to draw).
+    /// The target field shows this take's marks at the caret (waiting up to `waiting` seconds for it to draw).
     private func targetShowsMarks(waiting: TimeInterval) async -> Bool {
-        guard let targetField, let candidates = inputMethod.showingCandidates(settled: 0) else { return true }
         let deadline = Date().addingTimeInterval(waiting)
         repeat {
-            let read = attribute(targetField, kAXValueAttribute) as? String
-            if InputMethodFinish.showsInTarget(read: read, candidates: candidates, original: originalValue) { return true }
+            if marksAtCaret(settled: 0) != nil { return true }
             try? await Task.sleep(for: .milliseconds(50))
         } while Date() < deadline
         return false
     }
 
-    /// The take's marks are not in the target field (another window or field
-    /// of the app has them): they are taken back out of that client, and the
-    /// finished text goes in the usual way at the end.
+    /// The take's marks are not at the caret in the target field (another window or field of the app
+    /// has them): they are taken back out of that client. The finished text goes in the usual way at
+    /// the end only once the input method reports them gone; otherwise it stays on the Copy card.
     private func notInTarget() -> LiveInlineOwnership.Stop {
         ReasonLog.note("input method words not in the target field: taken back out")
         inputMethodStopped = .uncertain
-        inputMethodNothingShown = true
-        inputMethod.cancel()
-        inputMethod.end()
+        let previous = inputMethodCheck
+        inputMethodCheck = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            let cleared = await self.inputMethod.clear()
+            self.inputMethod.end()
+            if cleared { self.inputMethodNothingShown = true }
+            else { ReasonLog.note("input method words not confirmed gone: the finished text stays on the card") }
+        }
         return .uncertain
+    }
+
+    /// The target window's frame in Cocoa screen coordinates, for the input method's check that a
+    /// client on probation has its caret in that window.
+    private func targetWindowFrame() -> CGRect? {
+        guard let targetField, let window = attribute(targetField, kAXWindowAttribute), CFGetTypeID(window) == AXUIElementGetTypeID(),
+              let position = attribute(window as! AXUIElement, kAXPositionAttribute), let size = attribute(window as! AXUIElement, kAXSizeAttribute),
+              CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero, extent = CGSize.zero
+        guard AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(size as! AXValue, .cgSize, &extent),
+              let height = NSScreen.screens.first?.frame.height else { return nil }
+        return CGRect(x: point.x, y: height - point.y - extent.height, width: extent.width, height: extent.height)
     }
 
     /// The field now reads as it did with the finished text at the captured caret.
