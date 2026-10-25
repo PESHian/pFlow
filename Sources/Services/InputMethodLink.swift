@@ -116,8 +116,6 @@ final class InputMethodLink {
         var restored = false
         /// The begin message reached the input method (sent once it is connected).
         var beginSent = false
-        /// Times the source was selected again because no client activation came.
-        var pokes = 0
     }
 
     private(set) var take: Take?
@@ -186,19 +184,10 @@ final class InputMethodLink {
         if take.attach == .pending, waited > Self.attachTimeout {
             take.attach = .failed("timeout")
             self.take = take
-        } else if take.attach == .pending, waited > Self.pokeAfter * Double(take.pokes + 1), take.pokes < 2,
-                  let previous = take.previous {
-            // macOS sometimes selects the source without activating it in the app: select it once more.
-            take.pokes += 1
-            self.take = take
-            _ = selectSource(previous)
-            _ = selectSource(InputMethodWire.sourceID)
-            ReasonLog.note("input source selected again: no activation yet")
         }
         return self.take?.attach ?? .failed("no take")
     }
 
-    static let pokeAfter: TimeInterval = 0.5
 
     /// The whole current transcript as replaceable marked text.
     func mark(_ text: String) -> Bool {
