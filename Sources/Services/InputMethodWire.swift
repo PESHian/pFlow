@@ -72,6 +72,8 @@ enum InputMethodWire {
         var frame: [Double]?
         /// Debug builds only: the input method acts as if macOS sent no activation for this take.
         var simulateNoActivation: Bool?
+        /// Debug builds only: the app of a client on probation commits the first marked words itself.
+        var simulateAppCommit: Bool?
 
         init(_ kind: Kind, take: String? = nil, text: String? = nil, seq: Int? = nil, bundle: String? = nil, uid: String? = nil,
              ok: Bool? = nil, source: String? = nil, reason: String? = nil, markedLength: Int? = nil, seen: Bool? = nil,

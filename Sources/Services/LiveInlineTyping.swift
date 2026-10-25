@@ -329,6 +329,7 @@ extension LiveInlineOwnership.Stop {
         case .text: return "The text in the field changed, so the finished text was not put in."
         case .caret: return "The cursor moved, so the finished text was not put in."
         case .unsupported, .uncertain, .revised: return "pFlow could not check this field, so the finished text was not put in."
+        case .otherWindow: return "Your words may have gone to another window."
         }
     }
 
@@ -344,6 +345,7 @@ extension LiveInlineOwnership.Stop {
         case .secure: return "Stopped: password field"
         case .text: return "Stopped: text changed"
         case .caret: return "Stopped: cursor moved"
+        case .otherWindow: return "Stopped: another window"
         }
     }
 }

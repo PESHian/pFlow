@@ -177,7 +177,19 @@ final class TextInjector: TextInjecting {
     private var inputMethodPending: String?
     /// How long the first marks have to show in the target field before they are taken back out.
     static let confirmWithin: TimeInterval = 0.7
-    var inputMethod: InputMethodLink { InputMethodLink.shared }
+    var inputMethod = InputMethodLink.shared
+    /// The target field's text as Accessibility reads it (replaceable in tests).
+    var readTarget: (AXUIElement) -> String? = { field in
+        var value: CFTypeRef?
+        return AXUIElementCopyAttributeValue(field, kAXValueAttribute as CFString, &value) == .success ? value as? String : nil
+    }
+    /// The guard for marked text over the captured target: nil while it holds (replaceable in tests).
+    lazy var markedTextCheck: () -> LiveInlineOwnership.Stop? = { [unowned self] in
+        guard let check = self.targetCheck() else { return .app }
+        return InsertionGuard.markedTextBlock(check.facts(since: self.inputMethodStarted)).map(LiveInlineOwnership.Stop.init)
+    }
+    /// A stop decided away from an update (the first marks never showed): shown with the next one.
+    private var inputMethodStopNotice: LiveInlineOwnership.Stop?
 
     private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
         var value: CFTypeRef?
@@ -223,6 +235,7 @@ final class TextInjector: TextInjecting {
         inputMethodCheck?.cancel()
         inputMethodCheck = nil
         inputMethodPending = nil
+        inputMethodStopNotice = nil
         targetApp = NSWorkspace.shared.frontmostApplication
         PersonInput.shared.start()
         // Whether the person was composing when the take started: the end of
@@ -230,6 +243,22 @@ final class TextInjector: TextInjecting {
         composition = PersonInput.shared.compositionSnapshot(sourceID: PersonInput.selectedInputMethodID())
         captureField()
     }
+
+    #if DEBUG
+    /// Tests: a take on pFlow Dictation over a given field, its text and caret (no real app).
+    func adoptInputMethodTakeForTesting(session: String, field: AXUIElement, value: String, caret: Int) {
+        targetField = field
+        fieldUnreadable = false
+        originalValue = value
+        originalSelection = CFRange(location: caret, length: 0)
+        placeholder = nil
+        inputMethodTake = session
+        inputMethodStopped = nil
+        inputMethodNothingShown = false
+        inputMethodAllowed = true
+        inputMethodStarted = PersonInput.now()
+    }
+    #endif
 
     /// The focused field of the captured app and what it holds, so a paste
     /// later can tell whether anything changed.
@@ -409,12 +438,12 @@ final class TextInjector: TextInjecting {
 
     /// The whole current transcript as marked text, only while every check passes.
     private func reconcileInputMethod(_ transcript: String) -> LiveInlineOwnership.Stop? {
-        guard inputMethodStopped == nil else { return nil }
-        if let reason = inputMethod.interrupted { return stopInputMethod(InputMethodLink.stop(for: reason)) }
-        guard let check = targetCheck() else { return stopInputMethod(.app) }
-        if let block = InsertionGuard.markedTextBlock(check.facts(since: inputMethodStarted)) {
-            return stopInputMethod(LiveInlineOwnership.Stop(block))
+        guard inputMethodStopped == nil else {
+            defer { inputMethodStopNotice = nil }
+            return inputMethodStopNotice
         }
+        if let reason = inputMethod.interrupted { return stopInputMethod(InputMethodLink.stop(for: reason)) }
+        if let stop = markedTextCheck() { return stopInputMethod(stop) }
         let words = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !words.isEmpty else { return nil }
         if targetReadable {
@@ -449,7 +478,7 @@ final class TextInjector: TextInjecting {
     /// one before the take is confirmed, any from the confirmed one on after. Nil when none shows.
     private func marksAtCaret(settled: TimeInterval = 0.15) -> Int? {
         guard let targetField, let context = caretContext, let candidates = inputMethod.showingCandidates(settled: settled) else { return nil }
-        let read = attribute(targetField, kAXValueAttribute) as? String
+        let read = readTarget(targetField)
         return candidates.reversed().first { InputMethodFinish.showsAtCaret(read: read, texts: [$0.text], before: context.before, after: context.after) }?.seq
     }
 
@@ -490,8 +519,9 @@ final class TextInjector: TextInjecting {
         inputMethod.end()
         guard inputMethodTake == session else { return }
         guard cleared else {
-            ReasonLog.note("input method words not confirmed gone: the finished text stays on the card")
-            inputMethodStopped = .uncertain
+            ReasonLog.note("input method words not proven gone: the finished text stays on the card")
+            inputMethodStopped = .otherWindow
+            inputMethodStopNotice = .otherWindow
             return
         }
         inputMethodTake = nil
@@ -530,10 +560,7 @@ final class TextInjector: TextInjecting {
             inputMethod.end()
             return .notTyped
         }
-        guard let check = targetCheck() else { return .kept(stopInputMethod(.app)) }
-        if let block = InsertionGuard.markedTextBlock(check.facts(since: inputMethodStarted)) {
-            return .kept(stopInputMethod(LiveInlineOwnership.Stop(block)))
-        }
+        if let stop = markedTextCheck() { return .kept(stopInputMethod(stop)) }
         let final = prepared(text).text
         // The finished text goes through the input method only after its marks were seen at the caret in
         // the target this take, and are still there. Otherwise they come back out, and the usual checked
@@ -544,7 +571,7 @@ final class TextInjector: TextInjecting {
                                                  : "input method words never seen in the target: taken back out")
             let cleared = await inputMethod.clear()
             inputMethod.end()
-            if !cleared { ReasonLog.note("input method words not confirmed gone: the finished text stays on the card") }
+            if !cleared { ReasonLog.note("input method words not proven gone: the finished text stays on the card") }
             return InputMethodFinish.afterTakeBack(cleared: cleared)
         }
         let result = await inputMethod.commit(final)
@@ -589,7 +616,10 @@ final class TextInjector: TextInjecting {
             let cleared = await self.inputMethod.clear()
             self.inputMethod.end()
             if cleared { self.inputMethodNothingShown = true }
-            else { ReasonLog.note("input method words not confirmed gone: the finished text stays on the card") }
+            else {
+                ReasonLog.note("input method words not proven gone: the finished text stays on the card")
+                self.inputMethodStopped = .otherWindow
+            }
         }
         return .uncertain
     }
@@ -611,7 +641,7 @@ final class TextInjector: TextInjecting {
         guard let targetField, originalValue != nil else { return false }
         let expected = placeholderStart ? final : expectedValue(inserting: final)
         for _ in 0..<10 {
-            let read = attribute(targetField, kAXValueAttribute) as? String
+            let read = readTarget(targetField)
             if EditorPlaceholder.landed(read, expected: expected, start: originalValue, startedAsPlaceholder: placeholderStart) { return true }
             try? await Task.sleep(for: .milliseconds(100))
         }

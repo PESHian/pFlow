@@ -285,6 +285,20 @@ extension TakeHarness {
         // "leftover": from the second take on, the input method acts as if macOS sent no activation, so
         // the client still active is the OTHER window's (the last take's). "frames": frames of take 2.
         let leftover = parts.contains("leftover"), withFrames = parts.contains("frames")
+        // "appcommit": the leftover window's app commits the first marked words itself.
+        // "click": a click into the other window's field during the probe (only where it shows).
+        let appCommit = parts.contains("appcommit"), click = parts.contains("click")
+        if parts.contains("partial") {
+            // Window one large, window two small over its top left: when two is the target, one's caret
+            // is inside two's frame (probation allowed) and the right part of one's field still shows.
+            for (target, frame) in [(one, CGRect(x: 8, y: 40, width: 1000, height: 660)), (two, CGRect(x: 8, y: 40, width: 470, height: 380))] {
+                guard let field = target.field, let window = element(field, kAXWindowAttribute) else { continue }
+                var origin = frame.origin, size = frame.size
+                if let position = AXValueCreate(.cgPoint, &origin) { AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, position) }
+                if let extent = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, extent) }
+            }
+            await pause(0.8)
+        }
         // "side": the two windows side by side, so a frame shows both.
         if parts.contains("side") {
             for (n, target) in [one, two].enumerated() {
@@ -295,12 +309,23 @@ extension TakeHarness {
             }
             await pause(0.8)
         }
-        defer { UserDefaults.standard.removeObject(forKey: "pflow.debug.simulateNoActivation") }
+        defer {
+            UserDefaults.standard.removeObject(forKey: "pflow.debug.simulateNoActivation")
+            UserDefaults.standard.removeObject(forKey: "pflow.debug.simulateAppCommit")
+        }
         var takes: [[String: Any]] = []
         for n in 0..<rounds {
             for (target, other) in [(one, two), (two, one)] {
                 let otherBefore = await other.readBack() ?? ""
                 UserDefaults.standard.set(leftover && !takes.isEmpty, forKey: "pflow.debug.simulateNoActivation")
+                UserDefaults.standard.set(appCommit && !takes.isEmpty, forKey: "pflow.debug.simulateAppCommit")
+                var clicked = false
+                let during: (() async -> Void)? = click && target === two ? { [self] in
+                    // A point of the other window's field to the right of the target window.
+                    guard let field = other.field, let frame = self.frame(of: field), frame.maxX > 520 else { return }
+                    self.personClick(at: CGPoint(x: max(frame.minX + 10, 540), y: frame.midY))
+                    clicked = true
+                } : nil
                 let frames = withFrames && takes.count == 1 ? folder.appendingPathComponent("frames-twowin-\(parts[3])") : nil
                 // The other window's live state during the take: anything of this take's words showing there.
                 var otherShowed = false
@@ -310,7 +335,8 @@ extension TakeHarness {
                         try? await Task.sleep(for: .milliseconds(50))
                     }
                 }
-                var take = await realTake(target, way: parts[3], label: "\(spec)#\(n + 1)-\(target.name)", frames: frames)
+                var take = await realTake(target, way: parts[3], label: "\(spec)#\(n + 1)-\(target.name)", frames: frames, during: during)
+                take["clickedOther"] = clicked
                 watch.cancel()
                 let otherAfter = await other.readBack() ?? ""
                 take["otherShowedDuring"] = otherShowed
@@ -323,7 +349,10 @@ extension TakeHarness {
         let wrong = takes.filter { $0["otherUnchanged"] as? Bool == false }.count
         let flashed = takes.filter { $0["otherShowedDuring"] as? Bool == true }.count
         let used = takes.filter { $0["inputMethod"] as? Bool == true }.count
-        note("SUMMARY \(spec): own window once or refused \(right)/\(takes.count), other window changed \(wrong)/\(takes.count), other window showed words during the take \(flashed)/\(takes.count), input method \(used)/\(takes.count)")
+        // Words in both windows: in the target, and the other window changed too.
+        let doubled = takes.filter { $0["landedOnce"] as? Bool == true && $0["otherUnchanged"] as? Bool == false }.count
+        let cards = takes.filter { ($0["outcome"] as? String ?? "").contains("savedToHistory") && $0["card"] as? Bool == true }.count
+        note("SUMMARY \(spec): own window once or refused \(right)/\(takes.count), other window changed \(wrong)/\(takes.count), other window showed words during the take \(flashed)/\(takes.count), input method \(used)/\(takes.count), words in both windows \(doubled)/\(takes.count), card shown \(cards)/\(takes.count), clicked other \(takes.filter { $0["clickedOther"] as? Bool == true }.count)")
         return ["spec": spec, "takes": takes]
     }
 

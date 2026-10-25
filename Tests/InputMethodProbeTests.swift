@@ -8,19 +8,45 @@ import Testing
 /// back out of that same client with an empty mark, confirmed gone.
 @MainActor
 struct InputMethodProbeTests {
-    /// A text client that records what the input method did to it.
+    /// A text client that records what the input method did to it, with its own text and caret.
     final class FakeClient: MarkedTextClient {
         let bundle: String?
         var caretRect: CGRect?
         var marks: [String] = []
         var inserts: [String] = []
-        /// What the client reports as marked; a client that refuses to let go keeps it.
+        /// A client that refuses to let go of its marked text keeps it.
         var refusesToClear = false
+        /// A client whose text cannot be read.
+        var unreadable = false
+        private(set) var text: String
+        private var caret: Int
         private var shown = ""
-        init(_ bundle: String, caret: CGRect? = nil) { self.bundle = bundle; caretRect = caret }
-        func setMarked(_ text: String) { marks.append(text); if !(refusesToClear && text.isEmpty) { shown = text } }
-        func insert(_ text: String) { inserts.append(text); shown = "" }
+        init(_ bundle: String, caret rect: CGRect? = nil, text: String = "Dear Sam,") {
+            self.bundle = bundle; caretRect = rect; self.text = text; caret = (text as NSString).length
+        }
+        func setMarked(_ words: String) { marks.append(words); if !(refusesToClear && words.isEmpty) { shown = words } }
+        func insert(_ words: String) {
+            inserts.append(words)
+            text = (text as NSString).replacingCharacters(in: NSRange(location: caret, length: 0), with: words)
+            caret += (words as NSString).length
+            shown = ""
+        }
+        /// The app commits its composition by itself (a blur, a click), telling no input method.
+        func appCommitsComposition() {
+            let words = shown
+            shown = ""
+            text = (text as NSString).replacingCharacters(in: NSRange(location: caret, length: 0), with: words)
+            caret += (words as NSString).length
+        }
         var markedLength: Int { (shown as NSString).length }
+        var caretLocation: Int? { caret }
+        private var document: String { (text as NSString).replacingCharacters(in: NSRange(location: caret, length: 0), with: shown) }
+        /// Like an app's text client: a range past the end reads as what there is.
+        func text(in range: NSRange) -> String? {
+            let all = document as NSString
+            guard !unreadable, range.location <= all.length else { return unreadable ? nil : "" }
+            return all.substring(with: NSRange(location: range.location, length: min(range.length, all.length - range.location)))
+        }
     }
 
     private func id(_ object: AnyObject) -> ObjectIdentifier { ObjectIdentifier(object) }
@@ -58,7 +84,7 @@ struct InputMethodProbeTests {
         _ = core.begin(bundle: "com.google.Chrome", after: 20)
         #expect(core.probe(id(otherWindow), client: otherWindow, window: nil))
         #expect(core.mark("the harbor", controller: id(otherWindow), client: otherWindow))
-        #expect(core.clear(), "reported gone")
+        #expect(core.clear() == .gone, "reported gone")
         #expect(otherWindow.marks == ["the harbor", ""], "an empty mark, in the very client that showed them")
         #expect(otherWindow.inserts.isEmpty, "never inserted, not even an empty text")
         #expect(target.marks.isEmpty && target.inserts.isEmpty)
@@ -71,7 +97,58 @@ struct InputMethodProbeTests {
         _ = core.begin(bundle: "com.google.Chrome", after: 20)
         _ = core.probe(id(stubborn), client: stubborn, window: nil)
         _ = core.mark("the harbor", controller: id(stubborn), client: stubborn)
-        #expect(!core.clear(), "still marked: not reported gone")
+        #expect(core.clear() == .stillMarked, "still marked: not reported gone")
+    }
+
+    /// The other window's app committed the words itself (Chrome on a blur): nothing marked, yet
+    /// the words are there. That is no take-back, and pFlow must not paste.
+    @Test func wordsTheAppCommittedItselfAreNotTakenBack() {
+        let core = InputMethodTakeCore()
+        let otherWindow = FakeClient("com.google.Chrome")
+        _ = core.begin(bundle: "com.google.Chrome", after: 20)
+        _ = core.probe(id(otherWindow), client: otherWindow, window: nil)
+        _ = core.mark(" the harbor", controller: id(otherWindow), client: otherWindow)
+        otherWindow.appCommitsComposition()
+        #expect(otherWindow.markedLength == 0)
+        #expect(core.clear() == .committed, "the words are in that window's text")
+        #expect(core.clear() == .committed, "asked again, the same answer")
+    }
+
+    /// Long words: only their end is read back (an app keeps little text around the caret).
+    @Test func longWordsTheAppCommittedAreFoundByTheirEnd() {
+        let core = InputMethodTakeCore()
+        let client = FakeClient("com.google.Chrome")
+        let words = " the harbor lights glow softly tonight while seven blue kites drift over the sandy dunes and the children follow"
+        _ = core.begin(bundle: "com.google.Chrome", after: 20)
+        _ = core.probe(id(client), client: client, window: nil)
+        _ = core.mark(words, controller: id(client), client: client)
+        client.appCommitsComposition()
+        #expect(core.clear() == .committed)
+        let clean = FakeClient("com.google.Chrome", text: "Dear Sam, see you soon at the harbor gate before the ferry leaves this evening, bring the maps and the kites")
+        let core2 = InputMethodTakeCore()
+        _ = core2.begin(bundle: "com.google.Chrome", after: 20)
+        _ = core2.probe(id(clean), client: clean, window: nil)
+        _ = core2.mark(words, controller: id(clean), client: clean)
+        #expect(core2.clear() == .gone, "taken back out: the field's own text is not the words")
+    }
+
+    @Test func aClientWhoseTextCannotBeReadGivesNoProof() {
+        let core = InputMethodTakeCore()
+        let unreadable = FakeClient("com.google.Chrome")
+        unreadable.unreadable = true
+        _ = core.begin(bundle: "com.google.Chrome", after: 20)
+        _ = core.probe(id(unreadable), client: unreadable, window: nil)
+        _ = core.mark(" the harbor", controller: id(unreadable), client: unreadable)
+        #expect(core.clear() == .unread)
+    }
+
+    @Test func theSameWordsAlreadyInTheWindowDoNotCountAsCommitted() {
+        let core = InputMethodTakeCore()
+        let client = FakeClient("com.apple.TextEdit", text: "Dear Sam, the harbor")
+        _ = core.begin(bundle: "com.apple.TextEdit", after: 20)
+        _ = core.probe(id(client), client: client, window: nil)
+        _ = core.mark(" the harbor", controller: id(client), client: client)
+        #expect(core.clear() == .gone)
     }
 
     @Test func unconfirmedWordsAreTakenOutWhenTheTakeEndsNotKept() {
@@ -219,9 +296,10 @@ struct InputMethodProbeTests {
         #expect(!InputMethodFinish.takesBackFirst(targetReadable: false, confirmed: true, marksAtCaret: false))
     }
 
-    /// (a) Marks not reported gone: no paste beside them; the finished text stays on the Copy card.
-    @Test func noPasteUnlessTheTakeBackIsConfirmed() {
+    /// (a) Marks not proven gone: no paste beside them; the Copy card says why.
+    @Test func noPasteUnlessTheTakeBackIsProven() {
         #expect(InputMethodFinish.afterTakeBack(cleared: true) == .notTyped)
-        #expect(InputMethodFinish.afterTakeBack(cleared: false) == .kept(.uncertain))
+        #expect(InputMethodFinish.afterTakeBack(cleared: false) == .kept(.otherWindow))
+        #expect(LiveInlineOwnership.Stop.otherWindow.cardReason == "Your words may have gone to another window.")
     }
 }

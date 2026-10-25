@@ -80,6 +80,9 @@ struct LiveInlineOwnership {
         /// Keys only (append only): the recognizer changed a word pFlow already
         /// typed, or a line break came. Typing stops; the end replace still runs.
         case revised
+        /// Live words were taken back out of a client that was not the target, and pFlow could
+        /// not prove they are not still there (the app may have committed them): no paste.
+        case otherWindow
     }
 
     struct Write: Equatable {

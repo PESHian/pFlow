@@ -25,6 +25,7 @@ final class Link {
         let source: String?
         var broken: String?
         var simulateNoActivation = false
+        var simulateAppCommit = false
     }
     private var take: Take?
     #if DEBUG
@@ -112,6 +113,7 @@ final class Link {
             guard let id = message.take, let bundle = message.bundle else { return }
             take = Take(id: id, bundle: bundle, source: message.source)
             #if DEBUG
+            if message.simulateAppCommit == true { take?.simulateAppCommit = true }
             if message.simulateNoActivation == true {
                 take?.simulateNoActivation = true
                 if let (controller, client) = lastTakeClient { current = controller; currentClient = client }
@@ -145,6 +147,13 @@ final class Link {
         case .mark:
             guard let text = message.text else { return }
             let ok = write { controller, client in core.mark(text, controller: controller, client: client) }
+            #if DEBUG
+            // The app commits the composition itself (as Chrome does on a blur), telling no input method.
+            if ok, take?.simulateAppCommit == true, core.binding.provisional != nil {
+                currentClient?.client.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+                reasons.notice("trace: the app committed the marked words itself (simulated)")
+            }
+            #endif
             send(.init(.marked, take: message.take, seq: message.seq, ok: ok))
         case .commit:
             guard let text = message.text else { return }
@@ -153,9 +162,14 @@ final class Link {
             readBack(text, take: message.take, tries: 4)
         case .cancel:
             // Back out of the very client that shows the words, with an empty mark, and confirmed gone.
-            let ok = core.clear()
-            if !ok { reasons.notice("marked text still reported after taking it back out") }
-            send(.init(.cleared, take: message.take, ok: ok))
+            #if DEBUG
+            if let client = currentClient {
+                reasons.notice("trace take-back: caret \(client.caretLocation ?? -1, privacy: .public) length \(client.textLength ?? -1, privacy: .public) marked \(client.markedLength, privacy: .public)")
+            }
+            #endif
+            let result = core.clear()
+            if result != .gone { reasons.notice("take-back not proven: \(result.rawValue, privacy: .public)") }
+            send(.init(.cleared, take: message.take, ok: result == .gone, reason: result.rawValue))
         case .keep:
             core.keepAsIs()
         case .end:
@@ -344,5 +358,20 @@ final class IMKClient: MarkedTextClient {
         var actual = NSRange()
         let rect = client.firstRect(forCharacterRange: selected, actualRange: &actual)
         return rect == .zero ? nil : rect
+    }
+
+    var caretLocation: Int? {
+        let selected = client.selectedRange()
+        return selected.location == NSNotFound ? nil : selected.location
+    }
+
+    var textLength: Int? {
+        let length = client.length()
+        return length == NSNotFound ? nil : length
+    }
+
+    func text(in range: NSRange) -> String? {
+        var actual = NSRange()
+        return client.attributedSubstring(from: range)?.string ?? client.string(from: range, actualRange: &actual)
     }
 }

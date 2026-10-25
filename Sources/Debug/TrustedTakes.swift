@@ -221,6 +221,14 @@ final class TakeHarness {
         }
     }
 
+    func frame(of element: AXUIElement) -> CGRect? {
+        guard let p = attribute(element, kAXPositionAttribute), let s = attribute(element, kAXSizeAttribute) else { return nil }
+        var point = CGPoint.zero, size = CGSize.zero
+        AXValueGetValue(p as! AXValue, .cgPoint, &point)
+        AXValueGetValue(s as! AXValue, .cgSize, &size)
+        return CGRect(origin: point, size: size)
+    }
+
     func center(of element: AXUIElement) -> CGPoint? {
         guard let p = attribute(element, kAXPositionAttribute), let s = attribute(element, kAXSizeAttribute) else { return nil }
         var point = CGPoint.zero, size = CGSize.zero

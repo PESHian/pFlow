@@ -115,10 +115,10 @@ enum InputMethodFinish {
         targetReadable && !(confirmed && marksAtCaret)
     }
 
-    /// After marks were taken back out: the usual checked paste only once the input method reported
-    /// them gone; otherwise they may still show somewhere, and the finished text stays on the Copy card.
+    /// After marks were taken back out: the usual checked paste only once the input method proved
+    /// them gone; otherwise they may be in another window, and the finished text stays on the Copy card.
     static func afterTakeBack(cleared: Bool) -> LiveInlineFinal {
-        cleared ? .notTyped : .kept(.uncertain)
+        cleared ? .notTyped : .kept(.otherWindow)
     }
 
     static func clean(_ text: String) -> String {
@@ -282,6 +282,7 @@ final class InputMethodLink {
         var message = InputMethodWire.Message(.begin, take: take.id, bundle: take.bundle, source: take.previous, at: take.selectedAt)
         #if DEBUG
         if UserDefaults.standard.bool(forKey: "pflow.debug.simulateNoActivation") { message.simulateNoActivation = true }
+        if UserDefaults.standard.bool(forKey: "pflow.debug.simulateAppCommit") { message.simulateAppCommit = true }
         #endif
         guard transmit(message) else { return }
         self.take?.beginSent = true
