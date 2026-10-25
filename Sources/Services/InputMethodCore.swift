@@ -130,12 +130,19 @@ final class InputMethodTakeCore {
         let probe = words.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !probe.isEmpty else { return .gone }
         guard let start = markStart else { return .unread }
+        // Where the client's caret is now: right after the words if the app committed them, back
+        // where they began if they came out. Anything else, or no caret: no proof.
+        guard let caret = markedClient.caretLocation else { return .unread }
         let length = (words as NSString).length
-        let tail = min(length, Self.tailLength)
-        guard let read = markedClient.text(in: NSRange(location: start + length - tail, length: tail)) else { return .unread }
-        // The words' end sits where it would if the app had committed them. (Text that happened to
-        // read the same there before the take also counts: no paste, the safe side.)
-        return read == (words as NSString).substring(from: length - tail) ? .committed : .gone
+        let head = min(length, Self.tailLength)
+        if caret == start + length, length > 0 {
+            guard let before = markedClient.text(in: NSRange(location: caret - head, length: head)) else { return .unread }
+            return before == (words as NSString).substring(from: length - head) ? .committed : .unread
+        }
+        guard caret == start else { return .unread }
+        // Back at the start: the text there must not begin with the words.
+        guard let after = markedClient.text(in: NSRange(location: start, length: head)) else { return .unread }
+        return after == (words as NSString).substring(to: head) ? .committed : .gone
     }
 
     func end() {

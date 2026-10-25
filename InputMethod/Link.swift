@@ -168,6 +168,11 @@ final class Link {
             }
             #endif
             let result = core.clear()
+            #if DEBUG
+            if let client = currentClient {
+                reasons.notice("trace take-back after: caret \(client.caretLocation ?? -1, privacy: .public) result \(result.rawValue, privacy: .public)")
+            }
+            #endif
             if result != .gone { reasons.notice("take-back not proven: \(result.rawValue, privacy: .public)") }
             send(.init(.cleared, take: message.take, ok: result == .gone, reason: result.rawValue))
         case .keep:

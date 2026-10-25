@@ -171,6 +171,9 @@ final class TextInjector: TextInjecting {
     private var inputMethodNothingShown = false
     /// Cleared for the take once the input method could not be used.
     private var inputMethodAllowed = true
+    /// When the take's target was captured: a person's key or click after it means the focused
+    /// field may be one they chose, not the target, so it is never taken as the target later.
+    private var capturedAt: UInt64 = 0
     /// Looking for the first marks in the target field, or taking marks back out: finishing waits for it.
     private var inputMethodCheck: Task<Void, Never>?
     /// Words heard while the first marks are being looked for; marked once they are seen.
@@ -238,6 +241,7 @@ final class TextInjector: TextInjecting {
         inputMethodStopNotice = nil
         targetApp = NSWorkspace.shared.frontmostApplication
         PersonInput.shared.start()
+        capturedAt = PersonInput.now()
         // Whether the person was composing when the take started: the end of
         // the take refuses until a real commit is seen, whatever the time.
         composition = PersonInput.shared.compositionSnapshot(sourceID: PersonInput.selectedInputMethodID())
@@ -397,6 +401,12 @@ final class TextInjector: TextInjecting {
             }
         }
         guard let targetApp, targetApp.isActive else { return .preview(.app) }
+        // The person clicked or typed since the take began: the focused field may be one they
+        // moved to. It never becomes the target; the words show in the preview.
+        if PersonInput.shared.acted(since: capturedAt) == true {
+            ReasonLog.note("live typing not started: the person clicked or typed while it waited")
+            return .preview(.caret)
+        }
         // The field the app reports now replaces the one captured before it
         // built its tree, for live typing and for the normal paste alike.
         captureField()
