@@ -206,6 +206,35 @@ struct InputMethodTests {
         #expect(world.selects.count == 3, "once")
     }
 
+    /// A late activation while the person's source is selected for the re-selection is not the take's.
+    @Test func aLateActivationDuringTheReselectionIsIgnored() {
+        let world = World()
+        let link = link(world)
+        #expect(link.begin(id: "t", bundle: "com.google.Chrome"))
+        world.now += 0.6
+        _ = link.attachState()
+        #expect(world.current == "com.apple.keylayout.ABC")
+        link.receive(.init(.client, take: "t", bundle: "com.google.Chrome"))
+        #expect(link.attachState() == .pending, "not attached while pFlow's source is not selected")
+        world.now += 0.3
+        _ = link.attachState()
+        #expect(world.current == InputMethodWire.sourceID)
+        link.receive(.init(.client, take: "t", bundle: "com.google.Chrome"))
+        #expect(link.attachState() == .attached)
+    }
+
+    /// Marked text goes nowhere while another source is selected: no mark is sent then.
+    @Test func noMarkWhileAnotherSourceIsSelected() {
+        let world = World()
+        let link = link(world)
+        #expect(link.begin(id: "t", bundle: "com.apple.TextEdit"))
+        link.receive(.init(.client, take: "t", bundle: "com.apple.TextEdit"))
+        world.current = "com.apple.keylayout.ABC"
+        #expect(!link.mark("the harbor"))
+        #expect(link.interrupted == "notSelected")
+        #expect(!world.sent.contains { $0.kind == .mark })
+    }
+
     /// The person's source is saved before the switch, so a pFlow that dies in between can still be undone.
     @Test func thePersonsSourceIsSavedBeforeTheSwitch() {
         let world = World()

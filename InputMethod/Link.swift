@@ -52,10 +52,11 @@ final class Link {
 
     private func connect() {
         let socket = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-        guard socket >= 0, var addr = InputMethodWire.address(InputMethodWire.socketPath) else { connectSoon(after: 2); return }
+        guard socket >= 0, var addr = InputMethodWire.address(InputMethodWire.socketPath) else { connectSoon(after: 0.5); return }
         let ok = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
             Darwin.connect(socket, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } } == 0
-        guard ok, verifyServer(socket) else { close(socket); connectSoon(after: 2); return }
+        // Retried twice a second, so a pFlow that just started is reached before its first take.
+        guard ok, verifyServer(socket) else { close(socket); connectSoon(after: 0.5); return }
         fd = socket
         var on: Int32 = 1
         setsockopt(socket, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
@@ -105,7 +106,7 @@ final class Link {
             restoreSource()
             take = nil
         }
-        connectSoon(after: 1)
+        connectSoon(after: 0.5)
     }
 
     // MARK: Messages from pFlow

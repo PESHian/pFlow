@@ -128,6 +128,8 @@ final class InputMethodLink {
         var beginSent = false
         /// Re-selection when no activation came: 0 none, 1 the person's source selected, 2 pFlow's again.
         var reselect = 0
+        /// When the begin reached the input method (the re-selection counts from then).
+        var beganAt: TimeInterval?
     }
 
     private(set) var take: Take?
@@ -198,6 +200,7 @@ final class InputMethodLink {
         guard let take, !take.beginSent, connected,
               transmit(.init(.begin, take: take.id, bundle: take.bundle, source: take.previous)) else { return }
         self.take?.beginSent = true
+        self.take?.beganAt = clock()
     }
 
     /// Whether the input method is active in the take's app yet.
@@ -207,7 +210,8 @@ final class InputMethodLink {
         if take.attach == .pending, waited > Self.attachTimeout {
             take.attach = .failed("timeout")
             self.take = take
-        } else if take.attach == .pending, let previous = take.previous {
+        } else if take.attach == .pending, let previous = take.previous, let beganAt = take.beganAt {
+            let waited = clock() - beganAt
             // macOS sometimes leaves this source selected-but-inactive in the app (VM logs: no
             // activation at all after the select). Select the person's source, give the
             // deactivation a moment to arrive, then select pFlow's again: that brings a fresh one.
@@ -229,6 +233,8 @@ final class InputMethodLink {
     /// The whole current transcript as replaceable marked text.
     func mark(_ text: String) -> Bool {
         guard var take, take.attach == .attached, take.interrupted == nil else { return false }
+        // Marked text shows only while pFlow's source is the selected one.
+        guard currentSource() == InputMethodWire.sourceID else { interrupt("notSelected"); return false }
         take.updates += 1
         take.seq += 1
         let sent = transmit(.init(.mark, take: take.id, text: text, seq: take.seq))
@@ -247,6 +253,7 @@ final class InputMethodLink {
     /// Commits the finished text once over the marked text; waits for the input method's answer.
     func commit(_ text: String) async -> (ok: Bool, seen: Bool) {
         guard let take, take.attach == .attached, take.interrupted == nil else { return (false, false) }
+        guard currentSource() == InputMethodWire.sourceID else { interrupt("notSelected"); return (false, false) }
         guard transmit(.init(.commit, take: take.id, text: text)) else { return (false, false) }
         self.take?.marked = true
         commitTake = take.id
@@ -306,7 +313,9 @@ final class InputMethodLink {
     func receive(_ message: InputMethodWire.Message) {
         switch message.kind {
         case .client:
-            guard var take, take.attach == .pending, message.take == take.id else { return }
+            // While re-selecting, the person's source is selected for a moment: an activation then is a
+            // late one from before, not the take's (marks would go to a client that shows nothing).
+            guard var take, take.attach == .pending, message.take == take.id, take.reselect != 1 else { return }
             take.attach = message.bundle == take.bundle ? .attached : .failed("other app")
             self.take = take
         case .marked:

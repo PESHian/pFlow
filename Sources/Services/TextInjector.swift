@@ -167,6 +167,8 @@ final class TextInjector: TextInjecting {
     private var inputMethodTake: String?
     private var inputMethodStarted: UInt64 = 0
     private var inputMethodStopped: LiveInlineOwnership.Stop?
+    /// The take's input method never marked anything, so nothing of pFlow's is in the field.
+    private var inputMethodNothingShown = false
     /// Cleared for the take once the input method could not be used.
     private var inputMethodAllowed = true
     var inputMethod: InputMethodLink { InputMethodLink.shared }
@@ -210,6 +212,7 @@ final class TextInjector: TextInjecting {
         inputMethod.end()
         inputMethodTake = nil
         inputMethodStopped = nil
+        inputMethodNothingShown = false
         inputMethodAllowed = true
         targetApp = NSWorkspace.shared.frontmostApplication
         PersonInput.shared.start()
@@ -372,7 +375,7 @@ final class TextInjector: TextInjecting {
     }
 
     func typedLive(session: String) -> Bool {
-        if inputMethodTake == session { return inputMethod.take?.marked == true || inputMethodStopped != nil }
+        if inputMethodTake == session { return !inputMethodNothingShown && (inputMethod.take?.marked == true || inputMethodStopped != nil) }
         return live.typed(session: session)
     }
 
@@ -410,6 +413,7 @@ final class TextInjector: TextInjecting {
     /// Live words stop for the take: the words shown stay as they are, the person's source comes back.
     private func stopInputMethod(_ stop: LiveInlineOwnership.Stop) -> LiveInlineOwnership.Stop {
         inputMethodStopped = stop
+        if inputMethod.interrupted == "notSelected", inputMethod.take?.seq == 0 { inputMethodNothingShown = true }
         inputMethod.freeze()
         inputMethod.end()
         ReasonLog.note("live words through the input method stopped:", stop)
@@ -419,6 +423,11 @@ final class TextInjector: TextInjecting {
     func finishInputMethod(session: String, text: String) async -> LiveInlineFinal? {
         guard inputMethodTake == session else { return nil }
         inputMethodTake = nil
+        // Nothing was ever marked (pFlow's source was not the selected one): the text goes in the usual way.
+        if inputMethodNothingShown || (inputMethod.interrupted == "notSelected" && inputMethod.take?.seq == 0) {
+            inputMethod.end()
+            return .notTyped
+        }
         if let stop = inputMethodStopped { return .kept(stop) }
         if let reason = inputMethod.interrupted {
             return .kept(stopInputMethod(InputMethodLink.stop(for: reason)))
