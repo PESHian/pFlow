@@ -43,6 +43,8 @@ enum InputMethodWire {
             case end
             /// input method → pFlow: the take can no longer be written (`reason`: key, click, appCommit, clientChanged).
             case interrupted
+            /// pFlow → input method: pFlow selected the source again at `at`; only an activation from then on counts.
+            case rebind
         }
         var kind: Kind
         var take: String?
@@ -55,11 +57,15 @@ enum InputMethodWire {
         var reason: String?
         var markedLength: Int?
         var seen: Bool?
+        /// System uptime when pFlow selected its source for the take (begin, rebind).
+        var at: Double?
 
         init(_ kind: Kind, take: String? = nil, text: String? = nil, seq: Int? = nil, bundle: String? = nil, uid: String? = nil,
-             ok: Bool? = nil, source: String? = nil, reason: String? = nil, markedLength: Int? = nil, seen: Bool? = nil) {
+             ok: Bool? = nil, source: String? = nil, reason: String? = nil, markedLength: Int? = nil, seen: Bool? = nil,
+             at: Double? = nil) {
             self.kind = kind; self.take = take; self.text = text; self.seq = seq; self.bundle = bundle; self.uid = uid
             self.ok = ok; self.source = source; self.reason = reason; self.markedLength = markedLength; self.seen = seen
+            self.at = at
         }
     }
 
@@ -158,5 +164,81 @@ enum InputMethodWire {
     /// The input method shipped inside a pFlow app bundle.
     static func embedded(in app: URL) -> URL {
         app.appendingPathComponent("Contents/Library/Input Methods").appendingPathComponent(bundleName)
+    }
+}
+
+/// Which text client a take writes to, as the input method decides it
+/// (shared, so pFlow's tests cover it). A take binds only to a client
+/// activated for this take: at or after the moment pFlow selected its source
+/// for it (or selected it again), in the take's app. Never a leftover
+/// activation from an earlier take, even one IMK never deactivated.
+struct InputMethodBinding {
+    struct Activation: Equatable {
+        let controller: ObjectIdentifier
+        let bundle: String?
+        let at: TimeInterval
+    }
+    enum Event: Equatable { case none, bound, rebound, changed }
+
+    private(set) var bundle: String?
+    private(set) var after: TimeInterval = .infinity
+    private(set) var bound: ObjectIdentifier?
+    private(set) var last: Activation?
+    /// Words were marked in the bound client: it can no longer be swapped for another.
+    var marked = false
+
+    mutating func begin(bundle: String, after: TimeInterval) -> Event {
+        self.bundle = bundle
+        self.after = after
+        bound = nil
+        marked = false
+        return bindLast()
+    }
+
+    /// pFlow selected the source again: only an activation from `after` on counts.
+    mutating func rebind(after: TimeInterval) -> Event {
+        guard bundle != nil, !marked else { return .none }
+        self.after = after
+        bound = nil
+        return bindLast()
+    }
+
+    mutating func activated(_ activation: Activation) -> Event {
+        last = activation
+        guard let bundle else { return .none }
+        let fresh = activation.at >= after && activation.bundle == bundle
+        guard let bound else {
+            guard fresh else { return .none }
+            self.bound = activation.controller
+            return .bound
+        }
+        if activation.controller == bound { return .none }
+        if fresh, !marked {
+            self.bound = activation.controller
+            return .rebound
+        }
+        return .changed
+    }
+
+    func mayWrite(_ controller: ObjectIdentifier?) -> Bool { controller != nil && controller == bound }
+
+    mutating func end() {
+        bundle = nil
+        after = .infinity
+        bound = nil
+        marked = false
+    }
+
+    private mutating func bindLast() -> Event {
+        guard let last, let bundle, last.at >= after, last.bundle == bundle else { return .none }
+        bound = last.controller
+        return .bound
+    }
+
+    /// The input method selected with no take and no pFlow to talk to puts the person's source back after this long.
+    static let orphanDelay: TimeInterval = 3
+
+    static func orphanRestoreDue(hasTake: Bool, connected: Bool, selectedIsOurs: Bool, sinceActivation: TimeInterval) -> Bool {
+        !hasTake && !connected && selectedIsOurs && sinceActivation >= orphanDelay
     }
 }

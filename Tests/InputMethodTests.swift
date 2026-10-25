@@ -70,7 +70,7 @@ struct InputMethodTests {
         let link = link(world)
         #expect(link.begin(id: "t1", bundle: "com.google.Chrome"))
         #expect(world.current == InputMethodWire.sourceID)
-        #expect(world.sent.first == .init(.begin, take: "t1", bundle: "com.google.Chrome", source: "com.apple.keylayout.ABC"))
+        #expect(world.sent.first == .init(.begin, take: "t1", bundle: "com.google.Chrome", source: "com.apple.keylayout.ABC", at: 100))
         #expect(link.attachState() == .pending)
         #expect(!link.mark("the harbor"), "nothing is marked before the input method is active in the app")
         link.receive(.init(.client, take: "t1", bundle: "com.google.Chrome", uid: "c1"))
@@ -153,6 +153,27 @@ struct InputMethodTests {
         link.end()
         #expect(world.sent.map(\.kind).contains(.cancel))
         #expect(world.current == "com.apple.keylayout.ABC")
+    }
+
+    /// The saved source is cleared once restored, so no later restore brings back an old one.
+    @Test func theSavedSourceIsClearedAfterTheRestore() {
+        let world = World()
+        let link = link(world)
+        #expect(link.begin(id: "t", bundle: "com.apple.TextEdit"))
+        #expect(link.defaults.string(forKey: InputMethodLink.restoreKey) == "com.apple.keylayout.ABC")
+        link.end()
+        #expect(link.defaults.string(forKey: InputMethodLink.restoreKey) == nil)
+    }
+
+    /// The person changed the source (Ctrl-Space) while pFlow waited: no re-selection, the take uses the other paths.
+    @Test func aSourceThePersonChangedIsRespected() {
+        let world = World()
+        let link = link(world)
+        #expect(link.begin(id: "t", bundle: "com.apple.Notes"))
+        world.current = "com.apple.keylayout.Dvorak"
+        world.now += 0.6
+        #expect(link.attachState() == .failed("source changed"))
+        #expect(world.selects == [InputMethodWire.sourceID], "nothing selected over the person's choice")
     }
 
     /// pFlow quit mid-take last time: at launch the person's source comes back.
@@ -375,5 +396,102 @@ struct TypedKeyOrderTests {
         let words = " ferry at 9 and walk along the pier to the old lighthouse."
         #expect(keys.replace(NSRange(location: 5, length: 0), with: words))
         #expect(field.value == "Note:" + words, "in order: \(field.value)")
+    }
+}
+
+/// The input method's own rules (shared code): which client a take binds to, and the orphan restore.
+struct InputMethodBindingTests {
+    private final class Controller {}
+    private let window1 = Controller(), window2 = Controller()
+    private func activation(_ c: Controller, _ bundle: String = "com.google.Chrome", at: TimeInterval) -> InputMethodBinding.Activation {
+        .init(controller: ObjectIdentifier(c), bundle: bundle, at: at)
+    }
+
+    /// Chrome window 1's client was never deactivated; the take in window 2 gets no fresh activation at first.
+    /// It must never write to window 1, and binds to window 2 once that one is activated for this take.
+    @Test func aTakeNeverBindsToALeftoverClient() {
+        var binding = InputMethodBinding()
+        _ = binding.activated(activation(window1, at: 10))
+        #expect(binding.begin(bundle: "com.google.Chrome", after: 20) == .none, "the leftover from an earlier take is not bound")
+        #expect(!binding.mayWrite(ObjectIdentifier(window1)))
+        #expect(binding.activated(activation(window2, at: 21)) == .bound)
+        #expect(binding.mayWrite(ObjectIdentifier(window2)) && !binding.mayWrite(ObjectIdentifier(window1)))
+    }
+
+    /// An activation from before this take's select that reaches the input method late is still a leftover.
+    @Test func aLateDeliveredOldActivationIsNotBound() {
+        var binding = InputMethodBinding()
+        _ = binding.begin(bundle: "com.google.Chrome", after: 20)
+        #expect(binding.activated(activation(window1, at: 19.5)) == .none)
+        #expect(!binding.mayWrite(ObjectIdentifier(window1)))
+    }
+
+    @Test func anActivationJustAfterTheSelectBindsAtBegin() {
+        var binding = InputMethodBinding()
+        _ = binding.activated(activation(window2, at: 20.1))
+        #expect(binding.begin(bundle: "com.google.Chrome", after: 20) == .bound, "the input method started by this select")
+        _ = binding.activated(activation(window1, "com.apple.TextEdit", at: 19))
+        #expect(binding.mayWrite(ObjectIdentifier(window2)))
+    }
+
+    @Test func anotherClientAfterWordsBreaksTheTakeBeforeWordsRebinds() {
+        var binding = InputMethodBinding()
+        _ = binding.begin(bundle: "com.google.Chrome", after: 20)
+        _ = binding.activated(activation(window1, at: 21))
+        #expect(binding.activated(activation(window2, at: 22)) == .rebound, "nothing shown yet, same app, this take's select")
+        binding.marked = true
+        #expect(binding.activated(activation(window1, at: 23)) == .changed, "words shown: never moved to another client")
+        #expect(binding.mayWrite(ObjectIdentifier(window2)))
+        var other = InputMethodBinding()
+        _ = other.begin(bundle: "com.google.Chrome", after: 20)
+        #expect(other.activated(activation(window1, "com.apple.Notes", at: 21)) == .none, "another app never binds")
+    }
+
+    @Test func theRebindCountsOnlyLaterActivations() {
+        var binding = InputMethodBinding()
+        _ = binding.begin(bundle: "com.apple.Notes", after: 20)
+        _ = binding.activated(activation(window1, "com.apple.Notes", at: 20.5))
+        #expect(binding.rebind(after: 21) == .none, "an activation from before the re-selection no longer counts")
+        #expect(!binding.mayWrite(ObjectIdentifier(window1)))
+        #expect(binding.activated(activation(window2, "com.apple.Notes", at: 21.2)) == .bound)
+    }
+
+    @Test func theOrphanRestoreWaitsThreeSecondsWithNoTakeAndNoPFlow() {
+        #expect(InputMethodBinding.orphanDelay == 3)
+        #expect(InputMethodBinding.orphanRestoreDue(hasTake: false, connected: false, selectedIsOurs: true, sinceActivation: 3))
+        #expect(!InputMethodBinding.orphanRestoreDue(hasTake: false, connected: false, selectedIsOurs: true, sinceActivation: 2.9))
+        #expect(!InputMethodBinding.orphanRestoreDue(hasTake: true, connected: false, selectedIsOurs: true, sinceActivation: 5))
+        #expect(!InputMethodBinding.orphanRestoreDue(hasTake: false, connected: true, selectedIsOurs: true, sinceActivation: 5))
+        #expect(!InputMethodBinding.orphanRestoreDue(hasTake: false, connected: false, selectedIsOurs: false, sinceActivation: 5))
+    }
+}
+
+/// pFlow's checks of the target field around the input method.
+@MainActor
+struct InputMethodTargetTests {
+    /// Window 2 (the target) shows nothing of the marks: they went to another client.
+    @Test func marksMissingFromTheTargetAreNotInTheTarget() {
+        let expected: (String) -> String? = { "Dear Sam, " + $0 }
+        #expect(!InputMethodFinish.showsInTarget(read: "Dear Sam,", candidates: ["the harbor", "the harbor lights"], expected: expected, placeholder: false))
+        #expect(InputMethodFinish.showsInTarget(read: "Dear Sam, the harbor", candidates: ["the harbor", "the harbor lights"], expected: expected, placeholder: false))
+        #expect(!InputMethodFinish.showsInTarget(read: nil, candidates: ["the harbor"], expected: expected, placeholder: false))
+    }
+
+    /// The commit counts only when the target shows it; the input method's own read-back only for an unreadable target.
+    @Test func theCommitLandsOnlyWhereTheTargetShowsIt() async {
+        var copied = 0
+        let wrongWindow = await InputMethodFinish.conclude(committed: true, seenByInputMethod: true, targetReadable: true, keepCopy: true,
+                                                          landedInTarget: { false }, copy: { copied += 1 })
+        #expect(wrongWindow == .unconfirmed, "its own client showing it proves nothing about the target")
+        #expect(copied == 1, "Copy dictation to clipboard keeps the text when it is unconfirmed")
+        let shown = await InputMethodFinish.conclude(committed: true, seenByInputMethod: false, targetReadable: true, keepCopy: false,
+                                                    landedInTarget: { true }, copy: { copied += 1 })
+        #expect(shown == .applied && copied == 1)
+        let unreadable = await InputMethodFinish.conclude(committed: true, seenByInputMethod: true, targetReadable: false, keepCopy: false,
+                                                         landedInTarget: { false }, copy: {})
+        #expect(unreadable == .applied)
+        let refused = await InputMethodFinish.conclude(committed: false, seenByInputMethod: false, targetReadable: true, keepCopy: true,
+                                                      landedInTarget: { true }, copy: { copied += 1 })
+        #expect(refused == .kept(.focus) && copied == 1)
     }
 }

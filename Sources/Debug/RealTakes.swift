@@ -88,6 +88,12 @@ extension TakeHarness {
         takeIndex += 1
         var record: [String: Any] = ["target": target.name, "way": way, "label": label, "audio": audio.lastPathComponent, "spoken": spoken]
         guard await activate(target.app) else { record["error"] = "could not bring the app forward"; return record }
+        if target.raiseWindow, let field = target.field, let window = element(field, kAXWindowAttribute) {
+            AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+            AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+            AXUIElementSetAttributeValue(field, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+            await pause(0.6)
+        }
         if target.emptyBeforeTake { await emptyField(target) }
         if target.name != "vscode", target.field != nil { await caretToEnd(target) }
         var before = await target.readBack() ?? ""
@@ -259,8 +265,34 @@ extension TakeHarness {
         return ["spec": "setup", "made": made]
     }
 
+    /// "twowin:<target 1>:<target 2>:<hold|tap>:<rounds>": two windows of one app, takes alternating
+    /// between them; each take's words must land in its own window and the other stay unchanged.
+    func twoWindows(_ parts: [String]) async -> [String: Any] {
+        let spec = parts.joined(separator: ":")
+        guard parts.count == 5, let one = await openTarget(parts[1]), let two = await openTarget(parts[2]),
+              let rounds = Int(parts[4]) else { return ["spec": spec, "error": "could not open"] }
+        one.raiseWindow = true
+        two.raiseWindow = true
+        var takes: [[String: Any]] = []
+        for n in 0..<rounds {
+            for (target, other) in [(one, two), (two, one)] {
+                let otherBefore = await other.readBack() ?? ""
+                var take = await realTake(target, way: parts[3], label: "\(spec)#\(n + 1)-\(target.name)")
+                let otherAfter = await other.readBack() ?? ""
+                take["otherUnchanged"] = otherAfter == otherBefore
+                take["refused"] = (take["outcome"] as? String ?? "").contains("savedToHistory") && otherAfter == otherBefore
+                takes.append(take)
+            }
+        }
+        let right = takes.filter { ($0["landedOnce"] as? Bool == true && $0["otherUnchanged"] as? Bool == true) || $0["refused"] as? Bool == true }.count
+        let wrong = takes.filter { $0["otherUnchanged"] as? Bool == false }.count
+        note("SUMMARY \(spec): own window once or refused \(right)/\(takes.count), other window changed \(wrong)/\(takes.count)")
+        return ["spec": spec, "takes": takes]
+    }
+
     /// "real:<target>:<hold|tap>:<count>", "realframes:<target>:<hold|tap>".
     func realRun(_ parts: [String]) async -> [String: Any] {
+        if parts.first == "twowin" { return await twoWindows(parts) }
         if parts.first == "thumbs" { return thumbnails() }
         if parts.first == "setup" { return setupRenders(parts.count > 1 ? parts[1] : "now") }
         if parts.first == "realguard" { return await realGuard(parts) }

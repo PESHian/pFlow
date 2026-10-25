@@ -14,15 +14,9 @@ final class Link {
     private var buffer = Data()
     private var current: PFlowInputController?
     private var currentClient: (IMKTextInput & NSObjectProtocol)?
-    /// When the current client was activated. pFlow selects this input source
-    /// right after it sends a take's begin, so the take binds to the client
-    /// activated then; an older activation is not the take's client.
-    private var activatedAt = Date.distantPast
-    /// The current controller was activated and IMK has not deactivated it
-    /// since. Re-selecting this source while IMK still has it active brings
-    /// no new activation (VM logs: none for 1.9 s after the select), so a
-    /// take binds to that still-active client at once.
-    private var currentActive = false
+    private var activatedAt: TimeInterval = 0
+    /// Which client the take writes to (InputMethodBinding: only one activated for this take).
+    private var binding = InputMethodBinding()
 
     /// The take pFlow started: the app it must be in, the client it is bound
     /// to (once activated there), the person's source to restore if pFlow goes away.
@@ -30,9 +24,6 @@ final class Link {
         let id: String
         let bundle: String
         let source: String?
-        /// The controller of the client the take is bound to (one per text client; its
-        /// own ID string is not stable from call to call).
-        var uid: ObjectIdentifier?
         var marked = ""
         var broken: String?
     }
@@ -105,6 +96,7 @@ final class Link {
             commitMarkedAsIs()
             restoreSource()
             take = nil
+            binding.end()
         }
         connectSoon(after: 0.5)
     }
@@ -115,11 +107,12 @@ final class Link {
         switch message.kind {
         case .begin:
             guard let id = message.take, let bundle = message.bundle else { return }
-            reasons.notice("begin; last activation \(Int(Date().timeIntervalSince(self.activatedAt) * 1000), privacy: .public) ms ago, still active \(self.currentActive, privacy: .public)")
             take = Take(id: id, bundle: bundle, source: message.source)
-            // Bound now only when the client was activated a moment ago (this input method was just started
-            // by the selection); otherwise by the activation the selection brings.
-            if currentActive || Date().timeIntervalSince(activatedAt) < 1.0 { bindIfPossible() }
+            // Only a client activated since pFlow selected the source for this take.
+            apply(binding.begin(bundle: bundle, after: message.at ?? .infinity))
+        case .rebind:
+            guard message.take == take?.id else { return }
+            apply(binding.rebind(after: message.at ?? .infinity))
         case .mark:
             guard let text = message.text else { return }
             let ok = write { client in
@@ -127,9 +120,9 @@ final class Link {
                 client.setMarkedText(text, selectionRange: NSRange(location: length, length: 0),
                                      replacementRange: NSRange(location: NSNotFound, length: 0))
                 take?.marked = text
+                binding.marked = true
             }
-            let marked = ok ? currentClient?.markedRange().length : nil
-            send(.init(.marked, take: message.take, seq: message.seq, ok: ok, markedLength: marked == NSNotFound ? nil : marked))
+            send(.init(.marked, take: message.take, seq: message.seq, ok: ok))
         case .commit:
             guard let text = message.text else { return }
             let ok = write { client in
@@ -150,6 +143,7 @@ final class Link {
             // Words shown are never left half-done: anything still marked is committed as it is.
             commitMarkedAsIs()
             take = nil
+            binding.end()
         default:
             break
         }
@@ -159,7 +153,7 @@ final class Link {
     private func readBack(_ text: String, take id: String?, tries: Int) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [self] in
             var seen = false
-            if let client = currentClient, take?.broken == nil {
+            if let client = currentClient, take?.broken == nil, binding.mayWrite(current.map(ObjectIdentifier.init)) {
                 let caret = client.selectedRange().location
                 let length = (text as NSString).length
                 if caret != NSNotFound, caret >= length {
@@ -182,11 +176,19 @@ final class Link {
     private func write(_ body: (IMKTextInput & NSObjectProtocol) -> Void) -> Bool {
         guard let take else { reasons.notice("write refused: no take"); return false }
         guard take.broken == nil else { reasons.notice("write refused: take interrupted"); return false }
-        guard let uid = take.uid else { reasons.notice("write refused: not bound to a client"); return false }
         guard let client = currentClient, let current else { reasons.notice("write refused: no active client"); return false }
-        guard ObjectIdentifier(current) == uid else { reasons.notice("write refused: another client"); return false }
+        guard binding.mayWrite(ObjectIdentifier(current)) else { reasons.notice("write refused: not the take's client"); return false }
         body(client)
         return true
+    }
+
+    private func apply(_ event: InputMethodBinding.Event) {
+        switch event {
+        case .bound: reasons.notice("bound to a client activated for this take"); reportClient()
+        case .rebound: reasons.notice("rebound to a newer client of this take before any words"); reportClient()
+        case .changed: reasons.notice("activated in another client during a take"); broken("clientChanged")
+        case .none: break
+        }
     }
 
     // MARK: Activations and the person's input
@@ -194,39 +196,25 @@ final class Link {
     func activated(_ controller: PFlowInputController, client: (IMKTextInput & NSObjectProtocol)?) {
         current = controller
         currentClient = client
-        activatedAt = Date()
-        currentActive = true
+        activatedAt = ProcessInfo.processInfo.systemUptime
         if take == nil { checkOrphanedSoon() }
-        reasons.notice("activated controller \(UInt(bitPattern: ObjectIdentifier(controller).hashValue) % 10000, privacy: .public) take \(self.take != nil, privacy: .public) bound \(self.take?.uid != nil, privacy: .public)")
-        if let take, let uid = take.uid, ObjectIdentifier(controller) != uid {
-            if take.marked.isEmpty, client?.bundleIdentifier() == take.bundle, take.broken == nil {
-                // Nothing shown yet, same app: the client that came active is the take's (pFlow checks the field itself).
-                self.take?.uid = ObjectIdentifier(controller)
-                reasons.notice("rebound before any words")
-            } else {
-                reasons.notice("activated in another client during a take")
-                broken("clientChanged")
-            }
-        }
-        bindIfPossible()
+        apply(binding.activated(.init(controller: ObjectIdentifier(controller), bundle: client?.bundleIdentifier(), at: activatedAt)))
         reportClient()
     }
 
-    /// IMK delivers activations and deactivations in no reliable order, so a
-    /// deactivation never forgets the client: only another client's
-    /// activation replaces it (and ends a take bound elsewhere). pFlow checks
-    /// the app and field itself before every write.
-    func deactivated(_ controller: PFlowInputController) {
-        reasons.notice("deactivated controller \(UInt(bitPattern: ObjectIdentifier(controller).hashValue) % 10000, privacy: .public) current \(self.current === controller, privacy: .public)")
-        if current === controller { currentActive = false }
-    }
+    /// IMK delivers activations and deactivations in no reliable order; a
+    /// deactivation changes nothing here. A take writes only to the client
+    /// bound for it, and pFlow checks the target field itself.
+    func deactivated(_ controller: PFlowInputController) {}
 
     /// Selected with no take and no pFlow to talk to (pFlow died between the
     /// switch and its begin, or quit): after a few seconds the person's own
     /// source comes back, the one pFlow saved before switching.
     private func checkOrphanedSoon() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [self] in
-            guard take == nil, fd < 0, Self.selectedSourceID() == InputMethodWire.sourceID else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + InputMethodBinding.orphanDelay) { [self] in
+            guard InputMethodBinding.orphanRestoreDue(hasTake: take != nil, connected: fd >= 0,
+                                                     selectedIsOurs: Self.selectedSourceID() == InputMethodWire.sourceID,
+                                                     sinceActivation: ProcessInfo.processInfo.systemUptime - activatedAt) else { return }
             let saved = CFPreferencesCopyAppValue("inputMethodRestoreSource" as CFString, InputMethodWire.appIdentifier as CFString) as? String
             if let saved, Self.select(saved) {
                 reasons.notice("orphaned selection: the person's source restored")
@@ -259,23 +247,15 @@ final class Link {
     }
 
     func personInput(_ kind: String, controller: PFlowInputController) {
-        guard controller === current, take?.uid != nil, take?.broken == nil else { return }
+        guard binding.mayWrite(ObjectIdentifier(controller)), take?.broken == nil else { return }
         commitMarkedAsIs()
         broken(kind)
     }
 
     func appCommits(_ controller: PFlowInputController) {
-        guard controller === current, let take, take.uid != nil, take.broken == nil, !take.marked.isEmpty else { return }
+        guard binding.mayWrite(ObjectIdentifier(controller)), let take, take.broken == nil, !take.marked.isEmpty else { return }
         commitMarkedAsIs()
         broken("appCommit")
-    }
-
-    private func bindIfPossible() {
-        guard var take, take.uid == nil, let client = currentClient, let current, client.bundleIdentifier() == take.bundle else { return }
-        take.uid = ObjectIdentifier(current)
-        self.take = take
-        reasons.notice("bound to the take's client")
-        reportClient()
     }
 
     private func broken(_ reason: String) {
@@ -285,16 +265,16 @@ final class Link {
         send(.init(.interrupted, take: take?.id, reason: reason))
     }
 
-    /// The words shown stay in the field exactly as they are.
+    /// The words shown stay in the field exactly as they are, in the take's own client only.
     private func commitMarkedAsIs() {
         guard let marked = take?.marked, !marked.isEmpty, let client = currentClient, let current,
-              let uid = take?.uid, ObjectIdentifier(current) == uid else { return }
+              binding.mayWrite(ObjectIdentifier(current)) else { return }
         client.insertText(marked, replacementRange: NSRange(location: NSNotFound, length: 0))
         take?.marked = ""
     }
 
     private func reportClient() {
-        send(.init(.client, take: take?.uid != nil ? take?.id : nil, bundle: currentClient?.bundleIdentifier()))
+        send(.init(.client, take: binding.bound != nil ? take?.id : nil, bundle: currentClient?.bundleIdentifier()))
     }
 
     private func restoreSource() {

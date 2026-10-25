@@ -56,6 +56,8 @@ final class TakeTarget {
     var returnBeforeTake = false
     /// The take always speaks this sentence (an index into `sentences`).
     var fixedSentence: Int?
+    /// Another window of the same app holds another target: raise this one's window before each take.
+    var raiseWindow = false
 
     init(name: String, app: NSRunningApplication, windowTitle: String) {
         self.name = name
@@ -365,6 +367,21 @@ final class TakeHarness {
             await pause(3)
             made = TakeTarget(name: name, app: app, windowTitle: title(app.processIdentifier) ?? "T3 Code")
             made?.emptyBeforeTake = name == "t3empty"
+        case "chrome2-textarea":
+            // A second Chrome window (File > New Window) with its own textarea page.
+            guard let chrome = await openTarget("chrome-textarea") else { return nil }
+            let pageTitle = "pFlow fictional second window \(tag)"
+            let page = folder.appendingPathComponent("pflow-form-window2-\(tag).html")
+            try? Self.page.replacingOccurrences(of: "TITLE", with: pageTitle).replacingOccurrences(of: "KIND", with: "textarea")
+                .write(to: page, atomically: true, encoding: .utf8)
+            _ = await activate(chrome.app)
+            _ = pressMenu(chrome.app.processIdentifier, "File", "New Window")
+            await pause(1.5)
+            personType(page.absoluteString)
+            personKey(36)
+            _ = await waitFor(15) { title(chrome.app.processIdentifier)?.contains(pageTitle) == true }
+            await pause(1.5)
+            made = TakeTarget(name: name, app: chrome.app, windowTitle: pageTitle)
         case "reminders":
             // Stands in for Messages (which needs an Apple Account in the VM): a new reminder's title field.
             guard let app = await open([], bundle: "com.apple.reminders") else { return nil }
@@ -571,7 +588,7 @@ final class TakeHarness {
             return ["spec": spec, "takes": takes, "exactlyOnce": once, "withLiveWords": live, "count": count]
         }
         if parts.count == 2, parts[0] == "probe" { return await probe(parts[1]) }
-        if ["real", "realframes", "realguard", "thumbs", "setup"].contains(parts[0]) { return await realRun(parts) }
+        if ["real", "realframes", "realguard", "thumbs", "setup", "twowin"].contains(parts[0]) { return await realRun(parts) }
         if parts.count == 2, parts[0] == "im" { return await imSpike(parts[1]) }
         if parts.count == 2, parts[0] == "imside" { return await imSide(parts[1]) }
         if parts.first == "capsules" { return await capsules(hold: Double(parts.count > 1 ? parts[1] : "4") ?? 4) }

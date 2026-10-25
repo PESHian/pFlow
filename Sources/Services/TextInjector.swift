@@ -404,6 +404,14 @@ final class TextInjector: TextInjecting {
         if let block = InsertionGuard.markedTextBlock(check.facts(since: inputMethodStarted)) {
             return stopInputMethod(LiveInlineOwnership.Stop(block))
         }
+        // Before every mark: the earlier marks show in the target field itself (a client of another
+        // window of the same app would take them too, and read them back to itself).
+        if targetReadable, let candidates = inputMethod.showingCandidates(), let targetField {
+            let read = attribute(targetField, kAXValueAttribute) as? String
+            if !InputMethodFinish.showsInTarget(read: read, candidates: candidates, expected: markedValue, placeholder: placeholderStart) {
+                return notInTarget()
+            }
+        }
         let words = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !words.isEmpty else { return nil }
         guard inputMethod.mark(prepared(words).text) else { return stopInputMethod(.uncertain) }
@@ -442,28 +450,54 @@ final class TextInjector: TextInjecting {
             return .kept(stopInputMethod(LiveInlineOwnership.Stop(block)))
         }
         let final = prepared(text).text
+        // The marked words must be in the target itself before the finished text goes over them.
+        if targetReadable, !(await targetShowsMarks(waiting: 0.5)) { _ = notInTarget(); return .notTyped }
         let result = await inputMethod.commit(final)
         inputMethod.end()
-        guard result.ok else {
-            ReasonLog.note("input method commit refused")
-            return .kept(.focus)
-        }
-        var seenAnywhere = true
-        if result.seen {
-            ReasonLog.note("finished text committed and read back through the input method")
-        } else if await landedAfterCommit(final) {
-            ReasonLog.note("finished text committed and read back through Accessibility")
-        } else {
-            seenAnywhere = false
-        }
-        let finished: LiveInlineFinal = seenAnywhere ? .applied : .unconfirmed
-        if !seenAnywhere { ReasonLog.note("finished text committed but could not be read back") }
-        // "Copy dictation to clipboard": the finished words, as the paste path keeps them.
-        if InputMethodFinish.copiesToClipboard(finished, keepCopy: copyToClipboard()),
-           placeOnClipboard(Self.clipboardItem(text: text, formatted: nil, sessionID: UUID().uuidString, private: false)) == nil {
-            ReasonLog.note("the finished text could not be copied to the clipboard")
-        }
+        if !result.ok { ReasonLog.note("input method commit refused") }
+        let finished = await InputMethodFinish.conclude(
+            committed: result.ok, seenByInputMethod: result.seen, targetReadable: targetReadable, keepCopy: copyToClipboard(),
+            landedInTarget: { await self.landedAfterCommit(final) },
+            copy: {
+                if self.placeOnClipboard(Self.clipboardItem(text: text, formatted: nil, sessionID: UUID().uuidString, private: false)) == nil {
+                    ReasonLog.note("the finished text could not be copied to the clipboard")
+                }
+            })
+        ReasonLog.note(finished == .applied ? "finished text committed and seen in the target"
+                       : finished == .unconfirmed ? "finished text committed but not seen in the target" : "finished text not committed")
         return finished
+    }
+
+    /// The target field can be read, so what it shows decides (never the input method's own client).
+    private var targetReadable: Bool { targetField != nil && !fieldUnreadable && originalValue != nil }
+
+    /// The target field shows one of this take's marks (waiting up to `waiting` seconds for it to draw).
+    private func targetShowsMarks(waiting: TimeInterval) async -> Bool {
+        guard let targetField, let candidates = inputMethod.showingCandidates(settled: 0) else { return true }
+        let deadline = Date().addingTimeInterval(waiting)
+        repeat {
+            let read = attribute(targetField, kAXValueAttribute) as? String
+            if InputMethodFinish.showsInTarget(read: read, candidates: candidates, expected: markedValue, placeholder: placeholderStart) { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        } while Date() < deadline
+        return false
+    }
+
+    /// The target field as it reads with `marked` at the captured caret.
+    private func markedValue(_ marked: String) -> String? {
+        placeholderStart ? marked : expectedValue(inserting: marked)
+    }
+
+    /// The take's marks are not in the target field (another window or field
+    /// of the app has them): they are taken back out of that client, and the
+    /// finished text goes in the usual way at the end.
+    private func notInTarget() -> LiveInlineOwnership.Stop {
+        ReasonLog.note("input method words not in the target field: taken back out")
+        inputMethodStopped = .uncertain
+        inputMethodNothingShown = true
+        inputMethod.cancel()
+        inputMethod.end()
+        return .uncertain
     }
 
     /// The field now reads as it did with the finished text at the captured caret.

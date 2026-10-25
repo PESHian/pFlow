@@ -86,6 +86,29 @@ enum InputMethodFinish {
         guard keepCopy else { return false }
         return result == .applied || result == .unconfirmed
     }
+
+    /// The target field shows one of the texts pFlow marked this take, at the
+    /// captured caret (`expected` puts a text there): the take's client is the
+    /// target, not another window of the same app.
+    static func showsInTarget(read: String?, candidates: [String], expected: (String) -> String?, placeholder: Bool) -> Bool {
+        guard let read else { return false }
+        return candidates.contains { text in
+            expected(text).map { EditorPlaceholder.same(read, $0, startedAsPlaceholder: placeholder) } ?? false
+        }
+    }
+
+    /// After the commit. Landed only when the target field itself shows the
+    /// text; only where the target cannot be read, the input method's own
+    /// read-back of the client bound for this take. "Copy dictation to
+    /// clipboard" then keeps the text as the paste path does.
+    static func conclude(committed ok: Bool, seenByInputMethod: Bool, targetReadable: Bool, keepCopy: Bool,
+                         landedInTarget: () async -> Bool, copy: () -> Void) async -> LiveInlineFinal {
+        guard ok else { return .kept(.focus) }
+        let landed = targetReadable ? await landedInTarget() : seenByInputMethod
+        let finished: LiveInlineFinal = landed ? .applied : .unconfirmed
+        if copiesToClipboard(finished, keepCopy: keepCopy) { copy() }
+        return finished
+    }
 }
 
 /// A count line for the reason log (numbers only).
@@ -130,6 +153,11 @@ final class InputMethodLink {
         var reselect = 0
         /// When the begin reached the input method (the re-selection counts from then).
         var beganAt: TimeInterval?
+        /// When pFlow last selected its source for this take; only later activations bind.
+        var selectedAt: TimeInterval = 0
+        /// Texts marked, by sequence number, and the newest one the input method confirmed.
+        var sent: [Int: String] = [:]
+        var lastAcked: (seq: Int, at: TimeInterval)?
     }
 
     private(set) var take: Take?
@@ -176,18 +204,22 @@ final class InputMethodLink {
     func begin(id: String, bundle: String) -> Bool {
         end()
         guard usable else { return false }
-        let previous = currentSource()
-        guard previous != InputMethodWire.sourceID || defaults.string(forKey: Self.restoreKey) != nil else { return false }
-        let restoreTo = previous == InputMethodWire.sourceID ? defaults.string(forKey: Self.restoreKey) : previous
+        var previous = currentSource()
+        if previous == InputMethodWire.sourceID {
+            // Left selected (pFlow went away mid-take): the person's source first, so this take's
+            // selection brings a fresh activation; a take never binds to a leftover client.
+            guard let saved = defaults.string(forKey: Self.restoreKey), selectSource(saved) else { return false }
+            previous = saved
+        }
         // Remembered durably before the switch: if pFlow dies in between, the
         // input method (and pFlow's next launch) can still put it back.
-        defaults.set(restoreTo, forKey: Self.restoreKey)
+        defaults.set(previous, forKey: Self.restoreKey)
         defaults.synchronize()
-        take = Take(id: id, bundle: bundle, previous: restoreTo, started: clock())
+        take = Take(id: id, bundle: bundle, previous: previous, started: clock())
+        // The input method binds only to a client activated from this moment on.
+        take?.selectedAt = clock()
         sendBegin()
-        if previous == InputMethodWire.sourceID {
-            // Already selected (left over): the input method binds to its active client on begin.
-        } else if !selectSource(InputMethodWire.sourceID) {
+        if !selectSource(InputMethodWire.sourceID) {
             ReasonLog.note("input source could not be selected")
             take = nil
             return false
@@ -198,7 +230,7 @@ final class InputMethodLink {
 
     private func sendBegin() {
         guard let take, !take.beginSent, connected,
-              transmit(.init(.begin, take: take.id, bundle: take.bundle, source: take.previous)) else { return }
+              transmit(.init(.begin, take: take.id, bundle: take.bundle, source: take.previous, at: take.selectedAt)) else { return }
         self.take?.beginSent = true
         self.take?.beganAt = clock()
     }
@@ -216,13 +248,26 @@ final class InputMethodLink {
             // activation at all after the select). Select the person's source, give the
             // deactivation a moment to arrive, then select pFlow's again: that brings a fresh one.
             if take.reselect == 0, waited > Self.reselectAfter {
+                // Only while the source is still the one pFlow set: a person who changed it (Ctrl-Space) is respected.
+                guard currentSource() == InputMethodWire.sourceID else {
+                    take.attach = .failed("source changed")
+                    self.take = take
+                    return take.attach
+                }
                 take.reselect = 1
                 self.take = take
                 _ = selectSource(previous)
                 ReasonLog.note("no activation yet: selecting the source again")
             } else if take.reselect == 1, waited > Self.reselectAfter + Self.reselectGap {
+                guard currentSource() == previous else {
+                    take.attach = .failed("source changed")
+                    self.take = take
+                    return take.attach
+                }
                 take.reselect = 2
+                take.selectedAt = clock()
                 self.take = take
+                _ = transmit(.init(.rebind, take: take.id, at: take.selectedAt))
                 _ = selectSource(InputMethodWire.sourceID)
             }
         }
@@ -237,6 +282,7 @@ final class InputMethodLink {
         guard currentSource() == InputMethodWire.sourceID else { interrupt("notSelected"); return false }
         take.updates += 1
         take.seq += 1
+        take.sent[take.seq] = text
         let sent = transmit(.init(.mark, take: take.id, text: text, seq: take.seq))
         #if DEBUG
         LiveLatency.markPost[take.seq] = LiveLatency.postAt
@@ -247,6 +293,14 @@ final class InputMethodLink {
     }
 
     func noteHeldSkip() { take?.heldSkips += 1 }
+
+    /// The texts that may be showing now: the newest confirmed mark and any sent after it.
+    /// Nil until a mark was confirmed at least `settled` ago (the app draws it a moment later).
+    func showingCandidates(settled: TimeInterval = 0.15) -> [String]? {
+        // Any of this take's marks: the app may still draw an older one for a moment.
+        guard let take, let acked = take.lastAcked, clock() - acked.at >= settled else { return nil }
+        return take.sent.sorted { $0.key < $1.key }.map(\.value)
+    }
 
     var interrupted: String? { take?.interrupted }
 
@@ -296,16 +350,22 @@ final class InputMethodLink {
         guard !take.restored else { return }
         self.take?.restored = true
         if currentSource() == InputMethodWire.sourceID, let previous = take.previous {
-            ReasonLog.note(selectSource(previous) ? "input source restored" : "input source could not be restored")
+            let restored = selectSource(previous)
+            ReasonLog.note(restored ? "input source restored" : "input source could not be restored")
+            // Never kept past a successful restore, so no later restore can bring back an old source.
+            if restored { defaults.removeObject(forKey: Self.restoreKey) }
         } else {
             ReasonLog.note("input source already the person's")
+            defaults.removeObject(forKey: Self.restoreKey)
         }
     }
 
     /// At launch: a source left on pFlow's (pFlow quit mid-take) goes back to the person's.
     func restoreLeftover() {
         guard currentSource() == InputMethodWire.sourceID, let previous = defaults.string(forKey: Self.restoreKey) else { return }
-        ReasonLog.note(selectSource(previous) ? "input source restored at launch" : "input source could not be restored at launch")
+        let restored = selectSource(previous)
+        ReasonLog.note(restored ? "input source restored at launch" : "input source could not be restored at launch")
+        if restored { defaults.removeObject(forKey: Self.restoreKey) }
     }
 
     // MARK: Messages from the input method
@@ -322,6 +382,7 @@ final class InputMethodLink {
             guard message.take == take?.id else { return }
             guard message.ok == true else { interrupt("clientChanged"); return }
             take?.acked += 1
+            if let seq = message.seq, seq > (take?.lastAcked?.seq ?? 0) { take?.lastAcked = (seq, clock()) }
             #if DEBUG
             if let seq = message.seq, let posted = LiveLatency.markPost[seq], posted > 0 {
                 LiveLatency.samples.append((ProcessInfo.processInfo.systemUptime - posted) * 1000)
