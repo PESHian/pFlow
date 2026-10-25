@@ -167,8 +167,6 @@ final class TextInjector: TextInjecting {
     private var inputMethodTake: String?
     private var inputMethodStarted: UInt64 = 0
     private var inputMethodStopped: LiveInlineOwnership.Stop?
-    /// The take's marked text never showed in the field, so the finished text goes in the usual way.
-    private var inputMethodNotShown = false
     /// Cleared for the take once the input method could not be used.
     private var inputMethodAllowed = true
     var inputMethod: InputMethodLink { InputMethodLink.shared }
@@ -212,7 +210,6 @@ final class TextInjector: TextInjecting {
         inputMethod.end()
         inputMethodTake = nil
         inputMethodStopped = nil
-        inputMethodNotShown = false
         inputMethodAllowed = true
         targetApp = NSWorkspace.shared.frontmostApplication
         PersonInput.shared.start()
@@ -375,7 +372,7 @@ final class TextInjector: TextInjecting {
     }
 
     func typedLive(session: String) -> Bool {
-        if inputMethodTake == session { return !inputMethodNotShown && (inputMethod.take?.marked == true || inputMethodStopped != nil) }
+        if inputMethodTake == session { return inputMethod.take?.marked == true || inputMethodStopped != nil }
         return live.typed(session: session)
     }
 
@@ -399,7 +396,6 @@ final class TextInjector: TextInjecting {
     /// The whole current transcript as marked text, only while every check passes.
     private func reconcileInputMethod(_ transcript: String) -> LiveInlineOwnership.Stop? {
         guard inputMethodStopped == nil else { return nil }
-        if inputMethod.interrupted == "notShown" { return notShownInputMethod() }
         if let reason = inputMethod.interrupted { return stopInputMethod(InputMethodLink.stop(for: reason)) }
         guard let check = targetCheck() else { return stopInputMethod(.app) }
         if let block = InsertionGuard.markedTextBlock(check.facts(since: inputMethodStarted)) {
@@ -409,18 +405,6 @@ final class TextInjector: TextInjecting {
         guard !words.isEmpty else { return nil }
         guard inputMethod.mark(prepared(words).text) else { return stopInputMethod(.uncertain) }
         return nil
-    }
-
-    /// The client took the marked text but showed none of it: nothing of pFlow's is in the field.
-    /// The marked text is taken back out, the source restored, and the take goes on with
-    /// pFlow's own preview; the finished text goes in the usual way.
-    private func notShownInputMethod() -> LiveInlineOwnership.Stop {
-        inputMethodStopped = .unsupported
-        inputMethodNotShown = true
-        inputMethod.cancel()
-        inputMethod.end()
-        ReasonLog.note("input method words not shown in the field; pFlow's preview instead")
-        return .unsupported
     }
 
     /// Live words stop for the take: the words shown stay as they are, the person's source comes back.
@@ -435,8 +419,6 @@ final class TextInjector: TextInjecting {
     func finishInputMethod(session: String, text: String) async -> LiveInlineFinal? {
         guard inputMethodTake == session else { return nil }
         inputMethodTake = nil
-        if inputMethodNotShown { return .notTyped }
-        if inputMethod.interrupted == "notShown" { _ = notShownInputMethod(); return .notTyped }
         if let stop = inputMethodStopped { return .kept(stop) }
         if let reason = inputMethod.interrupted {
             return .kept(stopInputMethod(InputMethodLink.stop(for: reason)))

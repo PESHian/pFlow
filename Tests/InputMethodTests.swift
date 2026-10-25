@@ -76,10 +76,7 @@ struct InputMethodTests {
         link.receive(.init(.client, take: "t1", bundle: "com.google.Chrome", uid: "c1"))
         #expect(link.attachState() == .attached)
         #expect(link.mark("the harbor"))
-        link.receive(.init(.marked, take: "t1", seq: 1, ok: true, markedLength: 10))
         #expect(link.mark("the harbor lights"))
-        link.receive(.init(.marked, take: "t1", seq: 2, ok: true, markedLength: 17))
-        #expect(link.interrupted == nil)
         #expect(world.sent.filter { $0.kind == .mark }.map(\.text) == ["the harbor", "the harbor lights"])
         link.end()
         #expect(world.current == "com.apple.keylayout.ABC", "the person's source is back")
@@ -144,23 +141,6 @@ struct InputMethodTests {
         let result = await link.commit("Nine pelicans rest.")
         #expect(result.ok && result.seen)
         #expect(world.sent.filter { $0.kind == .commit }.count == 1)
-    }
-
-    /// The client took the marked text but shows none of it: the take stops as not shown.
-    @Test func marksTheFieldNeverShowsStopTheTake() {
-        let world = World()
-        let link = link(world)
-        #expect(link.begin(id: "t", bundle: "com.apple.Notes"))
-        link.receive(.init(.client, take: "t", bundle: "com.apple.Notes"))
-        #expect(link.mark("seven blue"))
-        link.receive(.init(.marked, take: "t", seq: 1, ok: true, markedLength: nil))
-        #expect(link.interrupted == nil, "one is not enough")
-        #expect(link.mark("seven blue kites"))
-        link.receive(.init(.marked, take: "t", seq: 2, ok: true, markedLength: 0))
-        #expect(link.interrupted == "notShown")
-        #expect(!link.mark("seven blue kites drift"))
-        link.end()
-        #expect(world.current == "com.apple.keylayout.ABC")
     }
 
     @Test func cancellingTakesTheMarkedWordsOutAndRestores() {
