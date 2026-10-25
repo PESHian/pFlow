@@ -198,6 +198,10 @@ final class Link {
     // MARK: Activations and the person's input
 
     func activated(_ controller: PFlowInputController, client: (IMKTextInput & NSObjectProtocol)?) {
+        #if DEBUG
+        let same = current.map { $0 === controller } ?? false
+        reasons.notice("trace activated: \(same ? "same controller" : "new controller", privacy: .public), take \(self.take != nil ? "yes" : "no", privacy: .public)")
+        #endif
         current = controller
         currentClient = client
         activatedAt = ProcessInfo.processInfo.systemUptime
@@ -215,7 +219,12 @@ final class Link {
     /// IMK delivers activations and deactivations in no reliable order; a
     /// deactivation changes nothing here. A take writes only to the client
     /// bound for it, and pFlow checks the target field itself.
-    func deactivated(_ controller: PFlowInputController) {}
+    func deactivated(_ controller: PFlowInputController) {
+        #if DEBUG
+        let same = current.map { $0 === controller } ?? false
+        reasons.notice("trace deactivated: \(same ? "current controller" : "other controller", privacy: .public), take \(self.take != nil ? "yes" : "no", privacy: .public)")
+        #endif
+    }
 
     /// Selected with no take and no pFlow to talk to (pFlow died between the
     /// switch and its begin, or quit): after a few seconds the person's own
