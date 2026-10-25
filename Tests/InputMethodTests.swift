@@ -206,6 +206,25 @@ struct InputMethodTests {
         #expect(world.selects.count == 3, "once")
     }
 
+    /// pFlow just started and the input method connects late: the re-selection waits for the begin to reach it.
+    @Test func theReselectionCountsFromTheBegin() {
+        let world = World()
+        let link = link(world)
+        link.connectedForTesting = false
+        #expect(link.begin(id: "t", bundle: "com.apple.Notes"))
+        world.now += 0.6
+        _ = link.attachState()
+        #expect(world.selects.count == 1, "no re-selection before the input method has the take")
+        link.connectedForTesting = true
+        link.adoptForTesting()
+        world.now += 0.3
+        _ = link.attachState()
+        #expect(world.selects.count == 1)
+        world.now += 0.3
+        _ = link.attachState()
+        #expect(world.selects.count == 2, "then the person's source, as usual")
+    }
+
     /// A late activation while the person's source is selected for the re-selection is not the take's.
     @Test func aLateActivationDuringTheReselectionIsIgnored() {
         let world = World()
