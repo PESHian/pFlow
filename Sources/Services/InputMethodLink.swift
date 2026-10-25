@@ -116,8 +116,10 @@ final class InputMethodLink {
         var restored = false
         /// The begin message reached the input method (sent once it is connected).
         var beginSent = false
-        /// Times the source was selected again because no client activation came.
-        var pokes = 0
+        /// Marks the client showed at the length sent, and marks it did not.
+        var shown = 0
+        var unshown = 0
+        var lastLength = 0
     }
 
     private(set) var take: Take?
@@ -186,25 +188,17 @@ final class InputMethodLink {
         if take.attach == .pending, waited > Self.attachTimeout {
             take.attach = .failed("timeout")
             self.take = take
-        } else if take.attach == .pending, waited > Self.pokeAfter * Double(take.pokes + 1), take.pokes < 2,
-                  let previous = take.previous {
-            // macOS sometimes selects the source without activating it in the app: select it once more.
-            take.pokes += 1
-            self.take = take
-            _ = selectSource(previous)
-            _ = selectSource(InputMethodWire.sourceID)
-            ReasonLog.note("input source selected again: no activation yet")
         }
         return self.take?.attach ?? .failed("no take")
     }
 
-    static let pokeAfter: TimeInterval = 0.5
 
     /// The whole current transcript as replaceable marked text.
     func mark(_ text: String) -> Bool {
         guard var take, take.attach == .attached, take.interrupted == nil else { return false }
         take.updates += 1
         take.seq += 1
+        take.lastLength = (text as NSString).length
         let sent = transmit(.init(.mark, take: take.id, text: text, seq: take.seq))
         if sent { take.marked = true }
         self.take = take
@@ -252,7 +246,8 @@ final class InputMethodLink {
         guard let take else { return }
         _ = transmit(.init(.end, take: take.id))
         restore(take)
-        ReasonLog.note("input method take:", LogCounts(["updates": take.updates, "marks": take.seq, "acked": take.acked, "heldSkips": take.heldSkips]))
+        ReasonLog.note("input method take:", LogCounts(["updates": take.updates, "marks": take.seq, "acked": take.acked,
+                                                        "shown": take.shown, "unshown": take.unshown, "heldSkips": take.heldSkips]))
         self.take = nil
     }
 
@@ -282,7 +277,12 @@ final class InputMethodLink {
             self.take = take
         case .marked:
             guard message.take == take?.id else { return }
-            if message.ok == true { take?.acked += 1 } else { interrupt("clientChanged") }
+            guard message.ok == true else { interrupt("clientChanged"); return }
+            take?.acked += 1
+            // The client must show the marked text at the length sent; a client that takes it but
+            // shows nothing (macOS left the source inactive there) means nothing of pFlow's is in the field.
+            if message.markedLength == take?.lastLength { take?.shown += 1 } else { take?.unshown += 1 }
+            if take?.shown == 0, (take?.unshown ?? 0) >= 2 { interrupt("notShown") }
         case .interrupted:
             guard message.take == take?.id else { return }
             interrupt(message.reason ?? "uncertain")
