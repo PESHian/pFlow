@@ -18,6 +18,8 @@ struct InputMethodProbeTests {
         var refusesToClear = false
         /// A client whose text cannot be read.
         var unreadable = false
+        /// A client that reports no caret (a background window's client does).
+        var noCaret = false
         private(set) var text: String
         private var caret: Int
         private var shown = ""
@@ -39,7 +41,7 @@ struct InputMethodProbeTests {
             caret += (words as NSString).length
         }
         var markedLength: Int { (shown as NSString).length }
-        var caretLocation: Int? { caret }
+        var caretLocation: Int? { noCaret ? nil : caret }
         private var document: String { (text as NSString).replacingCharacters(in: NSRange(location: caret, length: 0), with: shown) }
         /// Like an app's text client: a range past the end reads as what there is.
         func text(in range: NSRange) -> String? {
@@ -130,6 +132,22 @@ struct InputMethodProbeTests {
         _ = core2.probe(id(clean), client: clean, window: nil)
         _ = core2.mark(words, controller: id(clean), client: clean)
         #expect(core2.clear() == .gone, "taken back out: the field's own text is not the words")
+    }
+
+    /// A background window's client reports no caret: no proof the words are gone, so no
+    /// paste, and the Copy card says why.
+    @Test func aClientWithNoCaretGivesNoProof() {
+        let core = InputMethodTakeCore()
+        let background = FakeClient("com.google.Chrome")
+        _ = core.begin(bundle: "com.google.Chrome", after: 20)
+        _ = core.probe(id(background), client: background, window: nil)
+        _ = core.mark(" the harbor", controller: id(background), client: background)
+        background.noCaret = true
+        let result = core.clear()
+        #expect(result == .unread, "no caret: no proof either way")
+        let final = InputMethodFinish.afterTakeBack(cleared: result == .gone)
+        #expect(final == .kept(.otherWindow), "no paste")
+        if case .kept(let stop) = final { #expect(stop.cardReason == "Your words may have gone to another window.") }
     }
 
     @Test func aClientWhoseTextCannotBeReadGivesNoProof() {
