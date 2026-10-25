@@ -471,10 +471,12 @@ struct InputMethodBindingTests {
 struct InputMethodTargetTests {
     /// Window 2 (the target) shows nothing of the marks: they went to another client.
     @Test func marksMissingFromTheTargetAreNotInTheTarget() {
-        let expected: (String) -> String? = { "Dear Sam, " + $0 }
-        #expect(!InputMethodFinish.showsInTarget(read: "Dear Sam,", candidates: ["the harbor", "the harbor lights"], expected: expected, placeholder: false))
-        #expect(InputMethodFinish.showsInTarget(read: "Dear Sam, the harbor", candidates: ["the harbor", "the harbor lights"], expected: expected, placeholder: false))
-        #expect(!InputMethodFinish.showsInTarget(read: nil, candidates: ["the harbor"], expected: expected, placeholder: false))
+        #expect(!InputMethodFinish.showsInTarget(read: "Dear Sam,", candidates: ["the harbor", "the harbor lights"], original: "Dear Sam,"))
+        #expect(InputMethodFinish.showsInTarget(read: "Dear Sam, the harbor", candidates: ["the harbor", "the harbor lights"], original: "Dear Sam,"))
+        #expect(InputMethodFinish.showsInTarget(read: "the harbor\n", candidates: [" the harbor"], original: ""), "an editor's own line break")
+        #expect(!InputMethodFinish.showsInTarget(read: "the harbor", candidates: ["the harbor"], original: "the harbor"),
+                "words the field already had are not pFlow's marks")
+        #expect(!InputMethodFinish.showsInTarget(read: nil, candidates: ["the harbor"], original: ""))
     }
 
     /// The commit counts only when the target shows it; the input method's own read-back only for an unreadable target.

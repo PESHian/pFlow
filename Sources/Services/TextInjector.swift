@@ -349,8 +349,9 @@ final class TextInjector: TextInjecting {
                 return .typing
             case .pending:
                 return .waiting
-            case .failed:
+            case .failed(let why):
                 ReasonLog.note("input method did not become active in the app; other live paths")
+                ReasonLog.note("input method attach:", AttachReason(why))
                 inputMethod.end()
                 inputMethodTake = nil
                 inputMethodAllowed = false
@@ -408,7 +409,7 @@ final class TextInjector: TextInjecting {
         // window of the same app would take them too, and read them back to itself).
         if targetReadable, let candidates = inputMethod.showingCandidates(), let targetField {
             let read = attribute(targetField, kAXValueAttribute) as? String
-            if !InputMethodFinish.showsInTarget(read: read, candidates: candidates, expected: markedValue, placeholder: placeholderStart) {
+            if !InputMethodFinish.showsInTarget(read: read, candidates: candidates, original: originalValue) {
                 return notInTarget()
             }
         }
@@ -477,15 +478,10 @@ final class TextInjector: TextInjecting {
         let deadline = Date().addingTimeInterval(waiting)
         repeat {
             let read = attribute(targetField, kAXValueAttribute) as? String
-            if InputMethodFinish.showsInTarget(read: read, candidates: candidates, expected: markedValue, placeholder: placeholderStart) { return true }
+            if InputMethodFinish.showsInTarget(read: read, candidates: candidates, original: originalValue) { return true }
             try? await Task.sleep(for: .milliseconds(50))
         } while Date() < deadline
         return false
-    }
-
-    /// The target field as it reads with `marked` at the captured caret.
-    private func markedValue(_ marked: String) -> String? {
-        placeholderStart ? marked : expectedValue(inserting: marked)
     }
 
     /// The take's marks are not in the target field (another window or field

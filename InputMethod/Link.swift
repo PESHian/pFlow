@@ -109,10 +109,14 @@ final class Link {
             guard let id = message.take, let bundle = message.bundle else { return }
             take = Take(id: id, bundle: bundle, source: message.source)
             // Only a client activated since pFlow selected the source for this take.
-            apply(binding.begin(bundle: bundle, after: message.at ?? .infinity))
+            let event = binding.begin(bundle: bundle, after: message.at ?? .infinity)
+            if event == .none { reasons.notice("begin: no activation for this take yet") }
+            apply(event)
         case .rebind:
             guard message.take == take?.id else { return }
-            apply(binding.rebind(after: message.at ?? .infinity))
+            let event = binding.rebind(after: message.at ?? .infinity)
+            if event == .none { reasons.notice("rebind: no activation for this take yet") }
+            apply(event)
         case .mark:
             guard let text = message.text else { return }
             let ok = write { client in
@@ -197,8 +201,14 @@ final class Link {
         current = controller
         currentClient = client
         activatedAt = ProcessInfo.processInfo.systemUptime
-        if take == nil { checkOrphanedSoon() }
-        apply(binding.activated(.init(controller: ObjectIdentifier(controller), bundle: client?.bundleIdentifier(), at: activatedAt)))
+        if take == nil { checkOrphanedSoon(); reasons.debug("activated with no take") }
+        let activation = InputMethodBinding.Activation(controller: ObjectIdentifier(controller), bundle: client?.bundleIdentifier(), at: activatedAt)
+        let event = binding.activated(activation)
+        if event == .none, take != nil, binding.bound == nil {
+            let why = activation.bundle == binding.bundle ? "before the take's selection" : "another app"
+            reasons.notice("activation not bound: \(why, privacy: .public)")
+        }
+        apply(event)
         reportClient()
     }
 

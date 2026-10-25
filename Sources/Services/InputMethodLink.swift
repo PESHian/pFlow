@@ -87,14 +87,23 @@ enum InputMethodFinish {
         return result == .applied || result == .unconfirmed
     }
 
-    /// The target field shows one of the texts pFlow marked this take, at the
-    /// captured caret (`expected` puts a text there): the take's client is the
-    /// target, not another window of the same app.
-    static func showsInTarget(read: String?, candidates: [String], expected: (String) -> String?, placeholder: Bool) -> Bool {
+    /// The target field shows one of the texts pFlow marked this take: it
+    /// holds that text more often than it did before the take (an editor may
+    /// add a line break or a zero-width character around marked text). The
+    /// take's client is then the target, not another window of the same app,
+    /// which would leave the target as it was.
+    static func showsInTarget(read: String?, candidates: [String], original: String?) -> Bool {
         guard let read else { return false }
+        let before = original ?? ""
         return candidates.contains { text in
-            expected(text).map { EditorPlaceholder.same(read, $0, startedAsPlaceholder: placeholder) } ?? false
+            let words = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !words.isEmpty else { return false }
+            return occurrences(of: words, in: EditorPlaceholder.plain(read)) > occurrences(of: words, in: EditorPlaceholder.plain(before))
         }
+    }
+
+    static func occurrences(of text: String, in value: String) -> Int {
+        value.components(separatedBy: text).count - 1
     }
 
     /// After the commit. Landed only when the target field itself shows the
@@ -109,6 +118,12 @@ enum InputMethodFinish {
         if copiesToClipboard(finished, keepCopy: keepCopy) { copy() }
         return finished
     }
+}
+
+/// Why the input method did not attach (fixed names: timeout, source changed, other app).
+struct AttachReason: LogReason {
+    let logName: String
+    init(_ reason: String) { logName = ["timeout", "source changed", "other app", "no take"].contains(reason) ? reason : "other" }
 }
 
 /// A count line for the reason log (numbers only).
@@ -269,6 +284,7 @@ final class InputMethodLink {
                 self.take = take
                 _ = transmit(.init(.rebind, take: take.id, at: take.selectedAt))
                 _ = selectSource(InputMethodWire.sourceID)
+                ReasonLog.note("no activation yet: pFlow's source selected again")
             }
         }
         return self.take?.attach ?? .failed("no take")
