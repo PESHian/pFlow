@@ -439,19 +439,22 @@ final class TextInjector: TextInjecting {
             ReasonLog.note("input method commit refused")
             return .kept(.focus)
         }
+        var seenAnywhere = true
         if result.seen {
             ReasonLog.note("finished text committed and read back through the input method")
         } else if await landedAfterCommit(final) {
             ReasonLog.note("finished text committed and read back through Accessibility")
         } else {
-            ReasonLog.note("finished text committed but could not be read back")
-            return .unconfirmed
+            seenAnywhere = false
         }
-        if copyToClipboard(),
+        let finished: LiveInlineFinal = seenAnywhere ? .applied : .unconfirmed
+        if !seenAnywhere { ReasonLog.note("finished text committed but could not be read back") }
+        // "Copy dictation to clipboard": the finished words, as the paste path keeps them.
+        if InputMethodFinish.copiesToClipboard(finished, keepCopy: copyToClipboard()),
            placeOnClipboard(Self.clipboardItem(text: text, formatted: nil, sessionID: UUID().uuidString, private: false)) == nil {
             ReasonLog.note("the finished text could not be copied to the clipboard")
         }
-        return .applied
+        return finished
     }
 
     /// The field now reads as it did with the finished text at the captured caret.

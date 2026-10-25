@@ -78,6 +78,16 @@ enum InputMethodInstall {
     }
 }
 
+/// After the input method committed the finished text: whether "Copy
+/// dictation to clipboard" puts it on the clipboard. The same as the paste
+/// path: whenever the text went out, seen or not.
+enum InputMethodFinish {
+    static func copiesToClipboard(_ result: LiveInlineFinal, keepCopy: Bool) -> Bool {
+        guard keepCopy else { return false }
+        return result == .applied || result == .unconfirmed
+    }
+}
+
 /// A count line for the reason log (numbers only).
 struct LogCounts: LogReason {
     let logName: String
@@ -116,12 +126,16 @@ final class InputMethodLink {
         var restored = false
         /// The begin message reached the input method (sent once it is connected).
         var beginSent = false
+        /// Re-selection when no activation came: 0 none, 1 the person's source selected, 2 pFlow's again.
+        var reselect = 0
     }
 
     private(set) var take: Take?
     private(set) var connected = false
     /// How long the input method has to become active in the app before pFlow uses its other paths.
     static let attachTimeout: TimeInterval = 1.8
+    static let reselectAfter: TimeInterval = 0.5
+    static let reselectGap: TimeInterval = 0.3
     static let restoreKey = "inputMethodRestoreSource"
 
     // The outside world, replaceable in tests.
@@ -147,7 +161,12 @@ final class InputMethodLink {
 
     /// Live words can go through the input method: the person has added it.
     /// Selecting it starts it if it is not running; the take waits for it.
-    var usable: Bool { enabled() }
+    var usable: Bool {
+        #if DEBUG
+        if UserDefaults.standard.bool(forKey: "pflow.debug.noInputMethod") { return false }
+        #endif
+        return enabled()
+    }
 
     // MARK: Take
 
@@ -158,12 +177,16 @@ final class InputMethodLink {
         let previous = currentSource()
         guard previous != InputMethodWire.sourceID || defaults.string(forKey: Self.restoreKey) != nil else { return false }
         let restoreTo = previous == InputMethodWire.sourceID ? defaults.string(forKey: Self.restoreKey) : previous
+        // Remembered durably before the switch: if pFlow dies in between, the
+        // input method (and pFlow's next launch) can still put it back.
         defaults.set(restoreTo, forKey: Self.restoreKey)
+        defaults.synchronize()
         take = Take(id: id, bundle: bundle, previous: restoreTo, started: clock())
         sendBegin()
         if previous == InputMethodWire.sourceID {
             // Already selected (left over): the input method binds to its active client on begin.
         } else if !selectSource(InputMethodWire.sourceID) {
+            ReasonLog.note("input source could not be selected")
             take = nil
             return false
         }
@@ -184,6 +207,20 @@ final class InputMethodLink {
         if take.attach == .pending, waited > Self.attachTimeout {
             take.attach = .failed("timeout")
             self.take = take
+        } else if take.attach == .pending, let previous = take.previous {
+            // macOS sometimes leaves this source selected-but-inactive in the app (VM logs: no
+            // activation at all after the select). Select the person's source, give the
+            // deactivation a moment to arrive, then select pFlow's again: that brings a fresh one.
+            if take.reselect == 0, waited > Self.reselectAfter {
+                take.reselect = 1
+                self.take = take
+                _ = selectSource(previous)
+                ReasonLog.note("no activation yet: selecting the source again")
+            } else if take.reselect == 1, waited > Self.reselectAfter + Self.reselectGap {
+                take.reselect = 2
+                self.take = take
+                _ = selectSource(InputMethodWire.sourceID)
+            }
         }
         return self.take?.attach ?? .failed("no take")
     }
@@ -195,6 +232,9 @@ final class InputMethodLink {
         take.updates += 1
         take.seq += 1
         let sent = transmit(.init(.mark, take: take.id, text: text, seq: take.seq))
+        #if DEBUG
+        LiveLatency.markPost[take.seq] = LiveLatency.postAt
+        #endif
         if sent { take.marked = true }
         self.take = take
         return sent
@@ -271,7 +311,13 @@ final class InputMethodLink {
             self.take = take
         case .marked:
             guard message.take == take?.id else { return }
-            if message.ok == true { take?.acked += 1 } else { interrupt("clientChanged") }
+            guard message.ok == true else { interrupt("clientChanged"); return }
+            take?.acked += 1
+            #if DEBUG
+            if let seq = message.seq, let posted = LiveLatency.markPost[seq], posted > 0 {
+                LiveLatency.samples.append((ProcessInfo.processInfo.systemUptime - posted) * 1000)
+            }
+            #endif
         case .interrupted:
             guard message.take == take?.id else { return }
             interrupt(message.reason ?? "uncertain")

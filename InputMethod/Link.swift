@@ -18,6 +18,11 @@ final class Link {
     /// right after it sends a take's begin, so the take binds to the client
     /// activated then; an older activation is not the take's client.
     private var activatedAt = Date.distantPast
+    /// The current controller was activated and IMK has not deactivated it
+    /// since. Re-selecting this source while IMK still has it active brings
+    /// no new activation (VM logs: none for 1.9 s after the select), so a
+    /// take binds to that still-active client at once.
+    private var currentActive = false
 
     /// The take pFlow started: the app it must be in, the client it is bound
     /// to (once activated there), the person's source to restore if pFlow goes away.
@@ -109,10 +114,11 @@ final class Link {
         switch message.kind {
         case .begin:
             guard let id = message.take, let bundle = message.bundle else { return }
+            reasons.notice("begin; last activation \(Int(Date().timeIntervalSince(self.activatedAt) * 1000), privacy: .public) ms ago, still active \(self.currentActive, privacy: .public)")
             take = Take(id: id, bundle: bundle, source: message.source)
             // Bound now only when the client was activated a moment ago (this input method was just started
             // by the selection); otherwise by the activation the selection brings.
-            if Date().timeIntervalSince(activatedAt) < 1.0 { bindIfPossible() }
+            if currentActive || Date().timeIntervalSince(activatedAt) < 1.0 { bindIfPossible() }
         case .mark:
             guard let text = message.text else { return }
             let ok = write { client in
@@ -188,7 +194,9 @@ final class Link {
         current = controller
         currentClient = client
         activatedAt = Date()
-        reasons.notice("activated")
+        currentActive = true
+        if take == nil { checkOrphanedSoon() }
+        reasons.notice("activated controller \(UInt(bitPattern: ObjectIdentifier(controller).hashValue) % 10000, privacy: .public) take \(self.take != nil, privacy: .public) bound \(self.take?.uid != nil, privacy: .public)")
         if let take, let uid = take.uid, ObjectIdentifier(controller) != uid {
             if take.marked.isEmpty, client?.bundleIdentifier() == take.bundle, take.broken == nil {
                 // Nothing shown yet, same app: the client that came active is the take's (pFlow checks the field itself).
@@ -208,7 +216,39 @@ final class Link {
     /// activation replaces it (and ends a take bound elsewhere). pFlow checks
     /// the app and field itself before every write.
     func deactivated(_ controller: PFlowInputController) {
-        reasons.notice("deactivated")
+        reasons.notice("deactivated controller \(UInt(bitPattern: ObjectIdentifier(controller).hashValue) % 10000, privacy: .public) current \(self.current === controller, privacy: .public)")
+        if current === controller { currentActive = false }
+    }
+
+    /// Selected with no take and no pFlow to talk to (pFlow died between the
+    /// switch and its begin, or quit): after a few seconds the person's own
+    /// source comes back, the one pFlow saved before switching.
+    private func checkOrphanedSoon() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [self] in
+            guard take == nil, fd < 0, Self.selectedSourceID() == InputMethodWire.sourceID else { return }
+            let saved = CFPreferencesCopyAppValue("inputMethodRestoreSource" as CFString, InputMethodWire.appIdentifier as CFString) as? String
+            if let saved, Self.select(saved) {
+                reasons.notice("orphaned selection: the person's source restored")
+            } else if let fallback = Self.firstOtherKeyboardSource(), Self.select(fallback) {
+                reasons.notice("orphaned selection: a keyboard layout restored")
+            }
+        }
+    }
+
+    static func select(_ id: String) -> Bool {
+        guard let list = TISCreateInputSourceList([kTISPropertyInputSourceID: id] as CFDictionary, false)?.takeRetainedValue() as? [TISInputSource],
+              let source = list.first else { return false }
+        return TISSelectInputSource(source) == noErr
+    }
+
+    static func firstOtherKeyboardSource() -> String? {
+        let list = (TISCreateASCIICapableInputSourceList()?.takeRetainedValue() as? [TISInputSource]) ?? []
+        for source in list {
+            guard let raw = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else { continue }
+            let id = Unmanaged<CFString>.fromOpaque(raw).takeUnretainedValue() as String
+            if id != InputMethodWire.sourceID { return id }
+        }
+        return nil
     }
 
     static func selectedSourceID() -> String? {

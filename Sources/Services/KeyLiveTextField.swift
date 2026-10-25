@@ -144,7 +144,6 @@ final class KeyLiveTextField: LiveTextField {
         guard now.element == LiveFieldState.target, let value = now.value,
               now.selection == NSRange(location: range.location, length: 0),
               range.location <= (value as NSString).length else { return false }
-        let expected = (value as NSString).replacingCharacters(in: range, with: text)
         let started = PersonInput.now()
         if !watch.watching {
             aborted = true
@@ -158,14 +157,30 @@ final class KeyLiveTextField: LiveTextField {
             ReasonLog.note("live typing stopped before a key went out:", block)
             return false
         }
-        guard send(text) else { aborted = true; return false }
-        let caret = NSRange(location: range.location + text.utf16.count, length: 0)
-        // Keys that went out may have landed whatever the field shows: the
-        // write counts as made (the take is touched), and the session's own
-        // read-back decides whether it is confirmed.
-        _ = Self.until(milliseconds: 800 + 15 * text.utf16.count) {
-            let state = reader.state()
-            return EditorPlaceholder.same(state.value, expected, startedAsPlaceholder: false) && state.selection == caret
+        // One key event at a time, each shown before the next goes out: WebKit
+        // (Safari) can apply several back-to-back key events out of order,
+        // which scrambled words. A piece the field does not show in time ends
+        // typing for the take; nothing more is typed after it.
+        var location = range.location, shown = value, sentAny = false
+        for piece in SyntheticKeys.chunks(text) {
+            guard send(piece) else { aborted = true; return sentAny }
+            sentAny = true
+            shown = (shown as NSString).replacingCharacters(in: NSRange(location: location, length: 0), with: piece)
+            location += piece.utf16.count
+            let caret = NSRange(location: location, length: 0), expectedNow = shown
+            let seen = Self.until(milliseconds: 800 + 15 * piece.utf16.count) {
+                let state = reader.state()
+                return EditorPlaceholder.same(state.value, expectedNow, startedAsPlaceholder: false) && state.selection == caret
+            }
+            #if DEBUG
+            let after = reader.state()
+            Self.trace.append("keys at \(location - piece.utf16.count) [\(piece)] seen \(seen) now sel \(after.selection.map { "\($0.location)" } ?? "-") tail [\(String((after.value ?? "").suffix(60)))]")
+            #endif
+            guard seen else {
+                aborted = true
+                ReasonLog.note("typed live words stopped: a key event was not shown in time")
+                return true
+            }
         }
         return true
     }
@@ -209,6 +224,8 @@ final class KeyLiveTextField: LiveTextField {
     /// True when the person pressed a key or clicked since the select, or
     /// when nothing was watching (nobody can say they did not).
     #if DEBUG
+    /// The Debug harness's record of each typed batch (VM only, fictional text).
+    static var trace: [String] = []
     /// Self-test: when pFlow last selected its own words.
     static var lastOwnSelect: UInt64 = 0
     #endif

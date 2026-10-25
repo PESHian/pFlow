@@ -49,8 +49,8 @@ final class StreamRecorder: StreamingTranscriber, @unchecked Sendable {
         inner = engine
         engine.onTranscript = { [weak self] text in
             guard let self else { return }
-            let at = (now() - self.started) * 1000
-            self.lock.withLock { self.posts.append(["ms": at.rounded(), "text": text]) }
+            let at = now()
+            self.lock.withLock { self.posts.append(["at": at, "text": text]) }
             self.onTranscript?(text)
         }
         return self
@@ -68,7 +68,13 @@ final class StreamRecorder: StreamingTranscriber, @unchecked Sendable {
         return text
     }
     func cancel() async { await inner?.cancel() }
-    var json: [String: Any] { lock.withLock { ["posts": posts, "final": final, "finishMs": finishMs] } }
+    /// Post times in ms from `start` (the moment the recording began to play).
+    func json(relativeTo start: Double) -> [String: Any] {
+        lock.withLock {
+            let rel = posts.map { ["ms": ((($0["at"] as? Double ?? start) - start) * 1000).rounded(), "text": $0["text"] ?? ""] }
+            return ["posts": rel, "final": final, "finishMs": finishMs]
+        }
+    }
 }
 
 /// Forwards to the real session and times start and stop.
@@ -130,6 +136,40 @@ func speedWords(_ text: String) -> [String] {
 }
 
 /// Word-level edit distance over reference length.
+/// Word edits (substitutions, insertions, deletions) from `reference` to `hypothesis`.
+func wordErrors(_ hypothesis: String, reference: String) -> Int {
+    let h = speedWords(hypothesis), r = speedWords(reference)
+    var row = Array(0...h.count)
+    for i in 1...max(r.count, 1) where !r.isEmpty {
+        var previous = row[0]
+        row[0] = i
+        for j in stride(from: 1, through: h.count, by: 1) {
+            let current = row[j]
+            row[j] = min(row[j] + 1, row[j - 1] + 1, previous + (r[i - 1] == h[j - 1] ? 0 : 1))
+            previous = current
+        }
+    }
+    return r.isEmpty ? h.count : row[h.count]
+}
+
+/// When speech starts in a recording: the first 10 ms window louder than -40 dBFS.
+func speechOnsetMs(_ url: URL) throws -> Double {
+    let file = try AVAudioFile(forReading: url)
+    let rate = file.processingFormat.sampleRate
+    let window = AVAudioFrameCount(rate / 100)
+    var index = 0.0
+    while file.framePosition < file.length {
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: window) else { break }
+        try file.read(into: buffer, frameCount: window)
+        guard let data = buffer.floatChannelData?[0], buffer.frameLength > 0 else { break }
+        var sum: Float = 0
+        for k in 0..<Int(buffer.frameLength) { sum += data[k] * data[k] }
+        if (sum / Float(buffer.frameLength)).squareRoot() > 0.01 { return index * 10 }
+        index += 1
+    }
+    return -1
+}
+
 func wordErrorRate(_ hypothesis: String, reference: String) -> Double {
     let h = speedWords(hypothesis), r = speedWords(reference)
     guard !r.isEmpty else { return h.isEmpty ? 0 : 1 }
@@ -240,7 +280,7 @@ struct SpeedHarnessTests {
         let run = speedRun
         var report: [String: Any] = ["run": run, "takesPerFile": speedTakes]
         switch run {
-        case "apple", "apple-fast", "apple-off":
+        case "apple", "apple-fast", "apple-off", "apple-dual":
             let locale = try await english()
             let started = now()
             await DictationSession.prewarm(locale: locale)
@@ -251,7 +291,8 @@ struct SpeedHarnessTests {
                     let capture = FileCapture(url: url)
                     let fast = run == "apple-fast"
                     let session = DictationSession(locale: locale, capture: capture,
-                                                   appleEngine: { TranscriptionService(fastResults: fast) })
+                                                   appleEngine: { TranscriptionService(fastResults: fast) },
+                                                   appleLiveEngine: run == "apple-dual" ? { TranscriptionService(fastResults: true) } : nil)
                     session.selectedEngine = { .apple }
                     takes.append(try await take(url, session: session, capture: capture,
                                                 live: run == "apple-off" ? .off : .typeInApp, index: index))
@@ -259,19 +300,30 @@ struct SpeedHarnessTests {
             }
             report["takes"] = takes
             #expect(takes.allSatisfy { ($0["final"] as? String)?.isEmpty == false })
-        case "apple-stream":
-            // Apple's recognizer output for each recording, for replay in the test VM where it does not run.
+        case "apple-stream", "apple-stream-fast":
+            // Apple's recognizer output for each recording, for replay in the test VM where it does not run,
+            // with speech onset, first-result latency and accuracy against the script.
             let locale = try await english()
             await DictationSession.prewarm(locale: locale)
+            let fast = run == "apple-stream-fast"
             var streams: [String: Any] = [:]
             for url in try recordings() {
                 let capture = FileCapture(url: url)
                 let recorder = StreamRecorder()
                 let session = DictationSession(locale: locale, capture: capture,
-                                               appleEngine: { recorder.wrap(TranscriptionService()) })
+                                               appleEngine: { recorder.wrap(TranscriptionService(fastResults: fast)) },
+                                               appleLiveEngine: nil)
                 session.selectedEngine = { .apple }
                 _ = try await take(url, session: session, capture: capture, live: .typeInApp, index: 1)
-                streams[url.lastPathComponent] = recorder.json
+                var stream = recorder.json(relativeTo: capture.startedAt ?? 0)
+                let onset = try speechOnsetMs(url)
+                stream["onsetMs"] = onset
+                let first = (stream["posts"] as? [[String: Any]])?.first?["ms"] as? Double
+                stream["firstResultAfterOnsetMs"] = first.map { $0 - onset } ?? -1
+                let script = try reference(for: url)
+                stream["wordErrors"] = wordErrors(stream["final"] as? String ?? "", reference: script)
+                stream["scriptWords"] = speedWords(script).count
+                streams[url.lastPathComponent] = stream
             }
             report["streams"] = streams
         case "whisper-on", "whisper-off":

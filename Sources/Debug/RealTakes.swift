@@ -26,7 +26,8 @@ final class RealPipeline {
         let locale = Locale(identifier: "en_US")
         DictationSession.assumeSupported(locale)
         let session = DictationSession(locale: locale, capture: QueuedFileCapture(next: next),
-                                       appleEngine: { ReplayTranscriber.forCurrentFile() })
+                                       appleEngine: { ReplayTranscriber.forCurrentFile() },
+                                       appleLiveEngine: { ReplayTranscriber.forCurrentFile(fast: true) })
         session.selectedEngine = { .apple }
         let cleanup = TranscriptCleanupService()
         let cleanupOn = (UserDefaults.standard.object(forKey: "cleanupEnabled") as? Bool) ?? true
@@ -100,6 +101,9 @@ extension TakeHarness {
         let clipboardCount = board.changeCount
         if let beforeStart { await beforeStart() }
         ReasonLog.recent.removeAll()
+        KeyLiveTextField.trace.removeAll()
+        LiveLatency.reset()
+        var firstVisibleAt: Double?
         let seconds = audioSeconds(audio) + 0.8
         let started = Date()
         // Frames: a capture loop outside pFlow (the VM driver) records while this file names a folder.
@@ -116,7 +120,7 @@ extension TakeHarness {
         var liveSeen = 0, firstLiveMs = -1, previewSeen = 0, sourceDuring = "?"
         var duringRan = false
         while Date().timeIntervalSince(started) < seconds {
-            await pause(0.25)
+            await pause(0.1)
             if sourceDuring == "?", Date().timeIntervalSince(started) > 1 { sourceDuring = InputMethodInstall.currentSourceID() ?? "?" }
             if var now = await target.readBack() {
                 // Chromium reads the Tiptap page's CSS placeholder out as text; it is not a live word.
@@ -124,7 +128,10 @@ extension TakeHarness {
                 let added = now.count > before.count ? String(now.dropFirst(before.count)).trimmingCharacters(in: .whitespacesAndNewlines) : ""
                 let words = added.split(whereSeparator: \.isWhitespace).count
                 if words > liveSeen { liveSeen = words }
-                if firstLiveMs < 0, words > 0 { firstLiveMs = Int(Date().timeIntervalSince(started) * 1000) }
+                if firstLiveMs < 0, words > 0 {
+                    firstLiveMs = Int(Date().timeIntervalSince(started) * 1000)
+                    firstVisibleAt = ProcessInfo.processInfo.systemUptime
+                }
             }
             let shown = pipeline.hud.model.livePreview ? pipeline.hud.model.partial.split(whereSeparator: \.isWhitespace).count : 0
             previewSeen = max(previewSeen, shown)
@@ -142,6 +149,11 @@ extension TakeHarness {
         let after = await target.readBack() ?? ""
         let final = pipeline.history.saved.last ?? ""
         record["liveWordsSeen"] = liveSeen
+        // From the moment the recording began to play (speech starts within 10 ms of it).
+        record["firstVisibleAfterSpeechMs"] = firstVisibleAt.flatMap { at in QueuedFileCapture.startedAt.map { Int((at - $0) * 1000) } } ?? -1
+        let delays = LiveLatency.samples.sorted()
+        record["pflowDelayMedianMs"] = delays.isEmpty ? -1 : Int(delays[delays.count / 2])
+        record["pflowDelayMaxMs"] = Int(delays.last ?? -1)
         record["firstLiveMs"] = firstLiveMs
         record["previewWordsSeen"] = previewSeen
         record["outcome"] = pipeline.coordinator.lastOutcome.map { "\($0)" } ?? "none"
@@ -157,9 +169,11 @@ extension TakeHarness {
         record["sourceRestored"] = (InputMethodInstall.currentSourceID() ?? "") == sourceBefore
         record["clipboardUntouched"] = board.changeCount == clipboardCount && board.string(forType: .string) == marker
         record["reasons"] = ReasonLog.recent
+        record["keyTrace"] = KeyLiveTextField.trace
         record["startError"] = pipeline.coordinator.lastStartError ?? NSNull()
         pipeline.coordinator.lastStartError = nil
-        record["inputMethod"] = ReasonLog.recent.contains("live words by the input method")
+        // Used, not only tried: the input method became active in the app.
+        record["inputMethod"] = ReasonLog.recent.contains("input method active in the app")
         note("\(label) \(target.name) \(way): live \(liveSeen) first \(firstLiveMs) ms, preview \(previewSeen), once \(record["landedOnce"]!), outcome \(record["outcome"]!), source \(sourceBefore)→\(sourceDuring)→\(record["sourceAfter"]!), clipboard \(record["clipboardUntouched"]!), im \(record["inputMethod"]!)")
         pipeline.hud.hide(after: 0)
         await pause(0.5)

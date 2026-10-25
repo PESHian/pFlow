@@ -182,6 +182,51 @@ struct InputMethodTests {
         #expect(world.current == "com.apple.keylayout.ABC")
     }
 
+    /// No activation after the select: the person's source, a pause, then pFlow's again; the
+    /// activation that brings binds the take.
+    @Test func noActivationMeansOneSpacedReselection() {
+        let world = World()
+        let link = link(world)
+        #expect(link.begin(id: "t", bundle: "com.apple.Notes"))
+        world.now += 0.2
+        #expect(link.attachState() == .pending && world.selects.count == 1)
+        world.now += 0.4
+        #expect(link.attachState() == .pending)
+        #expect(world.selects.last == "com.apple.keylayout.ABC", "the person's source first")
+        world.now += 0.1
+        _ = link.attachState()
+        #expect(world.selects.count == 2, "a pause before pFlow's again")
+        world.now += 0.2
+        _ = link.attachState()
+        #expect(world.selects.last == InputMethodWire.sourceID && world.selects.count == 3)
+        link.receive(.init(.client, take: "t", bundle: "com.apple.Notes"))
+        #expect(link.attachState() == .attached)
+        world.now += 1
+        _ = link.attachState()
+        #expect(world.selects.count == 3, "once")
+    }
+
+    /// The person's source is saved before the switch, so a pFlow that dies in between can still be undone.
+    @Test func thePersonsSourceIsSavedBeforeTheSwitch() {
+        let world = World()
+        let link = link(world)
+        var savedAtSelect: String?
+        link.selectSource = { id in
+            savedAtSelect = link.defaults.string(forKey: InputMethodLink.restoreKey)
+            world.selects.append(id); world.current = id; return true
+        }
+        #expect(link.begin(id: "t", bundle: "com.apple.TextEdit"))
+        #expect(savedAtSelect == "com.apple.keylayout.ABC")
+    }
+
+    /// "Copy dictation to clipboard" keeps the finished text whenever it went out, read back or not.
+    @Test func theKeptCopyFollowsTheSettingAfterACommit() {
+        #expect(InputMethodFinish.copiesToClipboard(.applied, keepCopy: true))
+        #expect(InputMethodFinish.copiesToClipboard(.unconfirmed, keepCopy: true))
+        #expect(!InputMethodFinish.copiesToClipboard(.applied, keepCopy: false))
+        #expect(!InputMethodFinish.copiesToClipboard(.kept(.focus), keepCopy: true))
+    }
+
     @Test func notAddedMeansNoSwitch() {
         let world = World()
         world.enabled = false
@@ -245,5 +290,42 @@ struct LiveFallbackTests {
         await coordinator.finish()
         #expect(coordinator.lastOutcome == .unconfirmed)
         #expect(injector.delivered.isEmpty, "never pasted a second time")
+    }
+}
+
+/// Safari (WebKit) applied several back-to-back key events out of order: the
+/// last piece of a long batch landed first (VM trace: "...meet the" then
+/// "he old lighthouse. ferry at 9 and walk along the pier to t"). Typed
+/// keys go out one event at a time, each shown before the next.
+@MainActor
+struct TypedKeyOrderTests {
+    /// A field that, given several key events at once, applies the last one first.
+    final class ReorderingField: KeyFieldReader {
+        var value = "Note:"
+        var selection = NSRange(location: 5, length: 0)
+        func post(_ text: String) {
+            var pieces = SyntheticKeys.chunks(text)
+            if pieces.count > 1 { pieces = [pieces.removeLast()] + pieces }
+            for piece in pieces {
+                value = (value as NSString).replacingCharacters(in: selection, with: piece)
+                selection = NSRange(location: selection.location + (piece as NSString).length, length: 0)
+            }
+        }
+        func state() -> LiveFieldState {
+            LiveFieldState(app: 1, element: LiveFieldState.target, secure: false, trusted: true, value: value, selection: selection)
+        }
+        func select(_ range: NSRange) -> Bool { selection = range; return true }
+        func selectionSettable() -> Bool { true }
+    }
+
+    @Test func aLongBatchIsTypedInOrderOrNotAtAll() {
+        let field = ReorderingField()
+        let watch = PersonInput(isTrusted: { false })
+        watch.overrideWatching(true)
+        let keys = KeyLiveTextField(reader: field, pid: 1, facts: { _ in InsertionFacts() }, watch: watch,
+                                    inputMethod: { false }, send: { field.post($0); return true })
+        let words = " ferry at 9 and walk along the pier to the old lighthouse."
+        #expect(keys.replace(NSRange(location: 5, length: 0), with: words))
+        #expect(field.value == "Note:" + words, "in order: \(field.value)")
     }
 }

@@ -48,6 +48,8 @@ final class DictationSession: DictationSessioning {
     private let capture: AudioCapturing
     private let whisperModel: URL
     private let appleEngine: () -> StreamingTranscriber
+    /// The fast recognizer for live words only (DualTranscriber); nil keeps one recognizer.
+    private let appleLiveEngine: (() -> StreamingTranscriber)?
     private let relay = AudioBufferRelay()
     private var transcriber: StreamingTranscriber?
     private var feed: LiveTranscriptFeed?
@@ -80,11 +82,13 @@ final class DictationSession: DictationSessioning {
 
     init(locale: Locale = .current, capture: AudioCapturing = AudioCaptureService(),
          whisperModel: URL = WhisperModelStore.modelURL,
-         appleEngine: @escaping () -> StreamingTranscriber = { TranscriptionService() }) {
+         appleEngine: @escaping () -> StreamingTranscriber = { TranscriptionService() },
+         appleLiveEngine: (() -> StreamingTranscriber)? = { TranscriptionService(fastResults: true) }) {
         self.locale = locale
         self.capture = capture
         self.whisperModel = whisperModel
         self.appleEngine = appleEngine
+        self.appleLiveEngine = appleLiveEngine
     }
 
     /// Switch dictation language while idle. The next recording uses the new
@@ -153,7 +157,12 @@ final class DictationSession: DictationSessioning {
         }
 
         let model = whisperModel
-        let engine: StreamingTranscriber = choice == .apple ? appleEngine()
+        // Live words: the fast recognizer shows them, the default one writes the finished text.
+        let apple: () -> StreamingTranscriber = { [appleEngine, appleLiveEngine] in
+            guard live, let fast = appleLiveEngine else { return appleEngine() }
+            return DualTranscriber(live: fast(), final: appleEngine())
+        }
+        let engine: StreamingTranscriber = choice == .apple ? apple()
             : WhisperTranscriber(modelURL: model, liveWorker: live ? { WhisperLiveProcess(model: model) } : nil)
         engine.onTranscript = { text in feed.post(text) }
         engine.onLiveStopped = { [weak self] in

@@ -68,10 +68,13 @@ final class QueuedFileCapture: AudioCapturing, @unchecked Sendable {
 
     /// The recording the current take plays (the replayed recognizer reads it).
     nonisolated(unsafe) static var currentFile: URL?
+    /// When the current take's recording began to play (system uptime).
+    nonisolated(unsafe) static var startedAt: Double?
 
     func start() throws {
         let path = try String(contentsOf: next, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
         Self.currentFile = URL(fileURLWithPath: path)
+        Self.startedAt = ProcessInfo.processInfo.systemUptime
         let capture = FileCapture(url: URL(fileURLWithPath: path))
         capture.onBuffer = onBuffer
         capture.onLevel = onLevel
@@ -82,6 +85,16 @@ final class QueuedFileCapture: AudioCapturing, @unchecked Sendable {
     func pause() { current?.pause() }
     func resume() throws { try current?.resume() }
 }
+/// pFlow's own delay after a recognizer result (Debug harness): when the
+/// newest result was posted, which result each mark carried, and how long
+/// from the post until the input method confirmed the marked text.
+enum LiveLatency {
+    nonisolated(unsafe) static var postAt: Double = 0
+    nonisolated(unsafe) static var markPost: [Int: Double] = [:]
+    nonisolated(unsafe) static var samples: [Double] = []
+    static func reset() { postAt = 0; markPost = [:]; samples = [] }
+}
+
 /// Apple's recognizer does not run in the test VM, so its real output for
 /// each recording is recorded on a Mac where it does (the speed harness's
 /// "apple-stream" run: every transcript the engine posted, with its time
@@ -104,23 +117,26 @@ final class ReplayTranscriber: StreamingTranscriber, @unchecked Sendable {
     init(stream: Stream) { self.stream = stream }
 
     /// The recorded stream for the recording the take plays (streams.json beside the recordings).
-    static func forCurrentFile() -> StreamingTranscriber {
+    /// `fast`: the fast recognizer's stream (live words); otherwise the default one's (the finished text).
+    static func forCurrentFile(fast: Bool = false) -> StreamingTranscriber {
         let empty = Stream(posts: [], final: "", finishMs: 0)
         guard let file = QueuedFileCapture.currentFile,
-              let data = try? Data(contentsOf: file.deletingLastPathComponent().appendingPathComponent("streams.json")),
+              let data = try? Data(contentsOf: file.deletingLastPathComponent().appendingPathComponent(fast ? "streams-fast.json" : "streams.json")),
               let all = try? JSONDecoder().decode([String: Stream].self, from: data) else { return ReplayTranscriber(stream: empty) }
         return ReplayTranscriber(stream: all[file.lastPathComponent] ?? empty)
     }
 
     func begin(locale: Locale, contextualStrings: [String]) async throws {
         lock.withLock { running = true }
-        let started = ProcessInfo.processInfo.systemUptime
+        // Recorded times are from the moment the recording began to play.
+        let started = QueuedFileCapture.startedAt ?? ProcessInfo.processInfo.systemUptime
         let posts = stream.posts
         Thread.detachNewThread { [self] in
             for post in posts {
                 let wait = started + post.ms / 1000 - ProcessInfo.processInfo.systemUptime
                 if wait > 0 { Thread.sleep(forTimeInterval: wait) }
                 guard lock.withLock({ running }) else { return }
+                LiveLatency.postAt = ProcessInfo.processInfo.systemUptime
                 onTranscript?(post.text)
             }
         }
