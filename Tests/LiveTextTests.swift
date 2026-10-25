@@ -174,7 +174,8 @@ struct LiveTextTests {
         mode = .off
         session.emit("shown still")
         await coordinator.finish()
-        #expect(hud.previews == [false, false])
+        // Type mode with no field to type into: pFlow's own preview shows the words.
+        #expect(hud.previews == [false, true])
         #expect(hud.partials == ["shown", "shown still"])
     }
 
@@ -192,7 +193,7 @@ struct LiveTextTests {
                 #expect(injector.delivered.isEmpty)
             }
             await coordinator.finish()
-            #expect(hud.previews == [false])
+            #expect(hud.previews == [true], "no live field: the words show in pFlow's own preview")
             #expect(injector.delivered == ["hello world"], "\(mode)")
             #expect(history.saved.count == 1, "\(mode)")
         }
@@ -468,24 +469,34 @@ struct LiveTextTests {
         #expect(mark.fittingSize.width <= 24, "an icon, no words: \(mark.fittingSize)")
     }
 
-    /// The capsule's waveform matches Windows 0.1.28: up to seven bars 2 pt
-    /// wide with 2 pt gaps, as tall as the voice against the take's loudest
-    /// moment; silence is a row of 2 x 2 dots; "Lines" is one thin trace.
-    @Test func capsuleWaveformIsSevenThinBarsAndQuietIsDots() {
+    /// The capsule draws the Appearance picker's own waveform for the person's
+    /// style, in their colours, at the picker's density: "Lines" is symmetric
+    /// thin bars with dots where it is quiet, "Wave" a smooth mirrored envelope.
+    /// No jagged trace.
+    @Test func capsuleDrawsWhatThePickerShows() {
+        let model = HUDModel()
+        model.waveformStyle = .lines
+        model.palette = ThemePalette(primary: ThemeColor(hex: "AAAAAA")!, secondary: ThemeColor(hex: "AAAAAA")!)
+        model.levels = (0..<HUDModel.waveformSampleCount).map { Float($0 % 5) / 5 }
+        let wave = RecordingHUDView.capsuleWaveformView(model)
+        #expect(wave.style == .lines && wave.palette == model.palette && wave.size == RecordingHUDView.capsuleWaveform)
+        // 25 samples per 100 pt in the picker: 12 across the capsule's 46 pt.
+        #expect(wave.shownLevels.count == 12)
+        let newest = Array(model.levels.suffix(12))
+        #expect(Array(wave.shownLevels[3..<9]) == Array(newest[3..<9]), "the newest levels")
+        #expect(wave.shownLevels.first! <= newest.first! * 0.12 && wave.shownLevels.last! <= newest.last! * 0.12,
+                "quiet at both ends, as the thumbnail")
         let rect = CGRect(origin: .zero, size: RecordingHUDView.capsuleWaveform)
-        let quiet = CapsuleWave.bars(Array(repeating: 0, count: 32), in: rect)
-        #expect(quiet.count == 7)
-        #expect(quiet.allSatisfy { $0.width == 2 && $0.height == 2 }, "silence is dots: \(quiet)")
-        #expect(zip(quiet, quiet.dropFirst()).allSatisfy { $1.minX - $0.maxX == 2 }, "2 pt gaps")
-        var voice = Array(repeating: Float(0), count: 25)
-        voice += [0.1, 0.3, 0.6, 0.9, 0.6, 0.3, 0.1]
-        let loud = CapsuleWave.bars(voice, in: rect)
-        #expect(loud.count == 7)
-        #expect(loud[3].height == rect.height, "the loudest moment fills the height")
-        #expect(loud[0].height < loud[1].height && loud[1].height < loud[2].height && loud[2].height < loud[3].height)
-        #expect(loud.allSatisfy { $0.minY >= rect.minY && $0.maxY <= rect.maxY && Int($0.height) % 2 == 0 })
-        let trace = CapsuleWave.trace(voice, in: rect)
-        #expect(trace.count == 23 && trace.first?.x == 0 && trace.last?.x == rect.width)
+        let quiet = WaveformLines.bars(AudioLevel.waveformLevels(Array(repeating: 0, count: 12)), in: rect)
+        #expect(quiet.count == 12 && quiet.allSatisfy { $0.height == 1.2 }, "quiet is a row of dots")
+        let voice = WaveformLines.bars(AudioLevel.waveformLevels(wave.shownLevels), in: rect)
+        #expect(voice.allSatisfy { abs($0.midY - rect.midY) < 0.001 }, "every bar symmetric about the middle")
+        #expect(voice.allSatisfy { $0.width <= 2 }, "thin bars")
+        model.waveformStyle = .wave
+        #expect(RecordingHUDView.capsuleWaveformView(model).style == .wave)
+        let outline = WaveformOutline(levels: AudioLevel.waveformLevels(wave.shownLevels)).path(in: rect).boundingRect
+        #expect(abs(outline.midY - rect.midY) < 0.01, "the wave is mirrored about the middle")
+        #expect(RecordingWaveform(levels: [], style: .lines).frame == RecordingWaveform.thumbnailSize, "the picker keeps its size")
     }
 
     /// The panel is measured again when the card's content changes after it

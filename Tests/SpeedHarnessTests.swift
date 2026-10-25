@@ -31,53 +31,44 @@ private let speedModel = env["PFLOW_WHISPER_MODEL"]
 
 private func now() -> Double { ProcessInfo.processInfo.systemUptime }
 
-/// Plays a recording at real-time pace, without drift, in ~46 ms buffers like
-/// the microphone tap. Pausing stops the clock, as pausing the engine does.
-final class FileCapture: AudioCapturing, @unchecked Sendable {
-    var onBuffer: ((AVAudioPCMBuffer) -> Void)?
-    var onLevel: ((Float) -> Void)?
-    private let url: URL
+/// Records what a real engine posts, with times from the start of recognition.
+final class StreamRecorder: StreamingTranscriber, @unchecked Sendable {
+    private var inner: StreamingTranscriber?
+    private var started = 0.0
     private let lock = NSLock()
-    private var running = false
-    private var paused = false
-    private(set) var startedAt: Double?
-    private(set) var endedAt: Double?
-
-    init(url: URL) { self.url = url }
-
-    /// Each start plays the recording again from the beginning.
-    func start() throws {
-        let file = try AVAudioFile(forReading: url)
-        lock.withLock { running = true; paused = false; startedAt = now(); endedAt = nil }
-        let thread = Thread { [self] in play(file) }
-        thread.qualityOfService = .userInteractive
-        thread.start()
+    private var posts: [[String: Any]] = []
+    private var final = ""
+    private var finishMs = 0.0
+    var onTranscript: ((String) -> Void)?
+    var onLiveStopped: (() -> Void)? {
+        get { inner?.onLiveStopped }
+        set { inner?.onLiveStopped = newValue }
     }
 
-    private func play(_ file: AVAudioFile) {
-        let rate = file.processingFormat.sampleRate
-        let chunk = AVAudioFrameCount(rate * 2048 / 44_100)
-        var played = 0.0
-        var clock = now()
-        while file.framePosition < file.length {
-            let (live, hold) = lock.withLock { (running, paused) }
-            guard live else { return }
-            if hold { Thread.sleep(forTimeInterval: 0.01); clock += 0.01; continue }
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: chunk),
-                  (try? file.read(into: buffer, frameCount: chunk)) != nil, buffer.frameLength > 0 else { break }
-            played += Double(buffer.frameLength) / rate
-            let ahead = played - (now() - clock)
-            if ahead > 0 { Thread.sleep(forTimeInterval: ahead) }
-            onBuffer?(buffer)
-            onLevel?(AudioLevel.normalized(from: buffer))
+    func wrap(_ engine: StreamingTranscriber) -> StreamingTranscriber {
+        inner = engine
+        engine.onTranscript = { [weak self] text in
+            guard let self else { return }
+            let at = (now() - self.started) * 1000
+            self.lock.withLock { self.posts.append(["ms": at.rounded(), "text": text]) }
+            self.onTranscript?(text)
         }
-        lock.withLock { endedAt = now() }
+        return self
     }
 
-    var finished: Bool { lock.withLock { endedAt != nil } }
-    func stop() { lock.withLock { running = false } }
-    func pause() { lock.withLock { paused = true } }
-    func resume() throws { lock.withLock { paused = false } }
+    func begin(locale: Locale, contextualStrings: [String]) async throws {
+        started = now()
+        try await inner?.begin(locale: locale, contextualStrings: contextualStrings)
+    }
+    func feed(_ buffer: AVAudioPCMBuffer) { inner?.feed(buffer) }
+    func finish() async throws -> String {
+        let at = now()
+        let text = try await inner?.finish() ?? ""
+        lock.withLock { final = text; finishMs = ((now() - at) * 1000).rounded() }
+        return text
+    }
+    func cancel() async { await inner?.cancel() }
+    var json: [String: Any] { lock.withLock { ["posts": posts, "final": final, "finishMs": finishMs] } }
 }
 
 /// Forwards to the real session and times start and stop.
@@ -268,6 +259,21 @@ struct SpeedHarnessTests {
             }
             report["takes"] = takes
             #expect(takes.allSatisfy { ($0["final"] as? String)?.isEmpty == false })
+        case "apple-stream":
+            // Apple's recognizer output for each recording, for replay in the test VM where it does not run.
+            let locale = try await english()
+            await DictationSession.prewarm(locale: locale)
+            var streams: [String: Any] = [:]
+            for url in try recordings() {
+                let capture = FileCapture(url: url)
+                let recorder = StreamRecorder()
+                let session = DictationSession(locale: locale, capture: capture,
+                                               appleEngine: { recorder.wrap(TranscriptionService()) })
+                session.selectedEngine = { .apple }
+                _ = try await take(url, session: session, capture: capture, live: .typeInApp, index: 1)
+                streams[url.lastPathComponent] = recorder.json
+            }
+            report["streams"] = streams
         case "whisper-on", "whisper-off":
             let model = URL(fileURLWithPath: try #require(speedModel))
             var takes: [[String: Any]] = []

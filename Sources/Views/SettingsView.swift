@@ -203,6 +203,9 @@ struct SettingsContent: View {
             Card {
                 LiveTextPicker(mode: model.liveTextMode, engine: model.engine.wrappedValue)
             }
+            if model.liveTextMode.wrappedValue == .typeInApp {
+                InputMethodSetupRow()
+            }
         }
     }
 

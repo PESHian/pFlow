@@ -88,6 +88,8 @@ final class RecordingCoordinator {
         // Grant row still says Accessibility), and the card shows the
         // words with the note and the Grant button from the first word.
         var liveNote: String?
+        // Type mode, but the words cannot go into the field: pFlow's own preview shows them.
+        var previewWords = false
         typingLive = false
         takeAccessibilityOff = !injector.accessibilityGranted
         if takeAccessibilityOff {
@@ -107,6 +109,7 @@ final class RecordingCoordinator {
                 retryTyping(take: take)
             case .preview(let stop):
                 liveNote = stop.previewNote
+                previewWords = true
             }
         }
         let accessibilityCard = takeAccessibilityOff && takeLiveTextMode.showsPreview
@@ -114,7 +117,7 @@ final class RecordingCoordinator {
         pauseCapture(false)
         sounds.playStart()
         hud.show(device: recordingDevice,
-                 livePreview: takeLiveTextMode.showsCard(typingLive: typingLive || awaitingTyping) || accessibilityCard)
+                 livePreview: takeLiveTextMode.showsCard(typingLive: typingLive || awaitingTyping) || accessibilityCard || previewWords)
         hud.setPhase(.listening)
         if takeAccessibilityOff { hud.setNeedsAccessibility(true) }
         if let liveNote { hud.setLiveNote(liveNote) }
@@ -124,6 +127,9 @@ final class RecordingCoordinator {
             catch {
                 NSLog("pFlow: failed to start recording: \(error)")
                 ReasonLog.note("take ended: recording could not start")
+                #if DEBUG
+                self.lastStartError = "\(error)"
+                #endif
                 self.transcript.cancel()
                 self.stopAwaitingTyping()
                 self.leaveLiveTyping()
@@ -136,6 +142,11 @@ final class RecordingCoordinator {
 
     static let needsAccessibilityNote = "pFlow needs Accessibility to type"
     static let onClipboardNote = "Your words are on the clipboard. Press ⌘V to paste them."
+
+    #if DEBUG
+    /// The Debug harness reads why a take could not start (VM only, no words in it).
+    var lastStartError: String?
+    #endif
 
     func finish() async {
         guard state == .recording else { return }
@@ -162,14 +173,23 @@ final class RecordingCoordinator {
         guard typingLive, state == .recording, let take else { return }
         if let stop = injector.reconcileLive(session: take, transcript: transcript.text) {
             showCard(note: stop.stoppedNote)
+        } else if injector.liveHeldBack(session: take) {
+            showCard(note: Self.heldBackNote)
         }
     }
 
     /// Typing in the app ended for this take. The capsule stays; the finished
     /// words go in at the end, or the Copy card offers them.
     private func showCard(note: String) {
+        // The words show in pFlow's own floating preview, since they are not going into the app now.
+        if takeLiveTextMode == .typeInApp, state == .recording {
+            hud.setLivePreview(true)
+            hud.setPartial(transcript.text)
+        }
         hud.setLiveNote(note)
     }
+
+    static let heldBackNote = "Words show here while the key is down"
 
     /// Looks for the field again, every `typingRetryEvery`, until the app has
     /// built its tree, something rules typing out, or `typingRetryDeadline`
@@ -205,6 +225,7 @@ final class RecordingCoordinator {
     }
 
     private func stopAwaitingTyping() {
+        if awaitingTyping, let take { injector.abandonLive(session: take) }
         typingRetryTask?.cancel()
         typingRetryTask = nil
         awaitingTyping = false
@@ -426,8 +447,10 @@ final class RecordingCoordinator {
                 await injector.waitForKeysToClear()
                 // Plain text replaces the provisional words once. Accessibility
                 // cannot set styles, so template formatting arrives as plain text.
-                switch injector.finalizeLive(session: take, text: text) {
+                let inputMethodFinal = await injector.finishInputMethod(session: take, text: text)
+                switch inputMethodFinal ?? injector.finalizeLive(session: take, text: text) {
                 case .applied: outcome = .pasted
+                case .unconfirmed: outcome = .unconfirmed
                 case .notTyped: outcome = await injector.deliver(text, formatted: formattedText)
                 case .replace(let own):
                     // pFlow's own typed words are selected: the finished text goes over them, or,

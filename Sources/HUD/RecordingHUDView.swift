@@ -19,6 +19,12 @@ struct RecordingHUDView: View {
     /// size in every phase; a status after the take is an icon only.
     static let capsuleSize = CGSize(width: 70, height: 22)
     static let capsuleOutlineOpacity = 0.65
+    /// The capsule draws exactly what the Appearance picker shows for the
+    /// person's style (RecordingWaveform), in their colours, from live levels.
+    static func capsuleWaveformView(_ model: HUDModel) -> RecordingWaveform {
+        RecordingWaveform(levels: model.levels, style: model.waveformStyle, palette: model.palette, size: capsuleWaveform)
+    }
+
     /// The capsule's waveform, inside its rounded ends.
     static let capsuleWaveform = CGSize(width: 46, height: 14)
 
@@ -53,8 +59,7 @@ struct RecordingHUDView: View {
     private var status: some View {
         Group {
             if isRecordingPhase {
-                CapsuleWave(levels: model.levels, style: model.waveformStyle, palette: model.palette)
-                    .frame(width: Self.capsuleWaveform.width, height: Self.capsuleWaveform.height)
+                Self.capsuleWaveformView(model)
             } else if model.phase == .pasteUnconfirmed {
                 capsuleLabel("Check paste", "info.circle")
                     .help("The app could not verify the paste. Check your text before pasting again.")
@@ -494,33 +499,65 @@ struct RecordingWaveform: View {
     var compact = false
     /// The palette read when the take started; nil draws the app's current one.
     var palette: ThemePalette?
+    /// Another size than the picker's 100x20 (the capsule): the same drawing
+    /// at the same density, so it holds the newest levels that fit.
+    var size: CGSize?
+
+    /// The picker's thumbnail: 25 samples across 100 pt.
+    static let thumbnailSamples = 25
+    static let thumbnailSize = CGSize(width: 100, height: 20)
+
+    var frame: CGSize { size ?? (compact ? CGSize(width: 84, height: 16) : Self.thumbnailSize) }
+
+    /// The levels drawn: all of them, or at another size the newest that keep
+    /// the picker's spacing, eased to quiet at both ends as the picker's
+    /// thumbnail is (its pointed wave ends and dotted bar ends).
+    var shownLevels: [Float] {
+        guard let size else { return levels }
+        let count = max(2, Int((Double(Self.thumbnailSamples) * size.width / Self.thumbnailSize.width).rounded()))
+        let newest = Array(levels.suffix(count))
+        let padded = newest.count == count ? newest : Array(repeating: 0, count: count - newest.count) + newest
+        return padded.enumerated().map { index, level in
+            let edge = min(index, count - 1 - index)
+            return level * (edge < Self.endEase.count ? Self.endEase[edge] : 1)
+        }
+    }
+
+    /// How much of the level the outermost samples keep, from each end inward.
+    static let endEase: [Float] = [0.12, 0.45, 0.8]
 
     var body: some View {
         switch style {
         case .wave:
-            Waveform(levels: levels, compact: compact, gradient: palette?.gradient ?? Theme.gradient)
+            Waveform(levels: shownLevels, compact: compact, gradient: palette?.gradient ?? Theme.gradient, frame: frame)
         case .lines:
-            WaveformLines(levels: AudioLevel.waveformLevels(levels))
+            WaveformLines(levels: AudioLevel.waveformLevels(shownLevels))
                 .fill(palette?.gradient ?? Theme.gradient)
-                .frame(width: compact ? 84 : 100, height: compact ? 16 : 20)
+                .frame(width: frame.width, height: frame.height)
                 .shadow(color: .black.opacity(compact ? 0 : 0.25), radius: 1.5, x: 0, y: 1)
         }
     }
 }
 
-private struct WaveformLines: Shape {
+/// "Lines": symmetric thin bars, one per level, never shorter than a dot.
+struct WaveformLines: Shape {
     let levels: [Float]
 
-    func path(in rect: CGRect) -> Path {
+    static func bars(_ levels: [Float], in rect: CGRect) -> [CGRect] {
         let samples = levels.isEmpty ? Array(repeating: Float(0), count: 25) : levels
         let spacing = rect.width / CGFloat(samples.count)
         let width = min(2, spacing * 0.65)
-        var path = Path()
-        for (index, level) in samples.enumerated() {
+        return samples.enumerated().map { index, level in
             let height = max(1.2, CGFloat(level) * rect.height * 0.92)
-            let bar = CGRect(x: rect.minX + (CGFloat(index) + 0.5) * spacing - width / 2,
-                             y: rect.midY - height / 2, width: width, height: height)
-            path.addRoundedRect(in: bar, cornerSize: CGSize(width: width / 2, height: width / 2))
+            return CGRect(x: rect.minX + (CGFloat(index) + 0.5) * spacing - width / 2,
+                          y: rect.midY - height / 2, width: width, height: height)
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        for bar in Self.bars(levels, in: rect) {
+            path.addRoundedRect(in: bar, cornerSize: CGSize(width: bar.width / 2, height: bar.width / 2))
         }
         return path
     }
@@ -531,18 +568,20 @@ private struct Waveform: View {
     let levels: [Float]
     var compact = false
     var gradient: LinearGradient = Theme.gradient
+    var frame = RecordingWaveform.thumbnailSize
 
     var body: some View {
         let outline = WaveformOutline(levels: AudioLevel.waveformLevels(levels))
         outline
             .fill(gradient)
             .overlay(outline.stroke(.black.opacity(compact ? 0 : 0.5), lineWidth: 0.75))
-            .frame(width: compact ? 84 : 100, height: compact ? 16 : 20)
+            .frame(width: frame.width, height: frame.height)
             .shadow(color: .black.opacity(compact ? 0 : 0.25), radius: 1.5, x: 0, y: 1)
     }
 }
 
-private struct WaveformOutline: Shape {
+/// "Wave": a smooth filled envelope, mirrored about the middle.
+struct WaveformOutline: Shape {
     let levels: [Float]
 
     func path(in rect: CGRect) -> Path {
@@ -598,86 +637,6 @@ private struct CapsuleBackground: View {
             }
         }
         .overlay(shape.strokeBorder(palette.gradient.opacity(RecordingHUDView.capsuleOutlineOpacity), lineWidth: 1))
-    }
-}
-
-/// The capsule's waveform, drawn as Windows 0.1.28 draws it (one look on
-/// both apps). Default: Superwhisper's bars, 2 pt wide with 2 pt gaps, as
-/// many as fit up to seven, each as tall as the voice was at that moment
-/// (relative to the take's own loudest moment, eased), in the palette's
-/// gradient; silence is a row of 2 x 2 dots. "Lines": one thin trace
-/// swinging up and down through the newest levels.
-struct CapsuleWave: View {
-    let levels: [Float]
-    let style: WaveformStyle
-    let palette: ThemePalette
-
-    static let barWidth: CGFloat = 2, gap: CGFloat = 2
-    static let mostBars = 7
-
-    /// Height of one level, 0...1, against the loudest of `levels` (at least 0.25).
-    static func height(_ value: Float, peak: Float) -> CGFloat {
-        CGFloat(pow(min(max(value / peak, 0), 1), 1.4))
-    }
-
-    static func peak(_ levels: [Float]) -> Float { max(0.25, levels.max() ?? 0) }
-
-    /// The bars for `levels` in `rect`: rounded to even heights, never under 2 x 2.
-    static func bars(_ levels: [Float], in rect: CGRect) -> [CGRect] {
-        guard !levels.isEmpty, rect.width > 0, rect.height > 0 else { return [] }
-        let count = min(max(Int((rect.width + gap) / (barWidth + gap)), 1), min(mostBars, levels.count))
-        let peak = peak(levels)
-        let left = (rect.minX + (rect.width - (CGFloat(count) * (barWidth + gap) - gap)) / 2).rounded()
-        return (0..<count).map { index in
-            let value = levels[levels.count - count + index]
-            let tall = ((max(barWidth, height(value, peak: peak) * rect.height)) / 2).rounded() * 2
-            return CGRect(x: left + CGFloat(index) * (barWidth + gap), y: rect.midY - tall / 2, width: barWidth, height: tall)
-        }
-    }
-
-    /// The trace's points for `levels` in `rect`, alternating above and below the middle.
-    static func trace(_ levels: [Float], in rect: CGRect) -> [CGPoint] {
-        guard levels.count >= 2, rect.width > 0 else { return [] }
-        let count = min(max(Int(rect.width / 2), 2), levels.count)
-        let peak = peak(levels), step = rect.width / CGFloat(count - 1), swing = rect.height / 2 - 1
-        return (0..<count).map { index in
-            let sign: CGFloat = index % 2 == 0 ? -1 : 1
-            return CGPoint(x: rect.minX + CGFloat(index) * step,
-                           y: rect.midY + sign * height(levels[levels.count - count + index], peak: peak) * swing)
-        }
-    }
-
-    var body: some View {
-        switch style {
-        case .wave:
-            BarsShape(levels: levels).fill(palette.gradient)
-        case .lines:
-            TraceShape(levels: levels)
-                .stroke(palette.gradient, style: StrokeStyle(lineWidth: 1.25, lineCap: .round, lineJoin: .round))
-        }
-    }
-
-    private struct BarsShape: Shape {
-        let levels: [Float]
-        func path(in rect: CGRect) -> Path {
-            var path = Path()
-            for bar in CapsuleWave.bars(levels, in: rect) {
-                path.addRoundedRect(in: bar, cornerSize: CGSize(width: 1, height: 1))
-            }
-            return path
-        }
-    }
-
-    private struct TraceShape: Shape {
-        let levels: [Float]
-        func path(in rect: CGRect) -> Path {
-            var path = Path()
-            let points = CapsuleWave.trace(levels, in: rect)
-            guard let first = points.first else { return path }
-            path.move(to: first)
-            points.dropFirst().forEach { path.addLine(to: $0) }
-            return path
-        }
     }
 }
 

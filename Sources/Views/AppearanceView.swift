@@ -73,7 +73,7 @@ struct AppearanceView: View {
         }
     }
 
-    private static let previewLevels: [Float] = [
+    static let previewLevels: [Float] = [
         0.02, 0.05, 0.12, 0.24, 0.38, 0.24, 0.14, 0.07, 0.16, 0.29, 0.46, 0.33, 0.20,
         0.10, 0.16, 0.28, 0.40, 0.29, 0.16, 0.08, 0.13, 0.23, 0.15, 0.07, 0.02
     ]

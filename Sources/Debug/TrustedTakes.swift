@@ -365,6 +365,14 @@ final class TakeHarness {
             await pause(3)
             made = TakeTarget(name: name, app: app, windowTitle: title(app.processIdentifier) ?? "T3 Code")
             made?.emptyBeforeTake = name == "t3empty"
+        case "reminders":
+            // Stands in for Messages (which needs an Apple Account in the VM): a new reminder's title field.
+            guard let app = await open([], bundle: "com.apple.reminders") else { return nil }
+            await pause(3)
+            _ = await activate(app)
+            _ = pressMenu(app.processIdentifier, "File", "New Reminder")
+            await pause(1.5)
+            made = TakeTarget(name: name, app: app, windowTitle: title(app.processIdentifier) ?? "Reminders")
         case "terminal":
             guard let app = await open([], bundle: "com.apple.Terminal") else { return nil }
             await pause(3)
@@ -563,6 +571,7 @@ final class TakeHarness {
             return ["spec": spec, "takes": takes, "exactlyOnce": once, "withLiveWords": live, "count": count]
         }
         if parts.count == 2, parts[0] == "probe" { return await probe(parts[1]) }
+        if ["real", "realframes", "realguard", "thumbs", "setup"].contains(parts[0]) { return await realRun(parts) }
         if parts.count == 2, parts[0] == "im" { return await imSpike(parts[1]) }
         if parts.count == 2, parts[0] == "imside" { return await imSide(parts[1]) }
         if parts.first == "capsules" { return await capsules(hold: Double(parts.count > 1 ? parts[1] : "4") ?? 4) }

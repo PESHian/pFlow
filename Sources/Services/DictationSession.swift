@@ -93,6 +93,11 @@ final class DictationSession: DictationSessioning {
         locale = newLocale
     }
 
+    #if DEBUG
+    /// The VM harness replays recognizer output recorded on a Mac whose Speech works.
+    static func assumeSupported(_ locale: Locale) { resolutions[locale.identifier] = .supported(locale) }
+    #endif
+
     static func resolve(for locale: Locale) async -> Resolution {
         if let supported = await TranscriptionService.resolvedLocale(for: locale) {
             return .supported(supported)

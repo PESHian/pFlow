@@ -71,6 +71,28 @@ enum InsertionGuard {
         if facts.composing { return .inputMethod }
         return nil
     }
+
+    /// Before each live update through pFlow Dictation (marked text, no keys):
+    /// the same rule, except that a held key or modifier does not count (no
+    /// key is sent, and push-to-talk holds Right Command for the whole take),
+    /// and the field's marked text is pFlow's own, not a composition. A key
+    /// or click the person makes still stops the take.
+    static func markedTextBlock(_ facts: InsertionFacts) -> InsertionBlock? {
+        var facts = facts
+        facts.modifiersHeld = false
+        facts.keyDown = false
+        facts.composing = false
+        return block(facts)
+    }
+}
+
+/// Whether a take may use pFlow Dictation at all: never for a password field
+/// or Secure Input, a terminal or remote viewer, or while another input method
+/// is composing (switching sources would commit the person's word).
+enum InputMethodRoute {
+    static func allowed(secure: Bool, place: NoTypePlace?, composing: Bool) -> Bool {
+        !secure && place == nil && !composing
+    }
 }
 
 /// Whether an input method is composing text in the field (Japanese,

@@ -56,6 +56,8 @@ enum LiveInlineFinal: Equatable {
     case replace(OwnedWords)
     /// pFlow could not safely put the finished text in; it stays in History.
     case kept(LiveInlineOwnership.Stop)
+    /// The finished text was committed through the input method but could not be read back.
+    case unconfirmed
 }
 
 enum LiveInlineCancel: Equatable {
@@ -97,6 +99,8 @@ final class LiveInlineSession {
     }
 
     var stopped: LiveInlineOwnership.Stop? { ownership.stopped }
+    /// An update was skipped because a key was held (typed keys would change).
+    private(set) var heldBack = false
     var touched: Bool { ownership.touched }
 
     /// Applies the newest transcript. Returns the reason when typing stops now.
@@ -104,7 +108,12 @@ final class LiveInlineSession {
         // Once typing has stopped for the take, the field is not read again.
         guard ownership.stopped == nil else { return nil }
         // A key the person holds now: no read, no write; the next update tries again.
-        guard field.readyToWrite else { return nil }
+        guard field.readyToWrite else {
+            if !heldBack { ReasonLog.note("typed live words held back: a key is held") }
+            heldBack = true
+            return nil
+        }
+        heldBack = false
         var step = ownership.update(transcript: transcript, observed: field.state())
         // Append only: a write that would change pFlow's own typed words, move
         // the selection or add a line break ends live typing; no key is sent.
@@ -363,6 +372,11 @@ struct LiveInlineSlot {
     func reconcile(session: String, transcript: String) -> LiveInlineOwnership.Stop? {
         guard let current, current.id == session else { return nil }
         return current.update(transcript)
+    }
+
+    func heldBack(session: String) -> Bool {
+        guard let current, current.id == session else { return false }
+        return current.heldBack
     }
 
     /// pFlow's words may be in the destination for this take.

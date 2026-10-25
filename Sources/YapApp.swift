@@ -101,6 +101,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    /// Quitting mid-take: the person's own input source comes back.
+    func applicationWillTerminate(_ notification: Notification) {
+        InputMethodLink.shared.end()
+    }
+
     /// Yap is a background dictation tool — closing a window must not quit it.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false

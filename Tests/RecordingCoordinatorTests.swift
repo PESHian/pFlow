@@ -136,7 +136,7 @@ final class FakeCleaner: TranscriptCleaning {
 @MainActor
 func makeCoordinator(
     session: FakeSession? = nil,
-    injector: FakeInjector? = nil,
+    injector: (any TextInjecting)? = nil,
     history: FakeHistory? = nil,
     hud: FakeHUD? = nil,
     cleaner: FakeCleaner? = nil,
