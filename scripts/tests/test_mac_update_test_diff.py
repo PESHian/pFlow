@@ -74,6 +74,20 @@ class UpdateTestDiffTests(unittest.TestCase):
         self.assertTrue(any(p.startswith('Applications:') for p in problems))
         self.assertTrue(any(p.startswith(f'{diff.APP}/Contents/Resources/words.txt:') for p in problems))
 
+    def test_a_resource_bundles_signature_files_may_differ(self):
+        for root, signature in ((self.release, b'release'), (self.test, b'test')):
+            folder = root / diff.APP / 'Contents/Resources/Shortcuts.bundle/Contents/_CodeSignature'
+            folder.mkdir(parents=True)
+            (folder / 'CodeDirectory').write_bytes(b'fictional directory ' + signature)
+        compared, allowed, unexpected = self.run_compare()
+        self.assertEqual(unexpected, [])
+        self.assertIn('Shortcuts.bundle/Contents/_CodeSignature/CodeDirectory: signature', ' '.join(allowed))
+
+    def test_a_file_outside_a_signature_folder_is_not_a_signature(self):
+        for root, signature in ((self.release, b'release'), (self.test, b'test')):
+            (root / diff.APP / 'Contents/Resources/_CodeSignature.txt').write_bytes(signature)
+        self.assertIn('bytes differ', ' '.join(self.run_compare()[2]))
+
     def test_the_same_version_is_not_an_update_test(self):
         info = self.test / diff.APP / 'Contents/Info.plist'
         info.write_bytes((self.release / diff.APP / 'Contents/Info.plist').read_bytes())

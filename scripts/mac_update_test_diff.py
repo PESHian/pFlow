@@ -12,10 +12,12 @@ only when:
   1. both volumes hold the same paths, with the same kinds, permission bits and symlink targets;
   2. every file is byte for byte the same, except
      - property lists (*.plist), which may differ only in CFBundleShortVersionString and
-       CFBundleVersion, and the main app's CFBundleShortVersionString must differ;
+       CFBundleVersion, and the main app's CFBundleShortVersionString must be older;
      - Mach-O files, which may differ only in their code signature: copies of both, with the
        signature removed by `codesign --remove-signature`, must be byte for byte the same;
-     - _CodeSignature/CodeResources, which is the signature over the files above;
+     - files in a _CodeSignature folder (CodeResources, and CodeDirectory, CodeRequirements and
+       CodeSignature for a bundle without an executable), which are the signature over the files
+       above and are checked by step 3;
   3. `codesign --verify --deep --strict` passes on both apps.
 Record its last line in the ledger.
 """
@@ -93,7 +95,7 @@ def compare(release, test, strip=strip_signature):
             one, two = left.read_bytes(), right.read_bytes()
             if one == two:
                 continue
-            if path.endswith('_CodeSignature/CodeResources'):
+            if '_CodeSignature' in Path(path).parts[:-1]:
                 allowed.append(f'{path}: signature')
             elif path.endswith('.plist'):
                 try:
