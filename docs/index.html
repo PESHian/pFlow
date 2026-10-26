@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pFlow: free dictation app for Mac that shows your words as you talk</title>
+<meta name="description" content="pFlow is a free, open-source dictation app for Mac. Hold Right Command and your words appear in the app you're typing in as you talk. Runs on your Mac. No account, no subscription, no word limit. A free alternative to Wispr Flow and Superwhisper.">
+<link rel="canonical" href="https://peshian.github.io/pFlow/">
+<link rel="icon" type="image/png" href="images/pesh-mark.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="pFlow by Pesh">
+<meta property="og:title" content="pFlow: free dictation for Mac that shows your words as you talk">
+<meta property="og:description" content="Hold Right Command and talk. Your words appear in Chrome, Messages, Notes, VS Code and more while you speak. Free, open source, runs on your Mac.">
+<meta property="og:url" content="https://peshian.github.io/pFlow/">
+<meta property="og:image" content="https://peshian.github.io/pFlow/images/live-chrome.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="pFlow: free dictation for Mac that shows your words as you talk">
+<meta name="twitter:description" content="Free, open-source dictation for Mac. Words appear in any app as you talk. No account, no subscription.">
+<meta name="twitter:image" content="https://peshian.github.io/pFlow/images/live-chrome.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "pFlow",
+  "alternateName": "pFlow by Pesh",
+  "applicationCategory": "UtilitiesApplication",
+  "operatingSystem": "macOS 27 or later (Apple Silicon)",
+  "softwareVersion": "0.3.17",
+  "description": "Free, open-source dictation app for Mac. Your words appear in the app you're typing in as you talk. Speech is recognized on your Mac.",
+  "url": "https://peshian.github.io/pFlow/",
+  "downloadUrl": "https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.25.1/pFlow-Mac-0.3.17.dmg",
+  "screenshot": "https://peshian.github.io/pFlow/images/live-chrome.png",
+  "license": "https://opensource.org/licenses/MIT",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "author": { "@type": "Organization", "name": "Pesh", "url": "https://github.com/PESHian" }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    { "@type": "Question", "name": "Is pFlow free?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Yes. pFlow is free and open source under the MIT License. There is no account, no subscription and no word limit." } },
+    { "@type": "Question", "name": "Which Macs does pFlow run on?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Apple Silicon Macs with macOS 27 or later." } },
+    { "@type": "Question", "name": "Does pFlow work in every app?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Once you add pFlow Dictation, your words show as you talk in the apps you type in, including Chrome, Safari, Messages, Notes and VS Code. A field that can't show them gets pFlow's small preview, and the finished text still goes in when you stop. pFlow never types into password fields." } },
+    { "@type": "Question", "name": "Does my voice leave my Mac?",
+      "acceptedAnswer": { "@type": "Answer", "text": "No. Speech is recognized on your Mac, by Apple's on-device speech engine or by Whisper if you choose it. pFlow has no account, no servers and no tracking. Cleanup uses Apple Intelligence on your Mac when it's available." } },
+    { "@type": "Question", "name": "How is pFlow different from Wispr Flow or Superwhisper?",
+      "acceptedAnswer": { "@type": "Answer", "text": "Wispr Flow Pro is $15 a month ($12 a month billed yearly) and its free plan stops at 2,000 words a week on desktop. Superwhisper's Pro features are a paid plan. pFlow is free, open source, has no word limit, and shows your words live in the app you're typing in. Prices checked October 25, 2026." } },
+    { "@type": "Question", "name": "Is there a Windows version?",
+      "acceptedAnswer": { "@type": "Answer", "text": "pFlow for Windows is in testing. Test builds are on the GitHub releases page." } }
+  ]
+}
+</script>
+<style>
+  :root { --bg:#ffffff; --fg:#16161a; --muted:#5b5b66; --card:#f4f4f7; --line:#e3e3ea; --accent:#7c5cff; --accent2:#ff5fa8; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0e0e12; --fg:#f2f2f5; --muted:#a3a3ae; --card:#18181f; --line:#2a2a33; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:17px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  a { color:var(--accent); }
+  .wrap { max-width:980px; margin:0 auto; padding:0 20px; }
+  header { display:flex; align-items:center; gap:10px; padding:18px 0; }
+  header img { width:40px; height:auto; }
+  header strong { font-size:20px; }
+  header nav { margin-left:auto; display:flex; gap:18px; font-size:15px; }
+  header nav a { color:var(--muted); text-decoration:none; }
+  .hero { padding:36px 0 24px; text-align:center; }
+  h1 { font-size:clamp(30px, 5vw, 48px); line-height:1.12; margin:0 0 14px; letter-spacing:-0.02em; }
+  .lead { font-size:clamp(17px, 2.2vw, 20px); color:var(--muted); max-width:720px; margin:0 auto 26px; }
+  .btn { display:inline-block; padding:14px 26px; border-radius:999px; font-weight:600; color:#fff; text-decoration:none;
+         background:linear-gradient(90deg, var(--accent), var(--accent2)); }
+  .meta { font-size:14px; color:var(--muted); margin-top:12px; }
+  figure { margin:28px 0; }
+  figure img { width:100%; height:auto; border-radius:14px; border:1px solid var(--line); display:block; }
+  figcaption { font-size:14px; color:var(--muted); text-align:center; margin-top:8px; }
+  h2 { font-size:28px; margin:46px 0 14px; letter-spacing:-0.01em; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:14px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; }
+  .card h3 { margin:0 0 6px; font-size:18px; }
+  .card p { margin:0; color:var(--muted); font-size:16px; }
+  ol li, ul li { margin:6px 0; }
+  code { background:var(--card); border:1px solid var(--line); border-radius:6px; padding:1px 5px; font-size:14px; }
+  details { border-bottom:1px solid var(--line); padding:12px 0; }
+  summary { cursor:pointer; font-weight:600; }
+  details p { color:var(--muted); margin:8px 0 0; }
+  small.src { display:block; color:var(--muted); font-size:13px; margin-top:8px; }
+  .pair { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px; max-width:760px; margin:0 auto; }
+  footer { border-top:1px solid var(--line); margin-top:56px; padding:24px 0 40px; color:var(--muted); font-size:14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <img src="images/pesh-mark.png" alt="pFlow logo">
+    <strong>pFlow</strong>
+    <nav>
+      <a href="#install">Install</a>
+      <a href="#privacy">Privacy</a>
+      <a href="#faq">FAQ</a>
+      <a href="https://github.com/PESHian/pFlow">GitHub</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <h1>Free dictation for Mac that shows your words as you talk</h1>
+    <p class="lead">Hold Right Command and talk. Your words appear in the app you're typing in while you speak, the way Apple Dictation shows them, in Chrome, Safari, Messages, Notes, VS Code and more. Let go, and pFlow puts in the finished, punctuated text once.</p>
+    <a class="btn" href="https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.25.1/pFlow-Mac-0.3.17.dmg">Download pFlow for Mac</a>
+    <div class="meta">Version 0.3.17 · Apple Silicon · macOS 27 or later · Free and open source (MIT)</div>
+  </section>
+
+  <figure>
+    <img src="images/demo.gif" alt="pFlow shows words in a Chrome message box while you talk, then puts in the finished text when you let go">
+    <figcaption>Words show in the message box while you talk. When you let go, the finished text goes in.</figcaption>
+  </figure>
+
+  <h2>Why pFlow</h2>
+  <div class="grid">
+    <div class="card"><h3>Words as you talk, in every app</h3><p>Your words show in the field you're typing in, not in a separate window. Web apps and Electron apps like VS Code too.</p></div>
+    <div class="card"><h3>Fast</h3><p>The first words show about 1.2 seconds after you start talking.</p></div>
+    <div class="card"><h3>Private</h3><p>Your speech is recognized on your Mac. No account, no servers, no tracking.</p></div>
+    <div class="card"><h3>Free and open source</h3><p>MIT licensed. No trial, no weekly word cap, no ads. Read the code on GitHub.</p></div>
+    <div class="card"><h3>Careful with your text</h3><p>Never types into password fields. If you click or switch apps mid-sentence, it stops and keeps your words in History.</p></div>
+    <div class="card"><h3>Made to fit how you write</h3><p>Dictionary, templates, history, per-app stats, and a small capsule with a Wave or Lines waveform in your colors.</p></div>
+  </div>
+
+  <h2>A free alternative to Wispr Flow and Superwhisper</h2>
+  <p>Paid dictation apps charge for this. Wispr Flow Pro is $15 a month, or $12 a month billed yearly, and its free plan stops at 2,000 words a week on desktop. Superwhisper's Pro features are a paid plan too. pFlow shows your words live in every Mac app for free, and its code is open for anyone to read.</p>
+  <small class="src">Prices from <a href="https://wisprflow.ai/pricing">wisprflow.ai/pricing</a> and <a href="https://superwhisper.com">superwhisper.com</a>, checked October 25, 2026.</small>
+
+  <figure>
+    <img src="images/live-notes.png" alt="Words appear in a Notes note while you talk, with pFlow's capsule at the bottom of the screen">
+    <figcaption>Live words in Notes. The capsule at the bottom shows pFlow is listening.</figcaption>
+  </figure>
+
+  <h2 id="install">Install</h2>
+  <ol>
+    <li>Download <a href="https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.25.1/pFlow-Mac-0.3.17.dmg">pFlow-Mac-0.3.17.dmg</a>.</li>
+    <li>Open it and drag <strong>pFlow by Pesh</strong> into Applications.</li>
+    <li>Open pFlow. This build isn't notarized by Apple yet, so macOS may block it the first time. Go to <strong>System Settings › Privacy &amp; Security</strong> and choose <strong>Open Anyway</strong> (<a href="https://support.apple.com/en-us/102445">Apple's steps</a>).</li>
+    <li>On pFlow's setup page, allow <strong>Microphone</strong> and <strong>Speech Recognition</strong>, and press <strong>Grant</strong> next to <strong>Accessibility</strong>.</li>
+    <li>For words as you talk in every app, add <strong>pFlow Dictation</strong> once: press its button on the setup page, or go to <strong>System Settings › Keyboard › Text Input › Edit… › + › English › pFlow Dictation › Add</strong>.</li>
+  </ol>
+  <p><strong>Use it:</strong> hold Right Command and talk, let go to finish. Double-tap Right Command to keep talking hands-free, and tap once to stop.</p>
+
+  <div class="pair">
+    <figure><img src="images/setup.png" alt="pFlow's setup page with Microphone, Speech Recognition, Accessibility and pFlow Dictation ticked"><figcaption>The setup page walks you through each step.</figcaption></figure>
+    <figure><img src="images/appearance.png" alt="pFlow Settings with the Pesh, Aurora, Solar and Custom colors and the Wave and Lines waveforms"><figcaption>Pick your colors and waveform.</figcaption></figure>
+  </div>
+
+  <h2 id="privacy">Privacy</h2>
+  <ul>
+    <li>Your speech is recognized on your Mac, by Apple's on-device speech engine or by Whisper if you pick it.</li>
+    <li>Cleanup and formatting use Apple Intelligence on your Mac when it's available. The download has no cloud entitlement.</li>
+    <li>No account, no analytics, no servers. pFlow checks for updates only when you ask.</li>
+    <li>History and settings stay in your Mac user account.</li>
+  </ul>
+
+  <h2 id="faq">Questions</h2>
+  <details><summary>Is pFlow free?</summary><p>Yes. pFlow is free and open source under the MIT License. There is no account, no subscription and no word limit.</p></details>
+  <details><summary>Which Macs does pFlow run on?</summary><p>Apple Silicon Macs with macOS 27 or later.</p></details>
+  <details><summary>Does pFlow work in every app?</summary><p>Once you add pFlow Dictation, your words show as you talk in the apps you type in, including Chrome, Safari, Messages, Notes and VS Code. A field that can't show them gets pFlow's small preview, and the finished text still goes in when you stop. pFlow never types into password fields.</p></details>
+  <details><summary>Does my voice leave my Mac?</summary><p>No. Speech is recognized on your Mac, by Apple's on-device speech engine or by Whisper if you choose it. pFlow has no account, no servers and no tracking. Cleanup uses Apple Intelligence on your Mac when it's available.</p></details>
+  <details><summary>How is pFlow different from Wispr Flow or Superwhisper?</summary><p>Wispr Flow Pro is $15 a month ($12 a month billed yearly) and its free plan stops at 2,000 words a week on desktop. Superwhisper's Pro features are a paid plan. pFlow is free, open source, has no word limit, and shows your words live in the app you're typing in. Prices checked October 25, 2026.</p></details>
+  <details><summary>Is there a Windows version?</summary><p>pFlow for Windows is in testing. Test builds are on the <a href="https://github.com/PESHian/pFlow/releases">GitHub releases page</a>.</p></details>
+
+  <footer>
+    pFlow by Pesh · <a href="https://github.com/PESHian/pFlow">Source on GitHub</a> · <a href="https://github.com/PESHian/pFlow/blob/main/LICENSE">MIT License</a><br>
+    pFlow is based on <a href="https://github.com/FrigadeHQ/yap">Yap by Frigade</a>, under the MIT License.
+  </footer>
+</div>
+</body>
+</html>
