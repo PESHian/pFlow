@@ -205,8 +205,8 @@ struct InputMethodTests {
     }
 
     /// No activation after the select: the person's source, a pause, then pFlow's again; the
-    /// activation that brings binds the take.
-    @Test func noActivationMeansOneSpacedReselection() {
+    /// activation that brings binds the take, and no more bounces follow.
+    @Test func noActivationMeansASpacedReselection() {
         let world = World()
         let link = link(world)
         #expect(link.begin(id: "t", bundle: "com.apple.Notes"))
@@ -215,17 +215,17 @@ struct InputMethodTests {
         world.now += 0.4
         #expect(link.attachState() == .pending)
         #expect(world.selects.last == "com.apple.keylayout.ABC", "the person's source first")
-        world.now += 0.1
+        world.now += 0.05
         _ = link.attachState()
         #expect(world.selects.count == 2, "a pause before pFlow's again")
-        world.now += 0.2
+        world.now += 0.1
         _ = link.attachState()
         #expect(world.selects.last == InputMethodWire.sourceID && world.selects.count == 3)
         link.receive(.init(.client, take: "t", bundle: "com.apple.Notes"))
         #expect(link.attachState() == .attached)
         world.now += 1
         _ = link.attachState()
-        #expect(world.selects.count == 3, "once")
+        #expect(world.selects.count == 3, "no bounce once attached")
     }
 
     /// pFlow just started and the input method connects late: the re-selection waits for the begin to reach it.

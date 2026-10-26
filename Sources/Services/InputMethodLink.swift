@@ -183,7 +183,7 @@ final class InputMethodLink {
         var restored = false
         /// The begin message reached the input method (sent once it is connected).
         var beginSent = false
-        /// Re-selection when no activation came: 0 none, 1 the person's source selected, 2 pFlow's again.
+        /// Bounces when no activation came: odd while the person's source is selected, `reselect / 2` done.
         var reselect = 0
         /// When the begin reached the input method (the re-selection counts from then).
         var beganAt: TimeInterval?
@@ -208,7 +208,10 @@ final class InputMethodLink {
     /// How long the input method has to become active in the app before pFlow uses its other paths.
     static let attachTimeout: TimeInterval = 1.8
     static let reselectAfter: TimeInterval = 0.5
-    static let reselectGap: TimeInterval = 0.3
+    static let reselectGap: TimeInterval = 0.2
+    /// How many bounces, and how far apart they start: all three end before `attachTimeout`.
+    static let bounces = 3
+    static let bounceEvery: TimeInterval = 0.4
     /// How long pFlow waits for a fresh activation before it puts the client still active on probation.
     static let probeAfter: TimeInterval = 0.12
     static let restoreKey = "inputMethodRestoreSource"
@@ -308,26 +311,30 @@ final class InputMethodLink {
                 return take.attach
             }
             // macOS sometimes leaves this source selected-but-inactive in the app (VM logs: no
-            // activation at all after the select). Select the person's source, give the
-            // deactivation a moment to arrive, then select pFlow's again: that brings a fresh one.
-            if take.reselect == 0, waited > Self.reselectAfter {
+            // activation at all after the select; the app holds it back until the next switch).
+            // A bounce: select the person's source (the held-back activation arrives then, and is
+            // not bound), then pFlow's again, which brings a fresh one. One bounce rescued none
+            // of 6 such takes in the VM; up to three, inside the same 1.8 s wait, rescued 5 of 6.
+            // Odd `reselect`: the person's source is selected; `reselect / 2` bounces are done.
+            let done = take.reselect / 2, start = Self.reselectAfter + Double(done) * Self.bounceEvery
+            if take.reselect.isMultiple(of: 2), done < Self.bounces, waited > start {
                 // Only while the source is still the one pFlow set: a person who changed it (Ctrl-Space) is respected.
                 guard currentSource() == InputMethodWire.sourceID else {
                     take.attach = .failed("source changed")
                     self.take = take
                     return take.attach
                 }
-                take.reselect = 1
+                take.reselect += 1
                 self.take = take
                 _ = selectSource(previous)
                 ReasonLog.note("no activation yet: selecting the source again")
-            } else if take.reselect == 1, waited > Self.reselectAfter + Self.reselectGap {
+            } else if !take.reselect.isMultiple(of: 2), waited > start + Self.reselectGap {
                 guard currentSource() == previous else {
                     take.attach = .failed("source changed")
                     self.take = take
                     return take.attach
                 }
-                take.reselect = 2
+                take.reselect += 1
                 take.selectedAt = clock()
                 self.take = take
                 _ = transmit(.init(.rebind, take: take.id, at: take.selectedAt))
@@ -483,7 +490,7 @@ final class InputMethodLink {
                 if take.provisional, message.provisional != true { self.take?.provisional = false }
                 return
             }
-            guard take.attach == .pending, take.reselect != 1 else { return }
+            guard take.attach == .pending, take.reselect.isMultiple(of: 2) else { return }
             take.attach = message.bundle == take.bundle ? .attached : .failed("other app")
             take.provisional = message.provisional == true
             self.take = take

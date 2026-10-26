@@ -97,7 +97,7 @@ extension TakeHarness {
             AXUIElementPerformAction(window, kAXRaiseAction as CFString)
             AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
             AXUIElementSetAttributeValue(field, kAXFocusedAttribute as CFString, kCFBooleanTrue)
-            await pause(0.6)
+            await pause(quickRun ? 0.3 : 0.6)
         }
         if target.emptyBeforeTake, !quick { await emptyField(target) }
         if target.name != "vscode", target.field != nil, !quick { await caretToEnd(target) }
@@ -189,6 +189,7 @@ extension TakeHarness {
         // Used, not only tried: the finished text went in through the input method.
         record["inputMethod"] = ReasonLog.recent.contains { $0.hasPrefix("finished text committed") }
         record["probation"] = ReasonLog.recent.contains("input method on probation: no activation came for this take")
+        record["attachTimeout"] = ReasonLog.recent.contains { $0.hasPrefix("input method attach: timeout") }
         note("\(label) \(target.name) \(way)\(quick ? " quick gap \(record["gapMs"]!) ms" : ""): live \(liveSeen) first \(firstLiveMs) ms, preview \(previewSeen), once \(record["landedOnce"]!), outcome \(record["outcome"]!), source \(sourceBefore)→\(sourceDuring)→\(record["sourceAfter"]!), clipboard \(record["clipboardUntouched"]!), im \(record["inputMethod"]!)")
         pipeline.hud.hide(after: 0)
         if !quickRun { await pause(0.5) }
@@ -334,6 +335,8 @@ extension TakeHarness {
         // "appcommit": the leftover window's app commits the first marked words itself.
         // "click": a click into the other window's field during the probe (only where it shows).
         let appCommit = parts.contains("appcommit"), click = parts.contains("click")
+        // "quick": the person switches window and starts the next take at once (no field setup).
+        let quickSwitch = parts.contains("quick")
         if parts.contains("partial") {
             // Window one large, window two small over its top left: when two is the target, one's caret
             // is inside two's frame (probation allowed) and the right part of one's field still shows.
@@ -381,7 +384,7 @@ extension TakeHarness {
                         try? await Task.sleep(for: .milliseconds(50))
                     }
                 }
-                var take = await realTake(target, way: parts[3], label: "\(spec)#\(n + 1)-\(target.name)", frames: frames, during: during)
+                var take = await realTake(target, way: parts[3], label: "\(spec)#\(n + 1)-\(target.name)", frames: frames, quickRun: quickSwitch, during: during)
                 take["clickedOther"] = clicked
                 watch.cancel()
                 let otherAfter = await other.readBack() ?? ""
@@ -398,7 +401,7 @@ extension TakeHarness {
         // Words in both windows: in the target, and the other window changed too.
         let doubled = takes.filter { $0["landedOnce"] as? Bool == true && $0["otherUnchanged"] as? Bool == false }.count
         let cards = takes.filter { ($0["outcome"] as? String ?? "").contains("savedToHistory") && $0["card"] as? Bool == true }.count
-        note("SUMMARY \(spec): own window once or refused \(right)/\(takes.count), other window changed \(wrong)/\(takes.count), other window showed words during the take \(flashed)/\(takes.count), input method \(used)/\(takes.count), words in both windows \(doubled)/\(takes.count), card shown \(cards)/\(takes.count), clicked other \(takes.filter { $0["clickedOther"] as? Bool == true }.count)")
+        note("SUMMARY \(spec): own window once or refused \(right)/\(takes.count), other window changed \(wrong)/\(takes.count), other window showed words during the take \(flashed)/\(takes.count), input method \(used)/\(takes.count), words in both windows \(doubled)/\(takes.count), card shown \(cards)/\(takes.count), exactly once \(takes.filter { $0["landedOnce"] as? Bool == true }.count)/\(takes.count), attach timeout \(takes.filter { $0["attachTimeout"] as? Bool == true }.count)/\(takes.count), clicked other \(takes.filter { $0["clickedOther"] as? Bool == true }.count)")
         return ["spec": spec, "takes": takes]
     }
 
@@ -423,7 +426,7 @@ extension TakeHarness {
         func tally(_ key: String) -> Int { takes.filter { $0[key] as? Bool == true }.count }
         let live = takes.filter { ($0["liveWordsSeen"] as? Int ?? 0) > 0 }.count
         let preview = takes.filter { ($0["previewWordsSeen"] as? Int ?? 0) > 0 }.count
-        note("SUMMARY \(spec): exactly once \(tally("landedOnce"))/\(takes.count), live words \(live)/\(takes.count), preview \(preview)/\(takes.count), source restored \(tally("sourceRestored"))/\(takes.count), clipboard untouched \(tally("clipboardUntouched"))/\(takes.count), input method \(tally("inputMethod"))/\(takes.count), probation \(tally("probation"))/\(takes.count)\(quick ? ", gap under 1 s \(takes.filter { ($0["gapMs"] as? Int ?? -1) >= 0 && ($0["gapMs"] as? Int ?? 9999) < 1000 }.count)/\(takes.count - 1)" : "")")
+        note("SUMMARY \(spec): exactly once \(tally("landedOnce"))/\(takes.count), live words \(live)/\(takes.count), preview \(preview)/\(takes.count), source restored \(tally("sourceRestored"))/\(takes.count), clipboard untouched \(tally("clipboardUntouched"))/\(takes.count), input method \(tally("inputMethod"))/\(takes.count), probation \(tally("probation"))/\(takes.count), attach timeout \(tally("attachTimeout"))/\(takes.count)\(quick ? ", gap under 1 s \(takes.filter { ($0["gapMs"] as? Int ?? -1) >= 0 && ($0["gapMs"] as? Int ?? 9999) < 1000 }.count)/\(takes.count - 1)" : "")")
         return ["spec": spec, "takes": takes]
     }
 }
