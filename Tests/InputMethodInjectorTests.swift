@@ -191,6 +191,7 @@ struct InputMethodInjectorTests {
         while result == .waiting, take.now - take.begun < 5 { result = take.tick() }
         #expect(take.selects == before, "nothing selected over the person's choice")
         #expect(take.world.current == "com.apple.keylayout.Dvorak")
+        #expect(take.now - take.begun < 1.5, "the next bounce sees the change and stops the wait early")
     }
 }
 

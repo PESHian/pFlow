@@ -51,6 +51,14 @@ def entries(root):
     return found
 
 
+def version_key(version):
+    """'0.3.16' -> (0, 3, 16); None when it isn't dotted numbers."""
+    try:
+        return tuple(int(part) for part in str(version).split('.'))
+    except ValueError:
+        return None
+
+
 def is_macho(path):
     with open(path, 'rb') as f:
         return f.read(4) in MACHO
@@ -112,8 +120,9 @@ def compare(release, test, strip=strip_signature):
     main = f'{APP}/Contents/Info.plist'
     if main in a and main in b:
         versions = [plistlib.loads((Path(root) / main).read_bytes()).get('CFBundleShortVersionString') for root in (release, test)]
-        if versions[0] == versions[1]:
-            unexpected.append(f'{main}: both read {versions[0]}, the update-test copy must read an older version')
+        keys = [version_key(v) for v in versions]
+        if None in keys or not keys[1] < keys[0]:
+            unexpected.append(f'{main}: {versions[1]} is not older than {versions[0]}, the update-test copy must read an older version')
     else:
         unexpected.append(f'{main}: missing')
     return compared, allowed, unexpected

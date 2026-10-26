@@ -79,6 +79,13 @@ class UpdateTestDiffTests(unittest.TestCase):
         info.write_bytes((self.release / diff.APP / 'Contents/Info.plist').read_bytes())
         self.assertIn('must read an older version', ' '.join(self.run_compare()[2]))
 
+    def test_a_newer_or_unreadable_version_is_not_an_update_test(self):
+        info = self.test / diff.APP / 'Contents/Info.plist'
+        for version in ('0.3.19', '0.4', 'fictional'):
+            with self.subTest(version=version):
+                info.write_bytes(plistlib.dumps(dict(CFBundleIdentifier='com.pesh.Yap', CFBundleShortVersionString=version, CFBundleVersion='46')))
+                self.assertIn('must read an older version', ' '.join(self.run_compare()[2]))
+
 
 if __name__ == '__main__':
     unittest.main()
