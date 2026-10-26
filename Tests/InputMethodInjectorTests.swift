@@ -12,6 +12,7 @@ struct InputMethodInjectorTests {
         var current = "com.apple.keylayout.ABC"
         var sent: [InputMethodWire.Message] = []
         var read = "Dear Sam,"
+        let scratch = ScratchDefaults("pflow.im.injector")
     }
 
     private func setUp(_ world: World) -> (TextInjector, InputMethodLink) {
@@ -20,7 +21,7 @@ struct InputMethodInjectorTests {
         link.currentSource = { world.current }
         link.selectSource = { world.current = $0; return true }
         link.transmit = { world.sent.append($0); return true }
-        link.defaults = UserDefaults(suiteName: "pflow.im.injector.\(UUID().uuidString)")!
+        link.defaults = world.scratch.defaults
         link.connectedForTesting = true
         let injector = TextInjector()
         injector.inputMethod = link

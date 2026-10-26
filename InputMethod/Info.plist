@@ -11,9 +11,9 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>pFlow Dictation</string>
+	<string>$(PFLOW_IM_DISPLAY_NAME)</string>
 	<key>CFBundleDisplayName</key>
-	<string>pFlow Dictation</string>
+	<string>$(PFLOW_IM_DISPLAY_NAME)</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -29,11 +29,11 @@
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>InputMethodConnectionName</key>
-	<string>com.pesh.inputmethod.pFlow_Connection</string>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)_Connection</string>
 	<key>InputMethodServerControllerClass</key>
 	<string>PFlowInputController</string>
 	<key>TISInputSourceID</key>
-	<string>com.pesh.inputmethod.pFlow</string>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>TISIntendedLanguage</key>
 	<string>en</string>
 	<key>tsInputMethodCharacterRepertoireKey</key>

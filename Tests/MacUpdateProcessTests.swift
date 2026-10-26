@@ -6,8 +6,9 @@ import Testing
 struct MacUpdateProcessTests {
     // Only this test closure permits fixture signatures. The shipped command
     // line entry point always uses Developer ID and Gatekeeper verification.
+    // The test host is a Debug build with its own bundle ID; fixtures carry pFlow's.
     private static func verifyFixture(_ app: URL, version: String) throws {
-        try MacUpdateInstaller.verifyBundle(app, version: version)
+        try ReleaseUpdatesTests.verifyBundleOrTestHost(app, version: version)
         try MacUpdateInstaller.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path])
     }
     @Test func productionHelperRejectsAdHocHostBeforeReady() async throws {

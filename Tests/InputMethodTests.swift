@@ -51,6 +51,7 @@ struct InputMethodTests {
         var sent: [InputMethodWire.Message] = []
         var now: TimeInterval = 100
         var enabled = true
+        let scratch = ScratchDefaults("pflow.im.tests")
     }
 
     private func link(_ world: World) -> InputMethodLink {
@@ -60,7 +61,7 @@ struct InputMethodTests {
         link.selectSource = { world.selects.append($0); world.current = $0; return true }
         link.clock = { world.now }
         link.transmit = { world.sent.append($0); return true }
-        link.defaults = UserDefaults(suiteName: "pflow.im.tests.\(UUID().uuidString)")!
+        link.defaults = world.scratch.defaults
         link.connectedForTesting = true
         return link
     }
@@ -503,7 +504,7 @@ struct InputMethodTargetTests {
         link.selectSource = { world.current = $0; return true }
         link.clock = { world.now }
         link.transmit = { world.sent.append($0); return true }
-        link.defaults = UserDefaults(suiteName: "pflow.im.tests.\(UUID().uuidString)")!
+        link.defaults = world.scratch.defaults
         link.connectedForTesting = true
         #expect(link.begin(id: "t", bundle: "com.apple.TextEdit", readable: true))
         link.receive(.init(.client, take: "t", bundle: "com.apple.TextEdit"))
@@ -524,6 +525,7 @@ struct InputMethodTargetTests {
         var current = "com.apple.keylayout.ABC"
         var sent: [InputMethodWire.Message] = []
         var now: TimeInterval = 100
+        let scratch = ScratchDefaults("pflow.im.tests")
     }
 
     /// The commit counts only when the target shows it; the input method's own read-back only for an unreadable target.

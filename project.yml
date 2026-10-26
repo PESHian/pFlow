@@ -13,7 +13,7 @@ settings:
     SWIFT_SERIALIZE_DEBUGGING_OPTIONS: NO
     OTHER_SWIFT_FLAGS: '$(inherited) -file-prefix-map "$(SRCROOT)=/_/pflow" -debug-prefix-map "$(SRCROOT)=/_/pflow"'
     MARKETING_VERSION: "0.3.18"
-    CURRENT_PROJECT_VERSION: "45"
+    CURRENT_PROJECT_VERSION: "46"
     PFLOW_DEVELOPER_TEAM: ""
     DEAD_CODE_STRIPPING: YES
     # Apple Silicon only. The on-device SpeechAnalyzer needs it, and the Intel
@@ -63,6 +63,11 @@ targets:
         LD_RUNPATH_SEARCH_PATHS:
           - "@executable_path/../Frameworks"
       configs:
+        # Debug builds (tests, the VM harness) have their own identity, so a build
+        # on a Mac where pFlow is installed never shares its preferences, login
+        # item or app ID with the real app.
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.pesh.Yap.debug
         # Release drops the debug map, which records each object file by its
         # build-machine path (the builder's home folder) inside the app binary.
         Release:
@@ -84,12 +89,19 @@ targets:
         INFOPLIST_FILE: InputMethod/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: com.pesh.inputmethod.pFlow
         PRODUCT_NAME: pFlow Dictation
+        PFLOW_IM_DISPLAY_NAME: pFlow Dictation
         PRODUCT_MODULE_NAME: pFlowInput
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "-"
         ENABLE_HARDENED_RUNTIME: NO
         SKIP_INSTALL: YES
       configs:
+        # A Debug build's input method is a different input source: building or
+        # testing on a Mac where pFlow Dictation is in use never shadows it.
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.pesh.inputmethod.pFlow.debug
+          PRODUCT_NAME: pFlow Dictation Debug
+          PFLOW_IM_DISPLAY_NAME: pFlow Dictation (Debug)
         Release:
           DEPLOYMENT_POSTPROCESSING: YES
           STRIP_INSTALLED_PRODUCT: YES

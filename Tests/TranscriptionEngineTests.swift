@@ -8,9 +8,10 @@ import Darwin
 @MainActor
 struct TranscriptionEngineTests {
     @Test func appleIsDefaultAndSavedWhisperSurvivesRelaunch() {
-        let name = "pflow.engine.tests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
+        let scratch = ScratchDefaults("pflow.engine.tests")
+        defer { withExtendedLifetime(scratch) {} }
+        let name = scratch.name
+        let defaults = scratch.defaults
         #expect(TranscriptionEngine.saved(in: defaults) == .apple)
         TranscriptionEngine.whisper.save(in: defaults)
         #expect(TranscriptionEngine.saved(in: UserDefaults(suiteName: name)!) == .whisper)

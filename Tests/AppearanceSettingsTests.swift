@@ -6,7 +6,7 @@ import CryptoKit
 @testable import Yap
 
 @MainActor
-struct AppearanceSettingsTests {
+final class AppearanceSettingsTests {
     @Test func bundledPeshArtworkAndVisibleAppNameAreAvailable() throws {
         let mark = try #require(Bundle.main.url(forResource: "PeshMark", withExtension: "png"))
         let icon = try #require(Bundle.main.url(forResource: "Pesh", withExtension: "icns"))
@@ -58,9 +58,13 @@ struct AppearanceSettingsTests {
         #expect(try #require(rendered.colorAt(x: rendered.pixelsWide - 1, y: rendered.pixelsHigh - 1)).alphaComponent == 0)
     }
 
+    /// Each test's throwaway domains, removed with the test (the suite is a class for that).
+    private var scratch: [ScratchDefaults] = []
+
     private func isolatedDefaults() -> (UserDefaults, String) {
-        let name = "pflow.appearance.tests.\(UUID().uuidString)"
-        return (UserDefaults(suiteName: name)!, name)
+        let made = ScratchDefaults("pflow.appearance.tests")
+        scratch.append(made)
+        return (made.defaults, made.name)
     }
 
     @Test func customColorsAndModeSurviveRelaunch() {

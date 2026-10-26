@@ -6,9 +6,10 @@ import Testing
 @MainActor
 struct IntelligenceSettingsTests {
     private func withDefaults(_ body: (UserDefaults) -> Void) {
-        let name = "pflow.intelligence.fixture.\(UUID())"
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
+        let scratch = ScratchDefaults("pflow.intelligence.fixture")
+        defer { withExtendedLifetime(scratch) {} }
+        let name = scratch.name
+        let defaults = scratch.defaults
         body(defaults)
     }
 
@@ -50,9 +51,10 @@ struct IntelligenceSettingsTests {
     }
 
     @Test func actualLocalSessionRespondsWithoutCloudAuthorization() async throws {
-        let name = "pflow.intelligence.native.fixture.\(UUID())"
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
+        let scratch = ScratchDefaults("pflow.intelligence.native.fixture")
+        defer { withExtendedLifetime(scratch) {} }
+        let name = scratch.name
+        let defaults = scratch.defaults
         let settings = IntelligenceSettings(defaults: defaults, cloudAuthorization: { false })
         let session = try #require(settings.session(instructions: "Follow the request exactly.", using: .onDevice))
         let response = try await session.respond(to: "Write exactly these three words: Maple River Station",

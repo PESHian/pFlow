@@ -5,9 +5,10 @@ import Testing
 @MainActor
 struct ClipboardSettingsTests {
     @Test func defaultsOffAndBothChoicesSurviveReload() {
-        let name = "pflow.clipboard.tests.\(UUID())"
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
+        let scratch = ScratchDefaults("pflow.clipboard.tests")
+        defer { withExtendedLifetime(scratch) {} }
+        let name = scratch.name
+        let defaults = scratch.defaults
         let settings = ClipboardSettings(defaults: defaults)
         #expect(!settings.copyDictation)
         settings.copyDictation = true
