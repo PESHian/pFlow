@@ -32,7 +32,7 @@ enum GitHubReleases {
     }
 
     enum Problem: Error, Equatable {
-        case offline, rateLimited, noMacAsset, noChecksum, disk, mismatch
+        case offline, rateLimited, noMacAsset, noChecksum, disk, mismatch, tooLarge
     }
 
     /// Reads the releases/latest answer. Only a published (not draft, not
@@ -91,17 +91,48 @@ enum GitHubReleases {
             && url.lastPathComponent == name
     }
 
-    /// Where the download goes: pFlow-Mac-<version>.dmg in `folder`; a file
-    /// already there with other contents is never overwritten, a numbered name
-    /// is used instead; the same file already there is used as it is.
-    static func destination(in folder: URL, version: String, sha256: String, hashOf: (URL) -> String?, exists: (URL) -> Bool) -> (url: URL, alreadyThere: Bool) {
+    /// What is at a name in Downloads, looked at without following a symlink.
+    enum Occupant: Equatable { case nothing, regularFile, other }
+
+    static func occupant(_ url: URL) -> Occupant {
+        guard let type = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType else { return .nothing }
+        return type == .typeRegular ? .regularFile : .other
+    }
+
+    /// Where the download goes: pFlow-Mac-<version>.dmg in `folder`. Anything
+    /// already at a name (another file, a folder, a symlink, even a broken one)
+    /// is never replaced or followed: the next numbered name is used. The same
+    /// file already there (a regular file with the same SHA-256) is used as it is.
+    /// Hashing reads files: call it off the main thread.
+    static func destination(in folder: URL, version: String, sha256: String,
+                            hashOf: (URL) -> String? = { try? ReleaseCatalog.hash($0) },
+                            occupant: (URL) -> Occupant = GitHubReleases.occupant) -> (url: URL, alreadyThere: Bool) {
         for n in 1...99 {
             let name = n == 1 ? "pFlow-Mac-\(version).dmg" : "pFlow-Mac-\(version) (\(n)).dmg"
             let url = folder.appendingPathComponent(name)
-            guard exists(url) else { return (url, false) }
-            if hashOf(url) == sha256 { return (url, true) }
+            switch occupant(url) {
+            case .nothing: return (url, false)
+            case .regularFile: if hashOf(url) == sha256 { return (url, true) }
+            case .other: continue
+            }
         }
         return (folder.appendingPathComponent("pFlow-Mac-\(version) (\(UUID().uuidString.prefix(6))).dmg"), false)
+    }
+
+    /// Keeps the checked download in `folder` (off the main thread): moved under its
+    /// own name, or dropped when the same file is already there. Any file trouble is
+    /// a Downloads problem, never a network one.
+    static func keep(_ file: URL, in folder: URL, release: GitHubRelease) async throws -> URL {
+        try await Task.detached {
+            let place = destination(in: folder, version: release.version, sha256: release.sha256)
+            if place.alreadyThere {
+                try? FileManager.default.removeItem(at: file)
+            } else {
+                do { try FileManager.default.moveItem(at: file, to: place.url) }
+                catch { throw Problem.disk }
+            }
+            return place.url
+        }.value
     }
 
     static func problem(status: Int) -> Problem? {
@@ -123,7 +154,7 @@ enum GitHubReleases {
         }
         let ns = error as NSError
         if ns.domain == NSCocoaErrorDomain, [NSFileWriteOutOfSpaceError, NSFileWriteNoPermissionError, NSFileWriteVolumeReadOnlyError,
-                                             NSFileWriteUnknownError, NSFileNoSuchFileError].contains(ns.code) { return .disk }
+                                             NSFileWriteUnknownError, NSFileNoSuchFileError, NSFileWriteFileExistsError].contains(ns.code) { return .disk }
         if ns.domain == NSPOSIXErrorDomain, [Int(ENOSPC), Int(EACCES), Int(EPERM), Int(EROFS)].contains(ns.code) { return .disk }
         return .offline
     }
@@ -150,12 +181,18 @@ struct GitHubUpdateNetwork {
     /// A small text file (the .sha256 asset).
     var text: (URL) async throws -> String
 
-    static let live: GitHubUpdateNetwork = {
-        let client = GitHubClient()
-        return GitHubUpdateNetwork(latest: { try await client.latest() },
-                                   download: { try await client.download($0, progress: $1) },
-                                   text: { try await client.text($0) })
-    }()
+    static let live = GitHubUpdateNetwork(client: GitHubClient())
+
+    init(latest: @escaping () async throws -> (Data, Int), download: @escaping (URL, @escaping @Sendable (Int64, Int64) -> Void) async throws -> URL,
+         text: @escaping (URL) async throws -> String) {
+        self.latest = latest; self.download = download; self.text = text
+    }
+
+    init(client: GitHubClient) {
+        self.init(latest: { try await client.latest() },
+                  download: { try await client.download($0, progress: $1) },
+                  text: { try await client.text($0) })
+    }
 }
 
 /// The one HTTPS client: api.github.com once per check, then GitHub's
@@ -163,15 +200,30 @@ struct GitHubUpdateNetwork {
 final class GitHubClient: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     static func allowed(_ url: URL) -> Bool { url.host == "api.github.com" ? url.scheme == "https" && url.port == nil : UpdateNetwork.allowed(url) }
 
+    /// The largest download pFlow accepts (a release is a few MB).
+    let cap: Int64
+    /// Where finished downloads wait until they are checked.
+    let workFolder: URL
+    private let protocols: [AnyClass]
+
+    init(cap: Int64 = 536_870_912, workFolder: URL = FileManager.default.temporaryDirectory.appendingPathComponent("pflow-update-downloads", isDirectory: true),
+         protocols: [AnyClass] = []) {
+        self.cap = cap
+        self.workFolder = workFolder
+        self.protocols = protocols
+    }
+
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 30
         config.timeoutIntervalForResource = 1800
         config.httpAdditionalHeaders = ["User-Agent": "pFlow-update/1", "Accept": "application/vnd.github+json"]
+        if !protocols.isEmpty { config.protocolClasses = protocols }
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
     private var waiters: [Int: (CheckedContinuation<URL, Error>, @Sendable (Int64, Int64) -> Void)] = [:]
     private var finished: [Int: URL] = [:]
+    private var capped: Set<Int> = []
     private let lock = NSLock()
 
     func latest() async throws -> (Data, Int) {
@@ -205,7 +257,11 @@ final class GitHubClient: NSObject, URLSessionDownloadDelegate, @unchecked Senda
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
                     totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        if totalBytesWritten > 536_870_912 { downloadTask.cancel(); return }
+        if totalBytesWritten > cap {
+            lock.withLock { _ = capped.insert(downloadTask.taskIdentifier) }
+            downloadTask.cancel()
+            return
+        }
         let report = lock.withLock { waiters[downloadTask.taskIdentifier]?.1 }
         report?(totalBytesWritten, totalBytesExpectedToWrite)
     }
@@ -213,16 +269,22 @@ final class GitHubClient: NSObject, URLSessionDownloadDelegate, @unchecked Senda
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
         // The system removes `location` when this returns: keep it under a name of our own.
         guard (downloadTask.response as? HTTPURLResponse)?.statusCode == 200 else { return }
-        let kept = FileManager.default.temporaryDirectory.appendingPathComponent("pflow-download-\(UUID().uuidString).dmg")
+        try? FileManager.default.createDirectory(at: workFolder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let kept = workFolder.appendingPathComponent("pflow-download-\(UUID().uuidString).dmg")
         if (try? FileManager.default.moveItem(at: location, to: kept)) != nil {
             lock.withLock { finished[downloadTask.taskIdentifier] = kept }
         }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        let (waiter, file) = lock.withLock { (waiters.removeValue(forKey: task.taskIdentifier), finished.removeValue(forKey: task.taskIdentifier)) }
+        let (waiter, file, tooLarge) = lock.withLock {
+            (waiters.removeValue(forKey: task.taskIdentifier), finished.removeValue(forKey: task.taskIdentifier), capped.remove(task.taskIdentifier) != nil)
+        }
         guard let (continuation, _) = waiter else { if let file { try? FileManager.default.removeItem(at: file) }; return }
-        if let error {
+        if tooLarge {
+            if let file { try? FileManager.default.removeItem(at: file) }
+            continuation.resume(throwing: GitHubReleases.Problem.tooLarge)
+        } else if let error {
             if let file { try? FileManager.default.removeItem(at: file) }
             continuation.resume(throwing: error)
         } else if let file {
@@ -290,7 +352,9 @@ final class GitHubUpdates: ObservableObject {
             guard let self else { return }
             var temporary: URL?
             do {
-                guard let folder = downloads(), FileManager.default.isWritableFile(atPath: folder.path) else { throw GitHubReleases.Problem.disk }
+                guard let folder = downloads(), await Task.detached(operation: { FileManager.default.isWritableFile(atPath: folder.path) }).value else {
+                    throw GitHubReleases.Problem.disk
+                }
                 let file = try await network.download(release.dmg) { received, total in
                     Task { @MainActor [weak self] in
                         guard let self, case .downloading = self.state else { return }
@@ -302,24 +366,17 @@ final class GitHubUpdates: ObservableObject {
                 state = .verifying(release)
                 try await verify(file, release: release)
                 try Task.checkCancellation()
-                let place = GitHubReleases.destination(in: folder, version: release.version, sha256: release.sha256,
-                                                       hashOf: { try? ReleaseCatalog.hash($0) },
-                                                       exists: { FileManager.default.fileExists(atPath: $0.path) })
-                if place.alreadyThere {
-                    try? FileManager.default.removeItem(at: file)
-                } else {
-                    try FileManager.default.moveItem(at: file, to: place.url)
-                }
+                let kept = try await GitHubReleases.keep(file, in: folder, release: release)
                 temporary = nil
                 Self.log.notice("update download: checked against GitHub's checksum and kept")
-                state = .ready(release, file: place.url)
-                open(place.url)
+                state = .ready(release, file: kept)
+                open(kept)
             } catch is CancellationError {
-                if let temporary { try? FileManager.default.removeItem(at: temporary) }
+                if let temporary { await Self.remove(temporary) }
                 Self.log.notice("update download: cancelled")
                 state = .newer(release)
             } catch {
-                if let temporary { try? FileManager.default.removeItem(at: temporary) }
+                if let temporary { await Self.remove(temporary) }
                 if (error as? URLError)?.code == .cancelled { state = .newer(release); return }
                 fail(GitHubReleases.problem(error), retry: release)
             }
@@ -327,21 +384,27 @@ final class GitHubUpdates: ObservableObject {
     }
 
     /// The download matches GitHub's digest for the asset, and the release's
-    /// .sha256 file when there is one; otherwise it is deleted.
+    /// .sha256 file when there is one; otherwise it throws, and `download` deletes
+    /// the file (the one place a download that was not kept is removed).
     private func verify(_ file: URL, release: GitHubRelease) async throws {
         let actual = try await Task.detached { try ReleaseCatalog.hash(file) }.value
+        // GitHub's digest is required: a release without one is never offered.
         var expected = [release.sha256]
+        // Agreed with the owner: the .sha256 asset is optional. When the release has
+        // one it must match too; when it has none, the digest alone decides.
         if let checksumFile = release.checksumFile {
             guard let listed = GitHubReleases.sha256(fromChecksumFile: try await network.text(checksumFile)) else {
-                try? FileManager.default.removeItem(at: file)
                 throw GitHubReleases.Problem.mismatch
             }
             expected.append(listed)
         }
         guard !expected.isEmpty, expected.allSatisfy({ $0 == actual }) else {
-            try? FileManager.default.removeItem(at: file)
             throw GitHubReleases.Problem.mismatch
         }
+    }
+
+    private static func remove(_ file: URL) async {
+        await Task.detached { try? FileManager.default.removeItem(at: file) }.value
     }
 
     func cancel() {
@@ -384,6 +447,7 @@ extension GitHubReleases.Problem {
         case .noChecksum: return "GitHub didn't list a checksum for this download, so pFlow won't download it."
         case .disk: return "pFlow couldn't save to your Downloads folder. Check that there's free space and that it can be written to."
         case .mismatch: return "The download didn't match GitHub's checksum, so pFlow deleted it."
+        case .tooLarge: return "The download was much larger than a pFlow release, so pFlow stopped it and deleted it."
         }
     }
 }
@@ -421,9 +485,12 @@ struct GitHubUpdateView: View {
             Button("Check again") { updates.check() }
         case .downloading(let release, let received, let total):
             Text("Downloading pFlow \(release.version)…")
-            Button("Cancel") { updates.cancel() }
+            Button("Download") {}.disabled(true)
             VStack(alignment: .leading, spacing: 4) {
-                ProgressView(value: Double(received), total: Double(max(total, 1)))
+                HStack(spacing: 10) {
+                    ProgressView(value: Double(received), total: Double(max(total, 1)))
+                    Button("Cancel") { updates.cancel() }.controlSize(.small)
+                }
                 Text("\(Self.size(received)) of \(Self.size(total)) · \(Self.percent(received, total))")
                     .font(.callout).monospacedDigit().foregroundStyle(.secondary)
             }

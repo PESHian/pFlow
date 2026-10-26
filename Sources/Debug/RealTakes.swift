@@ -267,6 +267,7 @@ extension TakeHarness {
             ("08-error-offline", .failed(.offline, retry: nil)), ("09-error-rate-limit", .failed(.rateLimited, retry: nil)),
             ("10-error-no-mac-asset", .failed(.noMacAsset, retry: nil)), ("11-error-no-checksum", .failed(.noChecksum, retry: nil)),
             ("12-error-disk", .failed(.disk, retry: release)), ("13-error-checksum-mismatch", .failed(.mismatch, retry: release)),
+            ("14-error-too-large", .failed(.tooLarge, retry: release)),
         ]
         let updates = GitHubUpdates()
         let request = folder.appendingPathComponent("update-shot"), answer = folder.appendingPathComponent("update-shot-done")

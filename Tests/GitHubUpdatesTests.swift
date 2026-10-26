@@ -102,14 +102,40 @@ struct GitHubUpdatesTests {
 
     @Test func anExistingFileIsNeverOverwritten() {
         let folder = URL(fileURLWithPath: "/Users/fictional/Downloads")
-        let free = GitHubReleases.destination(in: folder, version: "0.3.17", sha256: Self.sha, hashOf: { _ in nil }, exists: { _ in false })
+        func at(_ taken: [String: GitHubReleases.Occupant], hash: String?) -> (url: URL, alreadyThere: Bool) {
+            GitHubReleases.destination(in: folder, version: "0.3.17", sha256: Self.sha, hashOf: { _ in hash },
+                                       occupant: { taken[$0.lastPathComponent] ?? .nothing })
+        }
+        let free = at([:], hash: nil)
         #expect(free.url.lastPathComponent == "pFlow-Mac-0.3.17.dmg" && !free.alreadyThere)
-        let other = GitHubReleases.destination(in: folder, version: "0.3.17", sha256: Self.sha,
-                                               hashOf: { _ in "0000" }, exists: { $0.lastPathComponent == "pFlow-Mac-0.3.17.dmg" })
+        let other = at(["pFlow-Mac-0.3.17.dmg": .regularFile], hash: "0000")
         #expect(other.url.lastPathComponent == "pFlow-Mac-0.3.17 (2).dmg" && !other.alreadyThere)
-        let same = GitHubReleases.destination(in: folder, version: "0.3.17", sha256: Self.sha,
-                                              hashOf: { _ in Self.sha }, exists: { $0.lastPathComponent == "pFlow-Mac-0.3.17.dmg" })
+        let same = at(["pFlow-Mac-0.3.17.dmg": .regularFile], hash: Self.sha)
         #expect(same.url.lastPathComponent == "pFlow-Mac-0.3.17.dmg" && same.alreadyThere, "the same file is used as it is")
+        let link = at(["pFlow-Mac-0.3.17.dmg": .other, "pFlow-Mac-0.3.17 (2).dmg": .other], hash: Self.sha)
+        #expect(link.url.lastPathComponent == "pFlow-Mac-0.3.17 (3).dmg" && !link.alreadyThere,
+                "a symlink or folder at the name is never followed or replaced, even one that would hash the same")
+    }
+
+    /// A real symlink (and a broken one) already in Downloads: the file is kept under the next name,
+    /// even when the link points at a file with the very same bytes.
+    @Test func aSymlinkInDownloadsIsNeverFollowed() async throws {
+        let downloads = try folder()
+        let payload = Data("fictional dmg bytes".utf8)
+        let target = downloads.appendingPathComponent("elsewhere.dmg")
+        try payload.write(to: target)
+        try FileManager.default.createSymbolicLink(at: downloads.appendingPathComponent("pFlow-Mac-0.3.17.dmg"), withDestinationURL: target)
+        try FileManager.default.createSymbolicLink(at: downloads.appendingPathComponent("pFlow-Mac-0.3.17 (2).dmg"),
+                                                   withDestinationURL: downloads.appendingPathComponent("missing"))
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("pflow-fictional-\(UUID().uuidString).dmg")
+        try payload.write(to: file)
+        let release = GitHubRelease(version: "0.3.17", page: GitHubReleases.releasesPage, dmg: URL(string: "https://github.com/x")!,
+                                    bytes: Int64(payload.count), sha256: SHA256Hex.of(payload), checksumFile: nil)
+        let kept = try await GitHubReleases.keep(file, in: downloads, release: release)
+        #expect(kept.lastPathComponent == "pFlow-Mac-0.3.17 (3).dmg")
+        #expect(try Data(contentsOf: target) == payload, "the symlink's target is untouched")
+        #expect(try Data(contentsOf: kept) == payload)
+        #expect(try FileManager.default.attributesOfItem(atPath: kept.path)[.type] as? FileAttributeType == .typeRegular)
     }
 
     // MARK: The window's steps
@@ -274,12 +300,14 @@ struct GitHubUpdatesTests {
     }
 
     @Test func everyProblemHasOnePlainLine() {
-        for problem in [GitHubReleases.Problem.offline, .rateLimited, .noMacAsset, .noChecksum, .disk, .mismatch] {
+        for problem in [GitHubReleases.Problem.offline, .rateLimited, .noMacAsset, .noChecksum, .disk, .mismatch, .tooLarge] {
             #expect(!problem.message.isEmpty && problem.message.hasSuffix("."))
         }
         #expect(GitHubReleases.problem(status: 403) == .rateLimited && GitHubReleases.problem(status: 429) == .rateLimited)
         #expect(GitHubReleases.problem(NSError(domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError)) == .disk)
         #expect(GitHubReleases.problem(URLError(.notConnectedToInternet)) == .offline)
+        #expect(GitHubReleases.problem(NSError(domain: NSCocoaErrorDomain, code: NSFileWriteFileExistsError)) == .disk,
+                "a file already at the name is a Downloads problem, not a network one")
     }
 
     @Test func thisAdHocTestHostCannotInstallItself() {
