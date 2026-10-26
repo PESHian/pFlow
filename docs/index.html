@@ -6,6 +6,17 @@
 <title>pFlow: free dictation app for Mac that shows your words as you talk</title>
 <meta name="description" content="pFlow is a free, open-source dictation app for Mac. Hold Right Command and your words appear in the app you're typing in as you talk. Runs on your Mac. No account, no subscription, no word limit. A free alternative to Wispr Flow and Superwhisper.">
 <link rel="canonical" href="https://peshian.github.io/pFlow/">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e0e12" media="(prefers-color-scheme: dark)">
+<script>
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem('pflow-theme'); } catch (e) {}
+    if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
 <link rel="icon" type="image/png" href="images/pesh-mark.png">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="pFlow by Pesh">
@@ -58,7 +69,8 @@
 </script>
 <style>
   :root { --bg:#ffffff; --fg:#16161a; --muted:#5b5b66; --card:#f4f4f7; --line:#e3e3ea; --accent:#7c5cff; --accent2:#ff5fa8; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#0e0e12; --fg:#f2f2f5; --muted:#a3a3ae; --card:#18181f; --line:#2a2a33; } }
+  :root[data-theme="dark"] { --bg:#0e0e12; --fg:#f2f2f5; --muted:#a3a3ae; --card:#18181f; --line:#2a2a33; color-scheme:dark; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme]) { --bg:#0e0e12; --fg:#f2f2f5; --muted:#a3a3ae; --card:#18181f; --line:#2a2a33; color-scheme:dark; } }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--fg); font:17px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
   a { color:var(--accent); }
@@ -66,7 +78,20 @@
   header { display:flex; align-items:center; gap:10px; padding:18px 0; }
   header img { width:40px; height:auto; }
   header strong { font-size:20px; }
-  header nav { margin-left:auto; display:flex; gap:18px; font-size:15px; }
+  header nav { margin-left:auto; display:flex; align-items:center; gap:18px; font-size:15px; flex-wrap:wrap; }
+  .theme { display:inline-flex; align-items:center; gap:6px; font:inherit; font-size:14px; color:var(--fg); background:var(--card);
+           border:1px solid var(--line); border-radius:999px; padding:6px 12px; cursor:pointer; }
+  .theme svg { width:16px; height:16px; }
+  .theme .sun { display:none; }
+  :root[data-theme="dark"] .theme .sun { display:inline; }
+  :root[data-theme="dark"] .theme .moon { display:none; }
+  img.for-dark { display:none; }
+  :root[data-theme="dark"] img.for-light { display:none; }
+  :root[data-theme="dark"] img.for-dark { display:block; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme]) img.for-light { display:none; }
+    :root:not([data-theme]) img.for-dark { display:block; }
+  }
   header nav a { color:var(--muted); text-decoration:none; }
   .hero { padding:36px 0 24px; text-align:center; }
   h1 { font-size:clamp(30px, 5vw, 48px); line-height:1.12; margin:0 0 14px; letter-spacing:-0.02em; }
@@ -88,6 +113,10 @@
   summary { cursor:pointer; font-weight:600; }
   details p { color:var(--muted); margin:8px 0 0; }
   small.src { display:block; color:var(--muted); font-size:13px; margin-top:8px; }
+  @media (max-width: 560px) {
+    header { flex-wrap:wrap; }
+    header nav { margin-left:0; width:100%; justify-content:space-between; gap:10px; }
+  }
   .pair { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:18px; max-width:760px; margin:0 auto; }
   footer { border-top:1px solid var(--line); margin-top:56px; padding:24px 0 40px; color:var(--muted); font-size:14px; }
 </style>
@@ -102,6 +131,11 @@
       <a href="#privacy">Privacy</a>
       <a href="#faq">FAQ</a>
       <a href="https://github.com/PESHian/pFlow">GitHub</a>
+      <button class="theme" id="theme" type="button" aria-label="Switch to dark mode">
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <span>Dark</span>
+      </button>
     </nav>
   </header>
 
@@ -113,7 +147,7 @@
   </section>
 
   <figure>
-    <img src="images/demo.gif" alt="pFlow shows words in a Chrome message box while you talk, then puts in the finished text when you let go">
+    <img class="for-light" src="images/demo.gif" alt="pFlow shows words in a Chrome message box while you talk, then puts in the finished text when you let go"><img class="for-dark" src="images/demo-dark.gif" alt="pFlow shows words in a Chrome message box while you talk, then puts in the finished text when you let go" loading="lazy">
     <figcaption>Words show in the message box while you talk. When you let go, the finished text goes in.</figcaption>
   </figure>
 
@@ -132,7 +166,7 @@
   <small class="src">Prices from <a href="https://wisprflow.ai/pricing">wisprflow.ai/pricing</a> and <a href="https://superwhisper.com">superwhisper.com</a>, checked October 25, 2026.</small>
 
   <figure>
-    <img src="images/live-notes.png" alt="Words appear in a Notes note while you talk, with pFlow's capsule at the bottom of the screen">
+    <img class="for-light" src="images/live-notes.png" alt="Words appear in a Notes note while you talk, with pFlow's capsule at the bottom of the screen"><img class="for-dark" src="images/live-notes-dark.png" alt="Words appear in a Notes note while you talk, with pFlow's capsule at the bottom of the screen" loading="lazy">
     <figcaption>Live words in Notes. The capsule at the bottom shows pFlow is listening.</figcaption>
   </figure>
 
@@ -147,8 +181,8 @@
   <p><strong>Use it:</strong> hold Right Command and talk, let go to finish. Double-tap Right Command to keep talking hands-free, and tap once to stop.</p>
 
   <div class="pair">
-    <figure><img src="images/setup.png" alt="pFlow's setup page with Microphone, Speech Recognition, Accessibility and pFlow Dictation ticked"><figcaption>The setup page walks you through each step.</figcaption></figure>
-    <figure><img src="images/appearance.png" alt="pFlow Settings with the Pesh, Aurora, Solar and Custom colors and the Wave and Lines waveforms"><figcaption>Pick your colors and waveform.</figcaption></figure>
+    <figure><img class="for-light" src="images/setup.png" alt="pFlow's setup page with Microphone, Speech Recognition, Accessibility and pFlow Dictation ticked"><img class="for-dark" src="images/setup-dark.png" alt="pFlow's setup page with Microphone, Speech Recognition, Accessibility and pFlow Dictation ticked" loading="lazy"><figcaption>The setup page walks you through each step.</figcaption></figure>
+    <figure><img class="for-light" src="images/appearance.png" alt="pFlow Settings with the Pesh, Aurora, Solar and Custom colors and the Wave and Lines waveforms"><img class="for-dark" src="images/appearance-dark.png" alt="pFlow Settings with the Pesh, Aurora, Solar and Custom colors and the Wave and Lines waveforms" loading="lazy"><figcaption>Pick your colors and waveform.</figcaption></figure>
   </div>
 
   <h2 id="privacy">Privacy</h2>
@@ -172,5 +206,24 @@
     pFlow is based on <a href="https://github.com/FrigadeHQ/yap">Yap by Frigade</a>, under the MIT License.
   </footer>
 </div>
+<script>
+  (function () {
+    var root = document.documentElement, button = document.getElementById('theme');
+    function show(t, save) {
+      root.setAttribute('data-theme', t);
+      button.querySelector('span').textContent = t === 'dark' ? 'Light' : 'Dark';
+      button.setAttribute('aria-label', t === 'dark' ? 'Switch to light mode' : 'Switch to dark mode');
+      if (save) { try { localStorage.setItem('pflow-theme', t); } catch (e) {} }
+    }
+    show(root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light', false);
+    button.addEventListener('click', function () { show(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark', true); });
+    var system = matchMedia('(prefers-color-scheme: dark)');
+    if (system.addEventListener) system.addEventListener('change', function (e) {
+      var saved = null;
+      try { saved = localStorage.getItem('pflow-theme'); } catch (x) {}
+      if (!saved) show(e.matches ? 'dark' : 'light', false);
+    });
+  })();
+</script>
 </body>
 </html>

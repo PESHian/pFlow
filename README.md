@@ -6,7 +6,7 @@ It runs on your Mac. No account, no subscription, no word limit.
 
 **[Download pFlow for Mac 0.3.17](https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.25.1/pFlow-Mac-0.3.17.dmg)** · Apple Silicon · macOS 27 or later · [All releases](https://github.com/PESHian/pFlow/releases)
 
-![pFlow shows words in a Chrome message box while you talk, then puts in the finished text when you let go](docs/images/demo.gif)
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/PESHian/pFlow/main/docs/images/demo-dark.gif"><img src="docs/images/demo.gif" alt="pFlow shows words in a Chrome message box while you talk, then puts in the finished text when you let go"></picture>
 
 ## Why pFlow
 
@@ -17,7 +17,7 @@ It runs on your Mac. No account, no subscription, no word limit.
 - **Careful with your text.** pFlow never types into password fields. If you click, type or switch apps mid-sentence, it stops and keeps your words in History. If it can't be sure where your words went, it doesn't paste; it shows them on a Copy card instead. Your clipboard is put back after a paste.
 - **Made to fit how you write.** A dictionary for names and terms, templates, local history, daily and per-app stats, and a small capsule with a Wave or Lines waveform in your colors.
 
-![Words appear in a Notes note while you talk, with pFlow's capsule at the bottom of the screen](docs/images/live-notes.png)
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/PESHian/pFlow/main/docs/images/live-notes-dark.png"><img src="docs/images/live-notes.png" alt="Words appear in a Notes note while you talk, with pFlow's capsule at the bottom of the screen"></picture>
 
 ## A free alternative to Wispr Flow and Superwhisper
 
@@ -33,7 +33,7 @@ Paid dictation apps charge for this. Wispr Flow Pro is $15 a month, or $12 a mon
 4. pFlow's setup page opens. Allow **Microphone** and **Speech Recognition**, and press **Grant** next to **Accessibility**.
 5. For words as you talk in every app, add **pFlow Dictation** once. Press its button on the setup page, or go to **System Settings › Keyboard › Text Input › Edit… › + › English › pFlow Dictation › Add**.
 
-<p align="center"><img src="docs/images/setup.png" width="380" alt="pFlow's setup page with Microphone, Speech Recognition, Accessibility and pFlow Dictation ticked"> <img src="docs/images/appearance.png" width="380" alt="pFlow Settings with the Pesh, Aurora, Solar and Custom colors and the Wave and Lines waveforms"></p>
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/PESHian/pFlow/main/docs/images/setup-dark.png"><img src="docs/images/setup.png" width="380" alt="pFlow's setup page with Microphone, Speech Recognition, Accessibility and pFlow Dictation ticked"></picture> <picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/PESHian/pFlow/main/docs/images/appearance-dark.png"><img src="docs/images/appearance.png" width="380" alt="pFlow Settings with the Pesh, Aurora, Solar and Custom colors and the Wave and Lines waveforms"></picture></p>
 
 ## Use it
 
