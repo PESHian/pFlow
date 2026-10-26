@@ -252,6 +252,51 @@ extension TakeHarness {
         return ["spec": "thumbs", "made": made]
     }
 
+    /// Every step of the update window (builds that cannot install themselves), light and dark,
+    /// shown as the real window. A capture script outside pFlow (the VM driver) photographs the
+    /// window's rectangle, named in "update-shot", and answers in "update-shot-done".
+    func updateRenders() async -> [String: Any] {
+        let release = GitHubRelease(version: "0.3.17", page: GitHubReleases.releasesPage,
+                                    dmg: URL(string: "https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.25.1/pFlow-Mac-0.3.17.dmg")!,
+                                    bytes: 6_601_374, sha256: String(repeating: "0", count: 64), checksumFile: nil)
+        let file = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Downloads/pFlow-Mac-0.3.17.dmg")
+        let states: [(String, GitHubUpdateState)] = [
+            ("01-idle", .idle), ("02-checking", .checking), ("03-newer", .newer(release)), ("04-up-to-date", .upToDate("0.3.18")),
+            ("05-downloading", .downloading(release, received: 3_145_728, total: 6_601_374)), ("06-verifying", .verifying(release)),
+            ("07-ready", .ready(release, file: file)),
+            ("08-error-offline", .failed(.offline, retry: nil)), ("09-error-rate-limit", .failed(.rateLimited, retry: nil)),
+            ("10-error-no-mac-asset", .failed(.noMacAsset, retry: nil)), ("11-error-no-checksum", .failed(.noChecksum, retry: nil)),
+            ("12-error-disk", .failed(.disk, retry: release)), ("13-error-checksum-mismatch", .failed(.mismatch, retry: release)),
+        ]
+        let updates = GitHubUpdates()
+        let request = folder.appendingPathComponent("update-shot"), answer = folder.appendingPathComponent("update-shot-done")
+        var made: [String] = []
+        NSApp.activate(ignoringOtherApps: true)
+        for (dark, label) in [(false, "light"), (true, "dark")] {
+            for (name, state) in states {
+                updates.showForRendering(state)
+                let host = NSHostingView(rootView: GitHubUpdateView(updates: updates, quit: {}))
+                let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 320), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+                window.title = "pFlow updates"
+                window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                window.contentView = host
+                window.setContentSize(host.fittingSize)
+                window.center()
+                window.makeKeyAndOrderFront(nil)
+                await pause(0.8)
+                let frame = window.frame, height = NSScreen.screens.first?.frame.height ?? frame.maxY
+                let shot = "update-\(name)-\(label)"
+                try? "\(shot) \(Int(frame.minX)) \(Int(height - frame.maxY)) \(Int(frame.width)) \(Int(frame.height))".write(to: request, atomically: true, encoding: .utf8)
+                _ = await waitFor(8) { (try? String(contentsOf: answer, encoding: .utf8)) == shot }
+                made.append(shot)
+                window.orderOut(nil)
+            }
+        }
+        try? FileManager.default.removeItem(at: request)
+        note("SUMMARY updaterenders: \(made.count) shown")
+        return ["spec": "updaterenders", "made": made]
+    }
+
     /// The setup page and the input method's setup row, light and dark, as they render now.
     func setupRenders(_ tag: String) -> [String: Any] {
         var made: [String] = []
@@ -360,6 +405,7 @@ extension TakeHarness {
     func realRun(_ parts: [String]) async -> [String: Any] {
         if parts.first == "twowin" { return await twoWindows(parts) }
         if parts.first == "thumbs" { return thumbnails() }
+        if parts.first == "updaterenders" { return await updateRenders() }
         if parts.first == "setup" { return setupRenders(parts.count > 1 ? parts[1] : "now") }
         if parts.first == "realguard" { return await realGuard(parts) }
         let spec = parts.joined(separator: ":")

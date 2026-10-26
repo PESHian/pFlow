@@ -81,6 +81,12 @@ enum MacUpdateInstaller {
     // A release embeds its approved team before signing. Unsigned development
     // builds deliberately cannot install production updates.
     static var expectedTeam: String { Bundle.main.object(forInfoDictionaryKey: "PFLOWUpdateTeamID") as? String ?? "" }
+    /// Only a build signed with the approved Developer ID team installs updates itself.
+    /// Every other build (the ad-hoc ones) points the person to the release on GitHub.
+    static var canInstallItself: Bool {
+        guard (try? developerRequirement(team: expectedTeam)) != nil else { return false }
+        return (try? verifyDeveloperID(Bundle.main.bundleURL, team: expectedTeam)) != nil
+    }
     static func run(_ executable: String, _ args: [String]) throws {
         let process = Process(); process.executableURL = URL(fileURLWithPath: executable); process.arguments = args
         process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
@@ -206,10 +212,12 @@ final class MacUpdates: ObservableObject {
     private var window: NSWindow?
     private var task: Task<Void, Never>?
     static var current: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0" }
+    private lazy var github = GitHubUpdates()
     func show() {
         if let window { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
-        let view = MacUpdateView(updates: self)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 230), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        let selfInstall = MacUpdateInstaller.canInstallItself
+        let view: AnyView = selfInstall ? AnyView(MacUpdateView(updates: self)) : AnyView(GitHubUpdateView(updates: github))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: selfInstall ? 230 : 320), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "pFlow updates"; window.contentView = NSHostingView(rootView: view); window.isReleasedWhenClosed = false; window.center(); self.window = window
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
