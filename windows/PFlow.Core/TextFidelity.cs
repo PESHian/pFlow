@@ -45,13 +45,6 @@ public static class TextFidelity
         }
         return numeric;
     }
-    /// The edit differs from the source only in guarded symbols (a comma inside a number, a sign,
-    /// a quote): every word and number is the same, in the same order.
-    public static bool OnlySymbolsDiffer(string source, string result)
-    {
-        static string[] WordsOnly(string text) => Atoms(text).Where(a => char.IsLetterOrDigit(a[0])).ToArray();
-        return WordsOnly(source).SequenceEqual(WordsOnly(result));
-    }
     public static bool CleanupIsFaithful(string source, string result)
     {
         if (string.IsNullOrWhiteSpace(result)) return false;

@@ -20,6 +20,18 @@ enum InsertionBlock: Equatable {
     case cancelled
     case clipboard
     case nothingToInsert
+    case terminal
+    case remoteViewer
+    case passwordField
+    /// The person pressed a key or clicked right when the text was due.
+    case personActed
+    case inputMethod
+    /// The paste went out and the field still reads exactly as before.
+    case notTaken
+    /// The end replace: pFlow's selected words were no longer exactly its own.
+    case selectionChanged
+    /// The person's key presses and clicks could not be watched.
+    case notWatching
     /// Live typing wrote into the field and then stopped for this reason.
     case typingStopped(LiveInlineOwnership.Stop)
 
@@ -35,6 +47,14 @@ enum InsertionBlock: Equatable {
         case .cancelled: return "The take was cancelled before the text could go in."
         case .clipboard: return "The clipboard could not be used, so the text was not put in."
         case .nothingToInsert: return "There was no text to put in."
+        case .terminal: return "pFlow does not type into terminals, where a line break would run a command."
+        case .remoteViewer: return "pFlow does not type into remote desktop or virtual machine windows."
+        case .passwordField: return "That is a password field, so the text was not put in."
+        case .personActed: return "You were typing or clicking, so the text was not put in."
+        case .inputMethod: return "Your input method was still composing, so the text was not put in."
+        case .notTaken: return "The app did not take the text."
+        case .selectionChanged: return "The words in the app changed, so the finished text was not put in."
+        case .notWatching: return "pFlow could not watch the keyboard, so the finished text was not put in."
         case .typingStopped(let stop): return stop.cardReason
         }
     }
@@ -78,9 +98,25 @@ protocol TextInjecting {
     func typedLive(session: String) -> Bool
     func finalizeLive(session: String, text: String) -> LiveInlineFinal
     func cancelLive(session: String) -> LiveInlineCancel
+    /// Waits (bounded) for held keys to be released, before the end of a take.
+    func waitForKeysToClear() async
+    /// After `finalizeLive` returned `.replace`: the finished text over pFlow's
+    /// own selected words, through the checked paste.
+    func insertOverSelection(_ text: String, own: OwnedWords, formatted: NSAttributedString?) async -> InjectionOutcome
+    /// Live words through pFlow Dictation (the input method): the finished
+    /// text committed once over the marked words and read back. Nil when the
+    /// take did not use the input method.
+    func finishInputMethod(session: String, text: String) async -> LiveInlineFinal?
+    /// A held key kept this update's typed words out; the words belong in pFlow's own preview.
+    func liveHeldBack(session: String) -> Bool
+    /// The take ends before live words started (still waiting): anything begun is undone.
+    func abandonLive(session: String)
 }
 
 extension TextInjecting {
+    func finishInputMethod(session: String, text: String) async -> LiveInlineFinal? { nil }
+    func liveHeldBack(session: String) -> Bool { false }
+    func abandonLive(session: String) {}
     func deliver(_ text: String, formatted: NSAttributedString?) async -> InjectionOutcome { await deliver(text) }
     var targetIsSecure: Bool { false }
     var accessibilityGranted: Bool { true }
@@ -90,6 +126,11 @@ extension TextInjecting {
     func typedLive(session: String) -> Bool { false }
     func finalizeLive(session: String, text: String) -> LiveInlineFinal { .notTyped }
     func cancelLive(session: String) -> LiveInlineCancel { .nothingTyped }
+    func waitForKeysToClear() async {}
+    func insertOverSelection(_ text: String, own: OwnedWords, formatted: NSAttributedString?) async -> InjectionOutcome {
+        own.collapse()
+        return .savedToHistory(.selectionChanged)
+    }
 }
 
 @MainActor
@@ -104,23 +145,54 @@ final class TextInjector: TextInjecting {
     var targetApplicationName: String? { targetApp?.localizedName }
     var targetApplicationBundleID: String? { targetApp?.bundleIdentifier }
     var accessibilityGranted: Bool { AXIsProcessTrusted() }
-    /// Lets the pasteboard server round-trip complete before ⌘V.
-    private static let prePasteDelay: TimeInterval = 0.03
-
-    /// `NX_DEVICELCMDKEYMASK` — "left command physically down". Carbon-era, Qt
-    /// and Java apps read the device-dependent bits and ignore a bare command flag.
-    private static let deviceLeftCommand: UInt64 = 0x0000_0008
-
     private static let sessionType = PasteboardSnapshot.sessionType
-    private static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+    /// nspasteboard.org markers: clipboard managers and history tools skip
+    /// pFlow's own writes (transient: about to be replaced; concealed: private).
+    static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+    static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
 
     private var targetApp: NSRunningApplication?
     private var targetField: AXUIElement?
     private var originalValue: String?
+    /// The field held only an empty editor's placeholder when the take began (EditorPlaceholder).
+    private var placeholder: EditorPlaceholder.Start?
+    private var placeholderStart: Bool { placeholder != nil }
+    private var fieldUnreadable = false
+    private var composition: (composing: Bool, at: UInt64) = (false, 0)
     private var originalSelection: CFRange?
     private(set) var targetIsSecure = false
     private var delivering = false
     private var live = LiveInlineSlot()
+    /// The take using pFlow Dictation, while it does.
+    private var inputMethodTake: String?
+    private var inputMethodStarted: UInt64 = 0
+    private var inputMethodStopped: LiveInlineOwnership.Stop?
+    /// The take's input method never marked anything, so nothing of pFlow's is in the field.
+    private var inputMethodNothingShown = false
+    /// Cleared for the take once the input method could not be used.
+    private var inputMethodAllowed = true
+    /// When the take's target was captured: a person's key or click after it means the focused
+    /// field may be one they chose, not the target, so it is never taken as the target later.
+    private var capturedAt: UInt64 = 0
+    /// Looking for the first marks in the target field, or taking marks back out: finishing waits for it.
+    private var inputMethodCheck: Task<Void, Never>?
+    /// Words heard while the first marks are being looked for; marked once they are seen.
+    private var inputMethodPending: String?
+    /// How long the first marks have to show in the target field before they are taken back out.
+    static let confirmWithin: TimeInterval = 0.7
+    var inputMethod = InputMethodLink.shared
+    /// The target field's text as Accessibility reads it (replaceable in tests).
+    var readTarget: (AXUIElement) -> String? = { field in
+        var value: CFTypeRef?
+        return AXUIElementCopyAttributeValue(field, kAXValueAttribute as CFString, &value) == .success ? value as? String : nil
+    }
+    /// The guard for marked text over the captured target: nil while it holds (replaceable in tests).
+    lazy var markedTextCheck: () -> LiveInlineOwnership.Stop? = { [unowned self] in
+        guard let check = self.targetCheck() else { return .app }
+        return InsertionGuard.markedTextBlock(check.facts(since: self.inputMethodStarted)).map(LiveInlineOwnership.Stop.init)
+    }
+    /// A stop decided away from an update (the first marks never showed): shown with the next one.
+    private var inputMethodStopNotice: LiveInlineOwnership.Stop?
 
     private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
         var value: CFTypeRef?
@@ -128,10 +200,7 @@ final class TextInjector: TextInjecting {
     }
 
     private func focusedField(_ app: NSRunningApplication) -> AXUIElement? {
-        let element = AXUIElementCreateApplication(app.processIdentifier)
-        AXUIElementSetMessagingTimeout(element, 0.3)
-        guard let value = attribute(element, kAXFocusedUIElementAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-        return (value as! AXUIElement)
+        FocusedElement.of(pid: app.processIdentifier, bundleID: app.bundleIdentifier)
     }
 
     private func selection(_ field: AXUIElement) -> CFRange? {
@@ -161,26 +230,153 @@ final class TextInjector: TextInjecting {
 
     func captureTarget() {
         guard !delivering else { return }
+        inputMethod.end()
+        inputMethodTake = nil
+        inputMethodStopped = nil
+        inputMethodNothingShown = false
+        inputMethodAllowed = true
+        inputMethodCheck?.cancel()
+        inputMethodCheck = nil
+        inputMethodPending = nil
+        inputMethodStopNotice = nil
         targetApp = NSWorkspace.shared.frontmostApplication
+        PersonInput.shared.start()
+        capturedAt = PersonInput.now()
+        // Whether the person was composing when the take started: the end of
+        // the take refuses until a real commit is seen, whatever the time.
+        composition = PersonInput.shared.compositionSnapshot(sourceID: PersonInput.selectedInputMethodID())
         captureField()
     }
+
+    #if DEBUG
+    /// Tests: a take on pFlow Dictation over a given field, its text and caret (no real app).
+    func adoptInputMethodTakeForTesting(session: String, field: AXUIElement, value: String, caret: Int) {
+        targetField = field
+        fieldUnreadable = false
+        originalValue = value
+        originalSelection = CFRange(location: caret, length: 0)
+        placeholder = nil
+        inputMethodTake = session
+        inputMethodStopped = nil
+        inputMethodNothingShown = false
+        inputMethodAllowed = true
+        inputMethodStarted = PersonInput.now()
+    }
+    #endif
 
     /// The focused field of the captured app and what it holds, so a paste
     /// later can tell whether anything changed.
     private func captureField() {
         targetField = targetApp.flatMap(focusedField)
-        originalValue = targetField.flatMap { attribute($0, kAXValueAttribute) as? String }
+        // A field whose text Accessibility does not show is treated as unreadable.
+        fieldUnreadable = targetField.map(FocusedElement.unreadable) ?? false
+        originalValue = fieldUnreadable ? nil : targetField.flatMap { attribute($0, kAXValueAttribute) as? String }
         originalSelection = targetField.flatMap(selection)
+        placeholder = targetField.flatMap { field in
+            EditorPlaceholder.start(value: originalValue, placeholderText: attribute(field, "AXPlaceholderValue") as? String,
+                                    markedEmpty: markedEmpty(field), webContent: isWebContent(field))
+        }
         targetIsSecure = targetField.map { attribute($0, kAXSubroleAttribute) as? String == kAXSecureTextFieldSubrole } ?? false
     }
 
+    /// The field is web content: a Chromium or Electron app, or a page's web area (Safari).
+    private func isWebContent(_ field: AXUIElement) -> Bool {
+        targetApp.map { WebAppAccessibility.kind(of: $0) != nil } == true || FocusedElement.inWebArea(field)
+    }
+
+    /// The editor marks itself empty (EditorPlaceholder.emptyEditorClasses), on
+    /// the field or one of its first few descendants (a web page's own classes).
+    private func markedEmpty(_ field: AXUIElement) -> Bool {
+        var queue = [(field, 0)], seen = 0
+        while !queue.isEmpty, seen < 12 {
+            let (element, depth) = queue.removeFirst()
+            seen += 1
+            if let classes = attribute(element, "AXDOMClassList") as? [String],
+               classes.contains(where: EditorPlaceholder.emptyEditorClasses.contains) { return true }
+            if depth < 3, let children = attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
+                queue += children.prefix(4).map { ($0, depth + 1) }
+            }
+        }
+        return false
+    }
+
+    /// Live words by Accessibility range writes in native text views, by typed
+    /// keys where those writes do not show (LiveFieldMethod), or by keys in a
+    /// native field that takes no range writes but can be read. Never in a
+    /// terminal or a remote viewer.
+    /// pFlow Dictation, when the person has added it: marked text through the
+    /// text input client, no keys, so a held Command key changes nothing.
+    /// Never for a password field or Secure Input, a terminal or remote
+    /// viewer, or while another input method is composing.
+    private func beginInputMethod(session: String) -> LiveInlineStart? {
+        guard !delivering, inputMethodAllowed, let targetApp, let bundle = targetApp.bundleIdentifier else { return nil }
+        guard inputMethod.usable else {
+            ReasonLog.note(inputMethod.connected ? "input method not added in Keyboard settings" : "input method not connected")
+            return nil
+        }
+        let classes = targetField.map { TargetCheck(pid: targetApp.processIdentifier, element: $0, bundleID: bundle).classes($0) } ?? []
+        let composing = InputComposition.composing(markedLength: targetField.flatMap(FocusedElement.markedLength),
+                                                   tracked: composition.composing)
+        guard InputMethodRoute.allowed(secure: targetIsSecure || SecureInput.isEnabled,
+                                       place: NoTypePlaces.place(bundleID: bundle, elementClasses: classes), composing: composing) else {
+            ReasonLog.note("input method not used: secure field, terminal, remote viewer or open composition")
+            inputMethodAllowed = false
+            return nil
+        }
+        guard inputMethod.begin(id: session, bundle: bundle, readable: targetReadable, window: targetWindowFrame()) else {
+            ReasonLog.note("input method could not be selected")
+            inputMethodAllowed = false
+            return nil
+        }
+        inputMethodTake = session
+        inputMethodStarted = PersonInput.now()
+        ReasonLog.note("live words by the input method")
+        return .waiting
+    }
+
     private func beginLiveOverCapturedField(session: String) -> LiveInlineStart {
-        guard !delivering, let targetApp, let targetField else { return live.begin(id: session, field: nil) }
-        return beginLive(session: session, field: AXLiveTextField(pid: targetApp.processIdentifier, element: targetField))
+        if let started = beginInputMethod(session: session) { return started }
+        guard !delivering, let targetApp, let targetField else {
+            ReasonLog.note("live typing not started: no field found")
+            return live.begin(id: session, field: nil)
+        }
+        let pid = targetApp.processIdentifier, bundleID = targetApp.bundleIdentifier
+        let check = TargetCheck(pid: pid, element: targetField, bundleID: bundleID)
+        // Never in a terminal or a remote viewer, nor while an input method may be composing.
+        let composing = InputComposition.composing(markedLength: FocusedElement.markedLength(targetField),
+                                                   tracked: composition.composing)
+        guard !composing else {
+            ReasonLog.note("live typing not started:", InsertionBlock.inputMethod)
+            return live.begin(id: session, field: nil)
+        }
+        if let place = NoTypePlaces.place(bundleID: bundleID, elementClasses: check.classes(targetField)) {
+            ReasonLog.note("live typing not started:", place)
+            return live.begin(id: session, field: nil)
+        }
+        guard !fieldUnreadable else {
+            ReasonLog.note("live typing not started: the field's text cannot be read")
+            return live.begin(id: session, field: nil)
+        }
+        if placeholderStart { ReasonLog.note("the field holds only an empty editor's placeholder") }
+        let composition = self.composition, placeholder = self.placeholder
+        let keys = { KeyLiveTextField(pid: pid, element: targetField, bundleID: bundleID, composition: composition,
+                                      placeholder: placeholder) }
+        let web = isWebContent(targetField)
+        switch LiveFieldMethod.method(webApp: web, bundleID: bundleID) {
+        case .keys:
+            ReasonLog.note("live words by typed keys")
+            return beginLive(session: session, field: keys())
+        case .ranges:
+            ReasonLog.note("live words by Accessibility range writes")
+            // Direct writes go to the captured caret and never through a placeholder view.
+            let start = beginLive(session: session, field: AXLiveTextField(pid: pid, element: targetField, bundleID: bundleID))
+            return start == .preview(.unsupported) ? beginLive(session: session, field: keys()) : start
+        }
     }
 
     func beginLive(session: String) -> LiveInlineStart {
         let start = beginLiveOverCapturedField(session: session)
+        if start == .waiting { return .waiting }
         // An Electron or Chromium app has no text field for Accessibility
         // until asked. Once asked, the coordinator looks again shortly.
         guard start == .preview(.unsupported), !delivering, let targetApp, WebAppAccessibility.enable(targetApp) else { return start }
@@ -188,7 +384,29 @@ final class TextInjector: TextInjecting {
     }
 
     func retryLive(session: String) -> LiveInlineStart {
+        if inputMethodTake == session {
+            switch inputMethod.attachState() {
+            case .attached:
+                ReasonLog.note("input method active in the app")
+                if inputMethod.provisional { ReasonLog.note("input method on probation: no activation came for this take") }
+                return .typing
+            case .pending:
+                return .waiting
+            case .failed(let why):
+                ReasonLog.note("input method did not become active in the app; other live paths")
+                ReasonLog.note("input method attach:", AttachReason(why))
+                inputMethod.end()
+                inputMethodTake = nil
+                inputMethodAllowed = false
+            }
+        }
         guard let targetApp, targetApp.isActive else { return .preview(.app) }
+        // The person clicked or typed since the take began: the focused field may be one they
+        // moved to. It never becomes the target; the words show in the preview.
+        if PersonInput.shared.acted(since: capturedAt) == true {
+            ReasonLog.note("live typing not started: the person clicked or typed while it waited")
+            return .preview(.caret)
+        }
         // The field the app reports now replaces the one captured before it
         // built its tree, for live typing and for the normal paste alike.
         captureField()
@@ -202,35 +420,289 @@ final class TextInjector: TextInjecting {
     }
 
     func reconcileLive(session: String, transcript: String) -> LiveInlineOwnership.Stop? {
-        live.reconcile(session: session, transcript: transcript)
+        if inputMethodTake == session { return reconcileInputMethod(transcript) }
+        return live.reconcile(session: session, transcript: transcript)
     }
 
-    func typedLive(session: String) -> Bool { live.typed(session: session) }
+    func typedLive(session: String) -> Bool {
+        if inputMethodTake == session { return !inputMethodNothingShown && (inputMethod.take?.marked == true || inputMethodStopped != nil) }
+        return live.typed(session: session)
+    }
+
+    func liveHeldBack(session: String) -> Bool { live.heldBack(session: session) }
+
+    func abandonLive(session: String) {
+        guard inputMethodTake == session else { return }
+        inputMethod.cancel()
+        inputMethod.end()
+        inputMethodTake = nil
+    }
+
+    /// Spacing against the text around the caret, as the paste would put it.
+    private func prepared(_ text: String, formatted: NSAttributedString? = nil) -> (text: String, formatted: NSAttributedString?) {
+        placeholderStart
+            ? InsertionSpacing.prepare(text, formatted: formatted, value: "", selection: NSRange(location: 0, length: 0))
+            : InsertionSpacing.prepare(text, formatted: formatted, value: originalValue,
+                                       selection: originalSelection.map { NSRange(location: $0.location, length: $0.length) })
+    }
+
+    /// The whole current transcript as marked text, only while every check passes.
+    private func reconcileInputMethod(_ transcript: String) -> LiveInlineOwnership.Stop? {
+        guard inputMethodStopped == nil else {
+            defer { inputMethodStopNotice = nil }
+            return inputMethodStopNotice
+        }
+        if let reason = inputMethod.interrupted { return stopInputMethod(InputMethodLink.stop(for: reason)) }
+        if let stop = markedTextCheck() { return stopInputMethod(stop) }
+        let words = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else { return nil }
+        if targetReadable {
+            guard inputMethod.confirmed else {
+                // The first words go out once; nothing more is written through the client until
+                // they show in the target field at the caret (a client of another window would take them too).
+                if inputMethod.take?.seq == 0 {
+                    guard inputMethod.mark(prepared(words).text) else { return stopInputMethod(.uncertain) }
+                    lookForFirstMarks()
+                } else {
+                    inputMethodPending = words
+                }
+                return nil
+            }
+            // Before every further mark: the earlier ones show at the caret in the target field.
+            if inputMethod.showingCandidates() != nil, marksAtCaret() == nil { return notInTarget() }
+        }
+        guard inputMethod.mark(prepared(words).text) else { return stopInputMethod(.uncertain) }
+        return nil
+    }
+
+    /// The field's text before the captured caret and after the selection (both empty over a placeholder).
+    private var caretContext: (before: String, after: String)? {
+        if placeholderStart { return ("", "") }
+        guard let value = originalValue, let range = originalSelection, range.location >= 0, range.length >= 0 else { return nil }
+        let text = value as NSString
+        guard range.location + range.length <= text.length else { return nil }
+        return (text.substring(to: range.location), text.substring(from: range.location + range.length))
+    }
+
+    /// The mark the target field shows at the captured caret: the newest acknowledged one or a newer
+    /// one before the take is confirmed, any from the confirmed one on after. Nil when none shows.
+    private func marksAtCaret(settled: TimeInterval = 0.15) -> Int? {
+        guard let targetField, let context = caretContext, let candidates = inputMethod.showingCandidates(settled: settled) else { return nil }
+        let read = readTarget(targetField)
+        return candidates.reversed().first { InputMethodFinish.showsAtCaret(read: read, texts: [$0.text], before: context.before, after: context.after) }?.seq
+    }
+
+    /// The first marks are looked for in the target field. Seen: the client is the take's (it may now
+    /// commit) and the words heard meanwhile go in. Not seen in time: they are taken back out of that
+    /// client and the take goes on by pFlow's other live paths, once the input method reports them gone.
+    private func lookForFirstMarks() {
+        guard let session = inputMethodTake else { return }
+        let started = Date()
+        inputMethodCheck = Task { [weak self] in
+            while let self, self.inputMethodTake == session, self.inputMethodStopped == nil, !Task.isCancelled {
+                if let seq = self.marksAtCaret(settled: 0.05) {
+                    let probation = self.inputMethod.provisional
+                    self.inputMethod.confirm(seq: seq)
+                    ReasonLog.note(probation ? "input method words seen in the target: the client on probation is the take's"
+                                             : "input method words seen in the target")
+                    if let words = self.inputMethodPending {
+                        self.inputMethodPending = nil
+                        if !self.inputMethod.mark(self.prepared(words).text) { _ = self.stopInputMethod(.uncertain) }
+                    }
+                    return
+                }
+                if Date().timeIntervalSince(started) > Self.confirmWithin {
+                    await self.withdrawToOtherPaths(session: session)
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(40))
+            }
+        }
+    }
+
+    /// The first marks never showed in the target: out of that client they come, and only once the
+    /// input method reports them gone does the take go on another way. Not reported gone: nothing
+    /// more is written, and the finished text is kept for the Copy card, never pasted beside them.
+    private func withdrawToOtherPaths(session: String) async {
+        ReasonLog.note("input method words not seen in the target field: taken back out")
+        let cleared = await inputMethod.clear()
+        inputMethod.end()
+        guard inputMethodTake == session else { return }
+        guard cleared else {
+            ReasonLog.note("input method words not proven gone: the finished text stays on the card")
+            inputMethodStopped = .otherWindow
+            inputMethodStopNotice = .otherWindow
+            return
+        }
+        inputMethodTake = nil
+        inputMethodAllowed = false
+        inputMethodPending = nil
+        let start = beginLiveOverCapturedField(session: session)
+        ReasonLog.note("live typing after the input method:", start)
+    }
+
+    /// Live words stop for the take: the words shown stay as they are, the person's source comes back.
+    private func stopInputMethod(_ stop: LiveInlineOwnership.Stop) -> LiveInlineOwnership.Stop {
+        inputMethodStopped = stop
+        if inputMethod.interrupted == "notSelected", inputMethod.take?.seq == 0 { inputMethodNothingShown = true }
+        inputMethod.freeze()
+        inputMethod.end()
+        ReasonLog.note("live words through the input method stopped:", stop)
+        return stop
+    }
+
+    func finishInputMethod(session: String, text: String) async -> LiveInlineFinal? {
+        // The first marks may still be looked for, or marks taken back out: that decides first.
+        await inputMethodCheck?.value
+        guard inputMethodTake == session else { return nil }
+        inputMethodTake = nil
+        // Nothing was ever marked (pFlow's source was not the selected one): the text goes in the usual way.
+        if inputMethodNothingShown || (inputMethod.interrupted == "notSelected" && inputMethod.take?.seq == 0) {
+            inputMethod.end()
+            return .notTyped
+        }
+        if let stop = inputMethodStopped { return .kept(stop) }
+        if let reason = inputMethod.interrupted {
+            return .kept(stopInputMethod(InputMethodLink.stop(for: reason)))
+        }
+        guard inputMethod.take?.marked == true else {
+            // Nothing shown yet: the person's source comes back and the text goes in the usual way.
+            inputMethod.end()
+            return .notTyped
+        }
+        if let stop = markedTextCheck() { return .kept(stopInputMethod(stop)) }
+        let final = prepared(text).text
+        // The finished text goes through the input method only after its marks were seen at the caret in
+        // the target this take, and are still there. Otherwise they come back out, and the usual checked
+        // paste follows only once the input method reports them gone; if it does not, the Copy card.
+        let atCaret = targetReadable && inputMethod.confirmed ? await targetShowsMarks(waiting: 0.5) : false
+        if InputMethodFinish.takesBackFirst(targetReadable: targetReadable, confirmed: inputMethod.confirmed, marksAtCaret: atCaret) {
+            ReasonLog.note(inputMethod.confirmed ? "input method words no longer at the caret: taken back out"
+                                                 : "input method words never seen in the target: taken back out")
+            let cleared = await inputMethod.clear()
+            inputMethod.end()
+            if !cleared { ReasonLog.note("input method words not proven gone: the finished text stays on the card") }
+            return InputMethodFinish.afterTakeBack(cleared: cleared)
+        }
+        let result = await inputMethod.commit(final)
+        inputMethod.end()
+        if !result.ok { ReasonLog.note("input method commit refused") }
+        let finished = await InputMethodFinish.conclude(
+            committed: result.ok, seenByInputMethod: result.seen, targetReadable: targetReadable, keepCopy: copyToClipboard(),
+            landedInTarget: { await self.landedAfterCommit(final) },
+            copy: {
+                if self.placeOnClipboard(Self.clipboardItem(text: text, formatted: nil, sessionID: UUID().uuidString, private: false)) == nil {
+                    ReasonLog.note("the finished text could not be copied to the clipboard")
+                }
+            })
+        ReasonLog.note(finished == .applied ? "finished text committed and seen in the target"
+                       : finished == .unconfirmed ? "finished text committed but not seen in the target" : "finished text not committed")
+        return finished
+    }
+
+    /// The target field can be read, so what it shows decides (never the input method's own client).
+    private var targetReadable: Bool { targetField != nil && !fieldUnreadable && originalValue != nil }
+
+    /// The target field shows this take's marks at the caret (waiting up to `waiting` seconds for it to draw).
+    private func targetShowsMarks(waiting: TimeInterval) async -> Bool {
+        let deadline = Date().addingTimeInterval(waiting)
+        repeat {
+            if marksAtCaret(settled: 0) != nil { return true }
+            try? await Task.sleep(for: .milliseconds(50))
+        } while Date() < deadline
+        return false
+    }
+
+    /// The take's marks are not at the caret in the target field (another window or field of the app
+    /// has them): they are taken back out of that client. The finished text goes in the usual way at
+    /// the end only once the input method reports them gone; otherwise it stays on the Copy card.
+    private func notInTarget() -> LiveInlineOwnership.Stop {
+        ReasonLog.note("input method words not in the target field: taken back out")
+        inputMethodStopped = .uncertain
+        let previous = inputMethodCheck
+        inputMethodCheck = Task { [weak self] in
+            await previous?.value
+            guard let self else { return }
+            let cleared = await self.inputMethod.clear()
+            self.inputMethod.end()
+            if cleared { self.inputMethodNothingShown = true }
+            else {
+                ReasonLog.note("input method words not proven gone: the finished text stays on the card")
+                self.inputMethodStopped = .otherWindow
+            }
+        }
+        return .uncertain
+    }
+
+    /// The target window's frame in Cocoa screen coordinates, for the input method's check that a
+    /// client on probation has its caret in that window.
+    private func targetWindowFrame() -> CGRect? {
+        guard let targetField, let window = attribute(targetField, kAXWindowAttribute), CFGetTypeID(window) == AXUIElementGetTypeID(),
+              let position = attribute(window as! AXUIElement, kAXPositionAttribute), let size = attribute(window as! AXUIElement, kAXSizeAttribute),
+              CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero, extent = CGSize.zero
+        guard AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(size as! AXValue, .cgSize, &extent),
+              let height = NSScreen.screens.first?.frame.height else { return nil }
+        return CGRect(x: point.x, y: height - point.y - extent.height, width: extent.width, height: extent.height)
+    }
+
+    /// The field now reads as it did with the finished text at the captured caret.
+    private func landedAfterCommit(_ final: String) async -> Bool {
+        guard let targetField, originalValue != nil else { return false }
+        let expected = placeholderStart ? final : expectedValue(inserting: final)
+        for _ in 0..<10 {
+            let read = readTarget(targetField)
+            if EditorPlaceholder.landed(read, expected: expected, start: originalValue, startedAsPlaceholder: placeholderStart) { return true }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return false
+    }
 
     func finalizeLive(session: String, text: String) -> LiveInlineFinal {
         let result = live.finalize(session: session, text: text)
         // "Copy dictation to clipboard": the finished words, once, after they
         // went in. Live words never touch the clipboard.
         if result == .applied, copyToClipboard(),
-           placeOnClipboard(Self.clipboardItem(text: text, formatted: nil, sessionID: UUID().uuidString)) == nil {
-            NSLog("pFlow: the finished text could not be copied to the clipboard")
+           placeOnClipboard(Self.clipboardItem(text: text, formatted: nil, sessionID: UUID().uuidString, private: false)) == nil {
+            ReasonLog.note("the finished text could not be copied to the clipboard")
         }
         return result
     }
 
     func cancelLive(session: String) -> LiveInlineCancel {
-        live.cancel(session: session)
+        if inputMethodTake == session {
+            inputMethodTake = nil
+            if let stop = inputMethodStopped { return .left(stop) }
+            let shown = inputMethod.take?.marked == true
+            inputMethod.cancel()
+            inputMethod.end()
+            return shown ? .removed : .nothingTyped
+        }
+        return live.cancel(session: session)
     }
 
     func deliver(_ text: String) async -> InjectionOutcome {
         await deliver(text, formatted: nil)
     }
 
-    static func clipboardItem(text: String, formatted: NSAttributedString?, sessionID: String) -> NSPasteboardItem? {
+    /// The paste's clipboard write. Kept ("Copy dictation to clipboard"):
+    /// unmarked, it is the person's copy. Otherwise temporary: marked, and
+    /// the person's clipboard is put back after.
+    static func pasteItem(text: String, formatted: NSAttributedString?, sessionID: String, keepCopy: Bool) -> NSPasteboardItem? {
+        clipboardItem(text: text, formatted: formatted, sessionID: sessionID, private: !keepCopy)
+    }
+
+    /// pFlow's temporary paste write is marked so clipboard managers skip it
+    /// (`private`); the copy the person asked to keep ("Copy dictation to
+    /// clipboard") goes on unmarked, like any copy of theirs.
+    static func clipboardItem(text: String, formatted: NSAttributedString?, sessionID: String, private: Bool) -> NSPasteboardItem? {
         let item = NSPasteboardItem()
         guard item.setString(text, forType: .string),
-              item.setString(sessionID, forType: sessionType),
-              item.setString("", forType: transientType) else { return nil }
+              item.setString(sessionID, forType: sessionType) else { return nil }
+        if `private` {
+            guard item.setString("", forType: transientType),
+                  item.setString("", forType: concealedType) else { return nil }
+        }
         if let formatted, formatted.string == text {
             for (type, data) in TemplateTextStyle.representations(for: formatted) {
                 item.setData(data, forType: type)
@@ -242,39 +714,118 @@ final class TextInjector: TextInjecting {
     func deliver(_ text: String, formatted: NSAttributedString?) async -> InjectionOutcome {
         guard !text.isEmpty else { return .savedToHistory(.nothingToInsert) }
         guard !delivering else { return .unconfirmed }
+        // The person's own input source is back before anything is pasted.
+        inputMethod.end()
         delivering = true
         defer { delivering = false }
         let keepCopy = copyToClipboard()
         let sessionID = UUID().uuidString
-        var saved: [[NSPasteboard.PasteboardType: Data]]?
 
         func unavailable(_ block: InsertionBlock, _ outcome: InjectionOutcome = .leftOnClipboard) -> InjectionOutcome {
             guard keepCopy,
-                  placeOnClipboard(Self.clipboardItem(text: text, formatted: formatted, sessionID: sessionID)) != nil else { return .savedToHistory(block) }
+                  placeOnClipboard(Self.clipboardItem(text: text, formatted: formatted, sessionID: sessionID, private: false)) != nil else { return .savedToHistory(block) }
             return outcome
         }
 
         guard AXIsProcessTrusted() else {
-            NSLog("pFlow: Accessibility is off for this build, so the text cannot be put in")
+            ReasonLog.note("not put in:", InsertionBlock.accessibilityOff)
             return unavailable(.accessibilityOff)
         }
-        guard !SecureInput.isEnabled else { return unavailable(.secureInput, .blockedBySecureInput(SecureInput.holderName())) }
+        PersonInput.shared.start()
+        guard let check = targetCheck() else { return unavailable(.appChanged) }
+        // A terminal, a remote viewer or a password field never gets the text, whatever else holds.
+        if let block = InsertionGuard.block(check.facts(since: PersonInput.now())),
+           [.terminal, .remoteViewer, .passwordField].contains(block) { return unavailable(block) }
         if let block = targetBlock() { return unavailable(block) }
-        await waitForModifiersToClear()
-        let held: NSEvent.ModifierFlags = [.command, .shift, .option, .control, .function]
+        await waitForKeysToClear()
         guard !Task.isCancelled else { return unavailable(.cancelled) }
-        guard NSEvent.modifierFlags.intersection(held).isEmpty else { return unavailable(.interrupted) }
-        guard !SecureInput.isEnabled else { return unavailable(.secureInput, .blockedBySecureInput(SecureInput.holderName())) }
-        if let block = targetBlock() { return unavailable(block) }
 
-        let insertion = InsertionSpacing.prepare(text, formatted: formatted, value: originalValue,
-            selection: originalSelection.map { NSRange(location: $0.location, length: $0.length) })
+        let insertion = prepared(text, formatted: formatted)
+        // A field that held only a placeholder holds only pFlow's words afterwards.
+        let expected = placeholderStart ? insertion.text : expectedValue(inserting: insertion.text)
+
+        // Native text views: a verified Accessibility write, no clipboard.
+        if insertion.formatted == nil, let expected, accessibilityWriteFits() {
+            switch writeThroughAccessibility(insertion.text, expected: expected, check: check) {
+            case .landed:
+                if keepCopy, placeOnClipboard(Self.clipboardItem(text: text, formatted: nil, sessionID: sessionID, private: false)) == nil {
+                    ReasonLog.note("the finished text could not be copied to the clipboard")
+                }
+                return .pasted
+            case .blocked(let block): return unavailable(block)
+            case .notShown: return unavailable(.notTaken)
+            case .changedOtherwise: return .unconfirmed
+            case .refused: break
+            }
+        }
+        return await checkedPaste(insertion.text, formatted: insertion.formatted, keepCopy: keepCopy, sessionID: sessionID,
+                                  expected: expected, before: originalValue, check: check,
+                                  extraBlock: { self.targetBlock() }, read: { self.targetField.flatMap { self.attribute($0, kAXValueAttribute) as? String } })
+    }
+
+    /// What the field holds once `inserted` replaces the captured selection; nil when it cannot be told.
+    private func expectedValue(inserting inserted: String) -> String? {
+        guard let value = originalValue, let range = originalSelection, range.location >= 0,
+              range.length >= 0, range.location <= (value as NSString).length,
+              range.length <= (value as NSString).length - range.location else { return nil }
+        return (value as NSString).replacingCharacters(in: NSRange(location: range.location, length: range.length), with: inserted)
+    }
+
+    /// The captured app and field as the guard reads them.
+    private func targetCheck() -> TargetCheck? {
+        guard let targetApp else { return nil }
+        var check = TargetCheck(pid: targetApp.processIdentifier, element: targetField, bundleID: targetApp.bundleIdentifier)
+        check.composition = composition
+        return check
+    }
+
+    /// A native text field that takes Accessibility writes and shows them at
+    /// once. Chromium and Electron apply them later or not at all, and Word
+    /// and LibreOffice do not apply them to the document: those are pasted.
+    private func accessibilityWriteFits() -> Bool {
+        guard let targetApp, let targetField, originalSelection != nil, originalValue != nil,
+              WebAppAccessibility.kind(of: targetApp) == nil, !FocusedElement.inWebArea(targetField),
+              LiveFieldMethod.method(webApp: false, bundleID: targetApp.bundleIdentifier) == .ranges else { return false }
+        return AXLiveTextField(pid: targetApp.processIdentifier, element: targetField, bundleID: targetApp.bundleIdentifier).canWriteRanges()
+    }
+
+    private enum AccessibilityWrite { case landed, refused, blocked(InsertionBlock), notShown, changedOtherwise }
+
+    /// Selects the captured range and sets the text there through
+    /// Accessibility, right after the guard passes; success only once the
+    /// field reads back exactly the expected text.
+    private func writeThroughAccessibility(_ text: String, expected: String, check: TargetCheck) -> AccessibilityWrite {
+        guard let targetField, let range = originalSelection, let before = originalValue else { return .refused }
+        let started = PersonInput.now()
+        if let block = targetBlock() ?? InsertionGuard.block(check.facts(since: started)) { return .blocked(block) }
+        var cf = range
+        guard let rangeValue = AXValueCreate(.cfRange, &cf),
+              AXUIElementSetAttributeValue(targetField, kAXSelectedTextRangeAttribute as CFString, rangeValue) == .success else { return .refused }
+        let result = AXUIElementSetAttributeValue(targetField, kAXSelectedTextAttribute as CFString, text as CFString)
+        var read = attribute(targetField, kAXValueAttribute) as? String
+        for _ in 0..<20 where !EditorPlaceholder.landed(read, expected: expected, start: before, startedAsPlaceholder: placeholderStart) {
+            usleep(50_000)
+            read = attribute(targetField, kAXValueAttribute) as? String
+        }
+        if EditorPlaceholder.landed(read, expected: expected, start: before, startedAsPlaceholder: placeholderStart) { return .landed }
+        if read == before { return result == .success ? .notShown : .refused }
+        return .changedOtherwise
+    }
+
+    /// The one paste: the clipboard is set first, then every check, then ⌘V
+    /// with nothing in between; then the result's own check, and the person's
+    /// clipboard back unless they asked to keep the words or copied something
+    /// newer meanwhile.
+    private func checkedPaste(_ text: String, formatted: NSAttributedString?, keepCopy: Bool, sessionID: String,
+                              expected: String?, before: String?, check: TargetCheck,
+                              extraBlock: () -> InsertionBlock?, read: () -> String?) async -> InjectionOutcome {
         // Prepare rich formats before the snapshot so generation cannot widen
         // the interval that could overwrite a newer clipboard change.
-        let prepared = Self.clipboardItem(text: insertion.text, formatted: insertion.formatted, sessionID: sessionID)
+        let prepared = Self.pasteItem(text: text, formatted: formatted, sessionID: sessionID, keepCopy: keepCopy)
+        var saved: [[NSPasteboard.PasteboardType: Data]]?
         if !keepCopy {
-            let before = pasteboard.changeCount
-            guard let snapshot = PasteboardSnapshot.capture(pasteboard), pasteboard.changeCount == before else {
+            let count = pasteboard.changeCount
+            guard let snapshot = PasteboardSnapshot.capture(pasteboard), pasteboard.changeCount == count else {
                 return .savedToHistory(.clipboard)
             }
             saved = snapshot
@@ -285,35 +836,87 @@ final class TextInjector: TextInjecting {
                 _ = PasteboardSnapshot.restoreIfOwned(saved, to: pasteboard, change: change, session: sessionID)
             }
         }
-        try? await Task.sleep(nanoseconds: UInt64(Self.prePasteDelay * 1_000_000_000))
+        let started = PersonInput.now()
         let owned = PasteboardSnapshot.isOwned(pasteboard, change: change, session: sessionID)
-        let lateBlock: InsertionBlock? = Task.isCancelled ? .cancelled
-            : SecureInput.isEnabled ? .secureInput
-            : targetBlock() ?? (owned ? nil : .clipboard)
-        if let lateBlock {
-            return keepCopy && owned ? .leftOnClipboard : .savedToHistory(lateBlock)
+        let block: InsertionBlock? = Task.isCancelled ? .cancelled
+            : extraBlock() ?? InsertionGuard.block(check.facts(since: started)) ?? (owned ? nil : .clipboard)
+        if let block {
+            ReasonLog.note("paste refused:", block)
+            return keepCopy && owned ? .leftOnClipboard : .savedToHistory(block)
         }
-        let expected: String? = {
-            guard let value = originalValue, let range = originalSelection, range.location >= 0,
-                  range.length >= 0, range.location <= (value as NSString).length,
-                  range.length <= (value as NSString).length - range.location else { return nil }
-            return (value as NSString).replacingCharacters(in: NSRange(location: range.location, length: range.length), with: insertion.text)
-        }()
-        await postPaste()
-        // Unreadable Electron fields have no public paste-completion acknowledgment.
-        // Give asynchronous readers a bounded 0.5s before best-effort restoration.
-        // Once a paste is queued, cancellation must not shorten that grace period.
-        for _ in 0..<(keepCopy ? 20 : 10) {
-            if let field = targetField, let expected,
-               attribute(field, kAXValueAttribute) as? String == expected { return .pasted }
+        SyntheticKeys.paste()
+        // Unreadable fields (some Electron views) have no paste-completion
+        // acknowledgment: they get a bounded grace period before the clipboard
+        // goes back. Once a paste is queued, cancellation must not shorten it.
+        let reads = keepCopy ? 30 : 20
+        for _ in 0..<reads {
+            if EditorPlaceholder.landed(read(), expected: expected, start: before, startedAsPlaceholder: placeholderStart) { return .pasted }
             if !PasteboardSnapshot.isOwned(pasteboard, change: change, session: sessionID) { return .unconfirmed }
             await withCheckedContinuation { continuation in
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { continuation.resume() }
             }
         }
-        if let field = targetField, let expected,
-           attribute(field, kAXValueAttribute) as? String == expected { return .pasted }
+        let now = read()
+        if EditorPlaceholder.landed(now, expected: expected, start: before, startedAsPlaceholder: placeholderStart) { return .pasted }
+        // A field that held text (or a placeholder) and still reads exactly as before took nothing.
+        if let before, !before.isEmpty, EditorPlaceholder.same(now, before, startedAsPlaceholder: false) {
+            ReasonLog.note("the paste went out and the field still reads as before")
+            return .savedToHistory(.notTaken)
+        }
         return .unconfirmed
+    }
+
+    /// The end of a take with typed live words: pFlow's own words are selected
+    /// (no keys). The finished text is pasted over them, the checked way, only
+    /// while the selection is still exactly pFlow's words and the person has
+    /// not pressed a key or clicked since the select; then read back. Any
+    /// doubt ends the selection without a key and the card offers the text.
+    #if DEBUG
+    /// Self-test hook: runs right after pFlow selected its own words, before the replace checks.
+    static var afterOwnSelect: (() -> Void)?
+    #endif
+
+    func insertOverSelection(_ text: String, own: OwnedWords, formatted: NSAttributedString?) async -> InjectionOutcome {
+        #if DEBUG
+        Self.afterOwnSelect?()
+        #endif
+        guard !delivering else { own.collapse(); return .savedToHistory(.selectionChanged) }
+        delivering = true
+        defer { delivering = false }
+        func refuse(_ block: InsertionBlock) -> InjectionOutcome {
+            ReasonLog.note("the finished text did not go over own words:", block)
+            own.collapse()
+            return .savedToHistory(block)
+        }
+        guard AXIsProcessTrusted() else { return refuse(.accessibilityOff) }
+        guard let targetApp, let targetField, let check = targetCheck() else { return refuse(.appChanged) }
+        let reader = AXLiveTextField(pid: targetApp.processIdentifier, element: targetField, plainSpaces: true,
+                                     bundleID: targetApp.bundleIdentifier, placeholder: placeholder)
+        let now = reader.state()
+        if let why = own.mismatch(value: now.value, selection: now.selection) {
+            _ = why
+            ReasonLog.note("replace refused: own words no longer selected as left")
+            return refuse(.selectionChanged)
+        }
+        guard let value = now.value else { return refuse(.selectionChanged) }
+        let styled = formatted.flatMap { $0.string == text ? $0 : nil }
+        let replacement = styled == nil ? text.trimmingCharacters(in: .whitespacesAndNewlines) : text
+        let expected = (value as NSString).replacingCharacters(in: own.range, with: replacement)
+        let keepCopy = copyToClipboard()
+        let outcome = await checkedPaste(replacement, formatted: styled, keepCopy: keepCopy, sessionID: UUID().uuidString,
+                                         expected: expected, before: value, check: check, extraBlock: {
+            let state = reader.state()
+            if own.mismatch(value: state.value, selection: state.selection) != nil { return .selectionChanged }
+            return own.personActed() ? .personActed : nil
+        }, read: { reader.state().value })
+        switch outcome {
+        case .savedToHistory, .leftOnClipboard, .blockedBySecureInput:
+            own.collapse()
+            if case .savedToHistory(let block) = outcome { return .savedToHistory(block) }
+            return .savedToHistory(.selectionChanged)
+        default:
+            return outcome
+        }
     }
 
     /// Replaces the clipboard with `prepared`. Returns the new change count, or
@@ -330,72 +933,17 @@ final class TextInjector: TextInjecting {
         return pasteboard.changeCount
     }
 
-    /// System Events (via Apple Events) is the only route that proved reliable
-    /// across native, Electron and web apps alike; synthetic key events remain a
-    /// fallback for when automation is unavailable.
-    private func postPaste() async {
-        if pasteViaAppleScript() { return }
-        NSLog("pFlow: AppleScript paste unavailable, falling back to synthetic key events")
-        await postSyntheticPaste()
-    }
+    /// The person's stop key (Right Command, a ⌘⇧ shortcut) may still be held
+    /// when the text is due: up to `keyWait` for every modifier, key and
+    /// button to be released, before the final paste and before the end
+    /// replace selects pFlow's words. The checks after it still refuse a key
+    /// held longer.
+    static let keyWait: TimeInterval = 0.6
 
-    /// Posts a full ⌘V as four events (Command down, V down, V up, Command up).
-    /// A lone V with `.maskCommand` works for native apps, but Chromium/Electron
-    /// rebuilds modifier state from the raw event stream and needs a genuine
-    /// Command keyDown or the paste silently does nothing.
-    private func postSyntheticPaste() async {
-        // A private source has its own modifier state, so nothing ambient can
-        // bleed into the events we create.
-        guard let source = CGEventSource(stateID: .privateState) else { return }
-        source.setLocalEventsFilterDuringSuppressionState(
-            [.permitLocalMouseEvents, .permitSystemDefinedEvents],
-            state: .eventSuppressionStateSuppressionInterval
-        )
-
-        let commandFlags = CGEventFlags(
-            rawValue: CGEventFlags.maskCommand.rawValue | Self.deviceLeftCommand
-        )
-        let commandKey = CGKeyCode(kVK_Command)
-        let vKey = CGKeyCode(kVK_ANSI_V)
-
-        func post(_ key: CGKeyCode, down: Bool, flags: CGEventFlags) {
-            guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down)
-            else { return }
-            event.flags = flags
-            // The HID tap is where hardware events enter the window server, so
-            // Chromium treats the sequence as genuine typing.
-            event.post(tap: .cghidEventTap)
-        }
-
-        let step: UInt64 = 10_000_000
-
-        post(commandKey, down: true, flags: commandFlags)
-        try? await Task.sleep(nanoseconds: step)
-        post(vKey, down: true, flags: commandFlags)
-        try? await Task.sleep(nanoseconds: step)
-        post(vKey, down: false, flags: commandFlags)
-        try? await Task.sleep(nanoseconds: step)
-        post(commandKey, down: false, flags: [])
-    }
-
-    private func pasteViaAppleScript() -> Bool {
-        let source = "tell application \"System Events\" to keystroke \"v\" using command down"
-        guard let script = NSAppleScript(source: source) else { return false }
-        var error: NSDictionary?
-        script.executeAndReturnError(&error)
-        if let error {
-            NSLog("pFlow: AppleScript paste failed: \(error)")
-            return false
-        }
-        return true
-    }
-
-    private func waitForModifiersToClear(timeout: TimeInterval = 0.6) async {
-        let deadline = Date().addingTimeInterval(timeout)
-        let watched: NSEvent.ModifierFlags = [.command, .shift, .option, .control, .function]
-
+    func waitForKeysToClear() async {
+        let deadline = Date().addingTimeInterval(Self.keyWait)
         while Date() < deadline {
-            if NSEvent.modifierFlags.intersection(watched).isEmpty { return }
+            if !PersonInput.modifiersHeld() && !PersonInput.somethingHeld() { return }
             try? await Task.sleep(nanoseconds: 15_000_000)
         }
     }

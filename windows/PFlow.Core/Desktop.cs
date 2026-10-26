@@ -28,13 +28,14 @@ public static class InsertionPrompt
         ("Clipboard restore was blocked.", "The words went in, but your old clipboard could not be put back."),
         ("Kept in History. Recognition stopped before it finished, so nothing was typed.", "Recognition stopped before it finished, so nothing was typed."),
         ("Click in the app where the words should go", "The cursor was in pFlow's own window. Click where the words should go, then dictate."),
+        ("The clipboard is busy.", "Another app was holding the clipboard, so pFlow did not paste."),
     ];
 
     /// Outcomes where the words were sent into the app: inserted and checked,
-    /// typed without a check, or pasted but not confirmed. The words are most
+    /// typed or pasted without a check, or pasted but not confirmed. The words are most
     /// likely there, so a card offering them again would have the person put
     /// them in twice.
-    static readonly string[] WentIn = ["Inserted", "Typed into the app", "Insertion could not be confirmed", "Clipboard restore was blocked"];
+    static readonly string[] WentIn = ["Inserted", "Typed into the app", "Pasted into the app", "Insertion could not be confirmed", "Clipboard restore was blocked"];
 
     /// True when a take's outcome needs the card: nothing was sent into the
     /// app. Never for words that went in, checked or not, nor for words typed live and kept.

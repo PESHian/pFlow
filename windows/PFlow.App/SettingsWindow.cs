@@ -13,7 +13,7 @@ internal sealed partial class SettingsWindow : Window
     readonly Func<bool> busy;
     readonly Action? checkUpdates;
     Action? cancelKeySelection;
-    DownloadControl textDownload = null!, whisperDownload = null!;
+    DownloadControl textDownload = null!;
     readonly TextBlock modelStatus = Text("");
     readonly TextBlock processingTime = Text("Processing time appears here after your next dictation.");
     readonly ContentControl page = new() { HorizontalContentAlignment = HorizontalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Stretch };
@@ -34,8 +34,8 @@ internal sealed partial class SettingsWindow : Window
         canvas.Children.Add(glow); canvas.Children.Add(blend); canvas.Children.Add(page); Content = canvas;
         home = Scroll(General()); ShowHome(); ApplyTheme(); SourceInitialized += (_, _) => ApplyTheme();
         processingTime.Text = ProcessingTimes.Read(store.DirectoryPath);
-        var timingRefresh = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(1), System.Windows.Threading.DispatcherPriority.Background, (_, _) => { if (IsVisible && !busy()) processingTime.Text = ProcessingTimes.Read(store.DirectoryPath); }, Dispatcher);
-        Closed += (_, _) => { textDownload?.Cancel(); whisperDownload?.Cancel(); timingRefresh.Stop(); };
+        var timingRefresh = new System.Windows.Threading.DispatcherTimer(TimeSpan.FromSeconds(1), System.Windows.Threading.DispatcherPriority.Background, (_, _) => { if (IsVisible && !busy()) { processingTime.Text = ProcessingTimes.Read(store.DirectoryPath); } }, Dispatcher);
+        Closed += (_, _) => { textDownload?.Cancel(); timingRefresh.Stop(); };
     }
     static StackPanel Panel() => new() { Margin = new Thickness(20) };
     static TextBlock Text(string value) => new() { Text = value, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 5), LineHeight = 19 };
@@ -64,7 +64,12 @@ internal sealed partial class SettingsWindow : Window
             if (parent is ScrollViewer page && ScrollViewer.GetPanningMode(page) != PanningMode.None) return page;
         return null;
     }
-    internal static ScrollViewer Scroll(UIElement content) => Pannable(new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = content });
+    /// A page: scrolls by pixel (SmoothScroll) with the wheel, by touch with Pannable.
+    internal static ScrollViewer Scroll(UIElement content)
+    {
+        var page = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Content = content };
+        SmoothScroll.Attach(page); return Pannable(page);
+    }
     /// History is built fresh each time it opens, so it always shows the latest takes.
     internal void OpenHistoryPage() => ShowPage("View history", History, false);
     void ShowHome() { cancelKeySelection?.Invoke(); page.Content = home; }
@@ -205,11 +210,11 @@ internal sealed partial class SettingsWindow : Window
         Check(p, "Quiet start and stop sounds", store.Preferences.Sounds, x => store.Preferences.Sounds = x);
         Check(p, "Group long narrations into paragraphs", store.Preferences.Paragraphs, x => store.Preferences.Paragraphs = x);
         Check(p, "Clean up dictation (English)", store.Preferences.Cleanup, x => store.Preferences.Cleanup = x);
-        p = Section(root, "Local intelligence");
+        p.Children.Add(Text("Cleanup removes filler words and fixes capitals and spacing right away. Other languages keep their recognized words."));
+        p = Section(root, "Report templates (optional)");
         if (textModel.Supported) {
-        Check(p, "Use the local text model for reports and optional AI cleanup", store.Preferences.UseLocalAI, x => store.Preferences.UseLocalAI = x);
-        Check(p, "AI cleanup (slower, English)", store.Preferences.UseAICleanup, x => store.Preferences.UseAICleanup = x);
-        p.Children.Add(Text("English cleanup removes filler words immediately. Other languages keep their recognized words. AI cleanup is optional and English only: the local text model adds sentences, commas and capitals and keeps every word and number as spoken; it can take about as long as the recording. When it cannot finish, your words are kept as recognized and the processing line below says so. Reports use your sentences."));
+        Check(p, "Use the local text model for report templates", store.Preferences.UseLocalAI, x => store.Preferences.UseLocalAI = x);
+        p.Children.Add(Text("A report template with its own sections uses the local text model to sort your sentences into them; it keeps every word as spoken. Plain dictation and full narrative templates never use it."));
         modelStatus.Text = textModel.Status; p.Children.Add(modelStatus);
         textDownload = new DownloadControl("Text model", LocalTextModel.Current.Size, () => textModel.CurrentInstalled, textModel.Download, Blocked, () => modelStatus.Text = textModel.Status); p.Children.Add(textDownload);
         } else p.Children.Add(Text(LocalTextModel.UnsupportedReason));
@@ -221,15 +226,21 @@ internal sealed partial class SettingsWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(language, "Speech language");
         language.SelectionChanged += (_, _) => { if (language.SelectedValue is string value) { store.Preferences.Language = value; store.SavePreferences(); } };
         p.Children.Add(language);
+        // One speech model, in every package: named here, nothing to choose or download.
+        var speechModel = Text(SpeechModels.SettingsLine); System.Windows.Automation.AutomationProperties.SetName(speechModel, SpeechModels.SettingsLine); p.Children.Add(speechModel);
+        if (whisper.OwnCopyNote is { } ownCopy) { var note = Text(ownCopy); note.FontSize = 12; note.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); p.Children.Add(note); }
         p.Children.Add(processingTime);
         p.Children.Add(Text($"Microphone devices: {WaveRecorder.waveInGetNumDevs()}. Windows microphone access must allow desktop apps."));
-        whisperDownload = new DownloadControl("Whisper model", Whisper.ModelBytes, () => whisper.ModelPresent, whisper.Download, Blocked); p.Children.Add(whisperDownload);
         p = Section(root, "General");
         using (var run = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run"))
             Check(p, "Launch pFlow when I sign in", run?.GetValue("pFlow by Pesh") != null, SetStartup);
         p = Section(root, "Updates"); p.Children.Add(Text("pFlow " + UpdateWindow.CurrentVersion + " · " + whisper.EngineDescription));
         p.Children.Add(Button("Check for updates", () => this.checkUpdates?.Invoke()));
         p.Children.Add(Text("Checks GitHub only when you ask. Settings and History are kept during updates."));
+        p = Section(root, "Troubleshooting"); p.Children.Add(Text(DiagnosticReport.Explanation));
+        var reportSaved = Text(""); reportSaved.FontSize = 12; reportSaved.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); reportSaved.Visibility = Visibility.Collapsed;
+        p.Children.Add(Button(DiagnosticReport.ButtonLabel, () => { reportSaved.Text = DiagnosticReport.Save(whisper, store, keyboard.ActivationKey); reportSaved.Visibility = Visibility.Visible; }));
+        p.Children.Add(reportSaved);
         p = Section(root, "Privacy"); p.Children.Add(Text("Recordings are deleted after processing. Settings and History stay in your Windows user folder. Model downloads need the internet; recording and transcription do not. No cloud model or account is used."));
         return root;
     }
@@ -290,7 +301,12 @@ internal sealed partial class SettingsWindow : Window
         var empty = Text("No dictations yet. Your takes appear here."); empty.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); empty.Margin = new Thickness(10, 8, 10, 8); empty.VerticalAlignment = VerticalAlignment.Top;
         var text = Pannable(new TextBox { AcceptsReturn = true, IsReadOnly = true, TextWrapping = TextWrapping.Wrap, MinHeight = 120, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }); System.Windows.Automation.AutomationProperties.SetName(text, "Dictation text");
         var result = Text(""); result.FontSize = 12; result.SetResourceReference(TextBlock.ForegroundProperty, "PeshMuted"); result.Margin = new Thickness(0, 8, 0, 8);
-        var copy = Button("Copy", () => { if (list.SelectedItem is ListBoxItem { Tag: Transcript t }) Clipboard.SetText(t.Text); }); copy.Margin = new Thickness(0, 0, 10, 0); copy.IsEnabled = false;
+        // Through the one clipboard write (ClipboardLease): private to clipboard history and the cloud clipboard.
+        var copy = Button("Copy", () => {
+            if (list.SelectedItem is not ListBoxItem { Tag: Transcript t }) return;
+            try { ClipboardLease.KeepCopy(new System.Windows.Interop.WindowInteropHelper(this).Handle, t.Text); }
+            catch (Exception error) when (error is InvalidOperationException or OutOfMemoryException) { InsertionLog.Record("history copy failed: " + error.Message); }
+        }); copy.Margin = new Thickness(0, 0, 10, 0); copy.IsEnabled = false;
         var delete = Button("Delete", () => { }); delete.Margin = new Thickness(0); delete.IsEnabled = false;
         void Refresh() {
             list.Items.Clear();

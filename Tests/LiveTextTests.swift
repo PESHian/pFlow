@@ -174,7 +174,8 @@ struct LiveTextTests {
         mode = .off
         session.emit("shown still")
         await coordinator.finish()
-        #expect(hud.previews == [false, false])
+        // Type mode with no field to type into: pFlow's own preview shows the words.
+        #expect(hud.previews == [false, true])
         #expect(hud.partials == ["shown", "shown still"])
     }
 
@@ -192,7 +193,7 @@ struct LiveTextTests {
                 #expect(injector.delivered.isEmpty)
             }
             await coordinator.finish()
-            #expect(hud.previews == [false])
+            #expect(hud.previews == [true], "no live field: the words show in pFlow's own preview")
             #expect(injector.delivered == ["hello world"], "\(mode)")
             #expect(history.saved.count == 1, "\(mode)")
         }
@@ -228,6 +229,8 @@ struct LiveTextTests {
             #expect(history.saved == [expected!])
             #expect(injector.delivered.isEmpty)
             #expect(hud.phases.last == .liveTextKept)
+            #expect(hud.reasons.last == RecordingCoordinator.keptNote)
+            #expect(hud.offers.last == expected, "the kept words are offered on the card")
             #expect(coordinator.state == .idle)
         }
         // Nothing was recognized: nothing to keep, nothing saved.
@@ -389,15 +392,121 @@ struct LiveTextTests {
         #expect(hud.model.reason == nil && hud.model.copyOffer == nil)
     }
 
+    /// The capsule is one low pill (70x22 pt) in every phase;
+    /// a status after the take is an icon, its words on the card.
+    @Test func capsuleIsThePillSizeWhileRecordingAndFinishing() throws {
+        #expect(RecordingHUDView.capsuleSize == CGSize(width: 70, height: 22))
+        for phase in [HUDPhase.listening, .confirmCancel, .transcribing, .cleaning] {
+            for style in WaveformStyle.allCases {
+                let model = HUDModel()
+                model.phase = phase
+                model.waveformStyle = style
+                model.levels = (0..<HUDModel.waveformSampleCount).map { Float($0 % 5) / 5 }
+                let host = NSHostingView(rootView: RecordingHUDView(model: model))
+                #expect(host.fittingSize == NSSize(width: 70, height: 22), "\(phase) \(style): \(host.fittingSize)")
+            }
+        }
+        for phase in [HUDPhase.copied, .pasteUnconfirmed, .savedToHistory, .failed, .liveTextKept, .liveTextKeptTyped,
+                      .passwordField, .typingStopped, .typedTextLeft] {
+            let model = HUDModel()
+            model.phase = phase
+            let host = NSHostingView(rootView: RecordingHUDView(model: model))
+            #expect(host.fittingSize == NSSize(width: 70, height: 22), "one size, an icon at most: \(phase): \(host.fittingSize)")
+        }
+    }
+
+    /// A card with only a reason (password field, recording did not start,
+    /// cancelled) is one compact row sized to its sentence, with close; a
+    /// card with words keeps the words, Copy and close.
+    @Test func aReasonOnlyCardIsOneCompactRowWithClose() {
+        let model = HUDModel()
+        model.livePreview = true
+        model.phase = .passwordField
+        model.reason = RecordingCoordinator.passwordNote
+        var closed = false
+        model.onClose = { closed = true }
+        let host = NSHostingView(rootView: RecordingHUDView(model: model))
+        #expect(host.fittingSize.height <= 56, "one row: \(host.fittingSize)")
+        let withWords = HUDModel()
+        withWords.livePreview = true
+        withWords.phase = .liveTextKept
+        withWords.reason = RecordingCoordinator.keptNote
+        withWords.partial = "Seven blue kites drift over the dunes."
+        withWords.copyOffer = withWords.partial
+        #expect(NSHostingView(rootView: RecordingHUDView(model: withWords)).fittingSize.height > 90)
+        model.onClose?()
+        #expect(closed)
+        #expect(!RecordingCoordinator.keptNote.contains("History"), "History is named once, in the card's footer")
+    }
+
+    /// The reason-only card's close button, clicked, hides the panel.
+    @Test func aReasonOnlyCardClosesWithItsCloseButton() throws {
+        let hud = HUDController(pasteboard: NSPasteboard(name: .init("pflow.close.tests.\(UUID().uuidString)")))
+        hud.show(device: nil, livePreview: false)
+        hud.setLivePreview(true)
+        hud.setPhase(.passwordField)
+        hud.setReason(RecordingCoordinator.passwordNote)
+        let panel = try #require(hud.panelForTesting)
+        panel.reposition()
+        panel.contentView?.layoutSubtreeIfNeeded()
+        panel.displayIfNeeded()
+        #expect(panel.isVisible)
+        // The × sits at the row's trailing end, inside the card's padding.
+        let size = try #require(panel.contentView).bounds.size
+        let point = NSPoint(x: size.width - Theme.s4 - 9, y: size.height / 2)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = try #require(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                        windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            panel.sendEvent(event)
+        }
+        #expect(!panel.isVisible, "Close hides the card")
+    }
+
+    /// A status after the take shows only its icon in the capsule; its words
+    /// are on the card (Press ⌘V) or in the tooltip.
+    @Test func aStatusInTheCapsuleIsAnIconWithoutWords() {
+        let mark = NSHostingView(rootView: RecordingHUDView.statusMark("Press ⌘V", "doc.on.clipboard"))
+        #expect(mark.fittingSize.width <= 24, "an icon, no words: \(mark.fittingSize)")
+    }
+
+    /// The capsule draws the Appearance picker's own waveform for the person's
+    /// style, in their colours, at the picker's density: "Lines" is symmetric
+    /// thin bars with dots where it is quiet, "Wave" a smooth mirrored envelope.
+    /// No jagged trace.
+    @Test func capsuleDrawsWhatThePickerShows() {
+        let model = HUDModel()
+        model.waveformStyle = .lines
+        model.palette = ThemePalette(primary: ThemeColor(hex: "AAAAAA")!, secondary: ThemeColor(hex: "AAAAAA")!)
+        model.levels = (0..<HUDModel.waveformSampleCount).map { Float($0 % 5) / 5 }
+        let wave = RecordingHUDView.capsuleWaveformView(model)
+        #expect(wave.style == .lines && wave.palette == model.palette && wave.size == RecordingHUDView.capsuleWaveform)
+        // 25 samples per 100 pt in the picker: 12 across the capsule's 46 pt.
+        #expect(wave.shownLevels.count == 12)
+        let newest = Array(model.levels.suffix(12))
+        #expect(Array(wave.shownLevels[3..<9]) == Array(newest[3..<9]), "the newest levels")
+        #expect(wave.shownLevels.first! <= newest.first! * 0.12 && wave.shownLevels.last! <= newest.last! * 0.12,
+                "quiet at both ends, as the thumbnail")
+        let rect = CGRect(origin: .zero, size: RecordingHUDView.capsuleWaveform)
+        let quiet = WaveformLines.bars(AudioLevel.waveformLevels(Array(repeating: 0, count: 12)), in: rect)
+        #expect(quiet.count == 12 && quiet.allSatisfy { $0.height == 1.2 }, "quiet is a row of dots")
+        let voice = WaveformLines.bars(AudioLevel.waveformLevels(wave.shownLevels), in: rect)
+        #expect(voice.allSatisfy { abs($0.midY - rect.midY) < 0.001 }, "every bar symmetric about the middle")
+        #expect(voice.allSatisfy { $0.width <= 2 }, "thin bars")
+        model.waveformStyle = .wave
+        #expect(RecordingHUDView.capsuleWaveformView(model).style == .wave)
+        let outline = WaveformOutline(levels: AudioLevel.waveformLevels(wave.shownLevels)).path(in: rect).boundingRect
+        #expect(abs(outline.midY - rect.midY) < 0.01, "the wave is mirrored about the middle")
+        #expect(RecordingWaveform(levels: [], style: .lines).frame == RecordingWaveform.thumbnailSize, "the picker keeps its size")
+    }
+
     /// The panel is measured again when the card's content changes after it
     /// is on screen: the whole text and the Grant row make it taller, and it
-    /// stays inside the screen. The capsule keeps 96x26 in every phase.
+    /// stays inside the screen. The capsule keeps 70x22 in every phase.
     @Test func panelGrowsWithTheCopyCardAndStaysOnScreen() throws {
         let hud = HUDController(pasteboard: NSPasteboard(name: .init("pflow.panel.tests.\(UUID().uuidString)")))
         hud.show(device: nil, livePreview: false)
         let panel = try #require(hud.panelForTesting)
         hud.setPhase(.copied)
-        panel.reposition()
         #expect(panel.frame.size == NSSize(width: RecordingHUDView.capsuleSize.width, height: RecordingHUDView.capsuleSize.height),
                 "the capsule is one size in every phase: \(panel.frame.size)")
         hud.setLivePreview(true)

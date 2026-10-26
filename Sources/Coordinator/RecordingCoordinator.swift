@@ -66,8 +66,7 @@ final class RecordingCoordinator {
         injector.captureTarget()
         guard !injector.targetIsSecure else {
             hud.show(device: nil, livePreview: false)
-            hud.setPhase(.passwordField)
-            hud.hide(after: 2)
+            explain(.passwordField, Self.passwordNote, text: nil)
             return
         }
         applicationName = injector.targetApplicationName
@@ -89,13 +88,17 @@ final class RecordingCoordinator {
         // Grant row still says Accessibility), and the card shows the
         // words with the note and the Grant button from the first word.
         var liveNote: String?
+        // Type mode, but the words cannot go into the field: pFlow's own preview shows them.
+        var previewWords = false
         typingLive = false
         takeAccessibilityOff = !injector.accessibilityGranted
         if takeAccessibilityOff {
-            NSLog("pFlow: Accessibility is off for this build; words cannot be typed or pasted this take")
+            ReasonLog.note("take start:", InsertionBlock.accessibilityOff)
         }
         if takeLiveTextMode == .typeInApp, !takeAccessibilityOff {
-            switch injector.beginLive(session: take) {
+            let start = injector.beginLive(session: take)
+            ReasonLog.note("live typing start:", start)
+            switch start {
             case .typing:
                 typingLive = true
                 liveNote = "Typing in \(applicationName ?? "this app")"
@@ -106,6 +109,7 @@ final class RecordingCoordinator {
                 retryTyping(take: take)
             case .preview(let stop):
                 liveNote = stop.previewNote
+                previewWords = true
             }
         }
         let accessibilityCard = takeAccessibilityOff && takeLiveTextMode.showsPreview
@@ -113,7 +117,7 @@ final class RecordingCoordinator {
         pauseCapture(false)
         sounds.playStart()
         hud.show(device: recordingDevice,
-                 livePreview: takeLiveTextMode.showsCard(typingLive: typingLive || awaitingTyping) || accessibilityCard)
+                 livePreview: takeLiveTextMode.showsCard(typingLive: typingLive || awaitingTyping) || accessibilityCard || previewWords)
         hud.setPhase(.listening)
         if takeAccessibilityOff { hud.setNeedsAccessibility(true) }
         if let liveNote { hud.setLiveNote(liveNote) }
@@ -122,18 +126,27 @@ final class RecordingCoordinator {
             do { try await self.session.start(take: take, live: self.takeLiveTextMode.showsPreview) }
             catch {
                 NSLog("pFlow: failed to start recording: \(error)")
+                ReasonLog.note("take ended: recording could not start")
+                #if DEBUG
+                self.lastStartError = "\(error)"
+                #endif
                 self.transcript.cancel()
                 self.stopAwaitingTyping()
                 self.leaveLiveTyping()
                 _ = try? await self.session.stop()
-                self.hud.setPhase(.failed)
-                self.hud.hide(after: 2)
+                self.explain(.failed, Self.startFailedNote, text: nil)
                 self.state = .idle
             }
         }
     }
 
     static let needsAccessibilityNote = "pFlow needs Accessibility to type"
+    static let onClipboardNote = "Your words are on the clipboard. Press ⌘V to paste them."
+
+    #if DEBUG
+    /// The Debug harness reads why a take could not start (VM only, no words in it).
+    var lastStartError: String?
+    #endif
 
     func finish() async {
         guard state == .recording else { return }
@@ -160,14 +173,23 @@ final class RecordingCoordinator {
         guard typingLive, state == .recording, let take else { return }
         if let stop = injector.reconcileLive(session: take, transcript: transcript.text) {
             showCard(note: stop.stoppedNote)
+        } else if injector.liveHeldBack(session: take) {
+            showCard(note: Self.heldBackNote)
         }
     }
 
     /// Typing in the app ended for this take. The capsule stays; the finished
     /// words go in at the end, or the Copy card offers them.
     private func showCard(note: String) {
+        // The words show in pFlow's own floating preview, since they are not going into the app now.
+        if takeLiveTextMode == .typeInApp, state == .recording {
+            hud.setLivePreview(true)
+            hud.setPartial(transcript.text)
+        }
         hud.setLiveNote(note)
     }
+
+    static let heldBackNote = "Words show here while the key is down"
 
     /// Looks for the field again, every `typingRetryEvery`, until the app has
     /// built its tree, something rules typing out, or `typingRetryDeadline`
@@ -178,7 +200,9 @@ final class RecordingCoordinator {
             while !Task.isCancelled {
                 try? await Task.sleep(for: self?.typingRetryEvery ?? .milliseconds(100))
                 guard let self, !Task.isCancelled, self.awaitingTyping, self.state == .recording, self.take == take else { return }
-                switch self.injector.retryLive(session: take) {
+                let retried = self.injector.retryLive(session: take)
+                if retried != .waiting { ReasonLog.note("live typing start after waiting:", retried) }
+                switch retried {
                 case .waiting where self.clock() < deadline:
                     continue
                 case .waiting:
@@ -201,6 +225,7 @@ final class RecordingCoordinator {
     }
 
     private func stopAwaitingTyping() {
+        if awaitingTyping, let take { injector.abandonLive(session: take) }
         typingRetryTask?.cancel()
         typingRetryTask = nil
         awaitingTyping = false
@@ -220,8 +245,7 @@ final class RecordingCoordinator {
         if leaveLiveTyping() {
             hud.hide(after: 0)
         } else {
-            hud.setPhase(.typedTextLeft)
-            hud.hide(after: 4)
+            explain(.typedTextLeft, Self.typedLeftNote, text: nil)
         }
     }
 
@@ -418,11 +442,21 @@ final class RecordingCoordinator {
             var typingStopped = false
             if typingLive, let take {
                 typingLive = false
+                // The stop key may still be held: selecting pFlow's words and the
+                // paste over them wait for it, as the plain paste does.
+                await injector.waitForKeysToClear()
                 // Plain text replaces the provisional words once. Accessibility
                 // cannot set styles, so template formatting arrives as plain text.
-                switch injector.finalizeLive(session: take, text: text) {
+                let inputMethodFinal = await injector.finishInputMethod(session: take, text: text)
+                switch inputMethodFinal ?? injector.finalizeLive(session: take, text: text) {
                 case .applied: outcome = .pasted
+                case .unconfirmed: outcome = .unconfirmed
                 case .notTyped: outcome = await injector.deliver(text, formatted: formattedText)
+                case .replace(let own):
+                    // pFlow's own typed words are selected: the finished text goes over them, or,
+                    // if anything is in doubt, they stay and the card offers the finished text.
+                    outcome = await injector.insertOverSelection(text, own: own, formatted: formattedText)
+                    if case .savedToHistory = outcome { typingStopped = true }
                 case .kept(let stop):
                     outcome = .savedToHistory(.typingStopped(stop))
                     typingStopped = true
@@ -431,10 +465,7 @@ final class RecordingCoordinator {
                 outcome = await injector.deliver(text, formatted: formattedText)
             }
             lastOutcome = outcome
-            NSLog("pFlow: insertion result: \(outcome)")
-            if case .blockedBySecureInput(let holder) = outcome {
-                NSLog("pFlow: paste blocked by secure input held by \(holder ?? "another app"); text left on clipboard")
-            }
+            ReasonLog.note("insertion result:", outcome)
 
             history.save(text: text, duration: duration, device: recordingDevice,
                          spokenWordCount: spokenWordCount, applicationName: applicationName,
@@ -471,8 +502,13 @@ final class RecordingCoordinator {
                 if block == .accessibilityOff { hud.setNeedsAccessibility(true) }
                 hud.offerCopy(text)
             case .leftOnClipboard, .blockedBySecureInput:
+                // The words wait on the clipboard: the card says so (the
+                // capsule is one size and shows at most an icon).
+                hud.setLivePreview(true)
+                hud.setPartial(text)
                 hud.setPhase(.copied)
-                hud.hide(after: 3)
+                hud.setReason(Self.onClipboardNote)
+                hud.offerCopy(text)
             }
             noteAccessibilityIfMissing()
         } catch {
@@ -510,7 +546,29 @@ final class RecordingCoordinator {
                      spokenWordCount: kept.split(whereSeparator: \.isWhitespace).count,
                      applicationName: applicationName, applicationBundleID: applicationBundleID)
         let typed = take.map { injector.typedLive(session: $0) } ?? false
-        hud.setPhase(typed ? .liveTextKeptTyped : .liveTextKept)
-        hud.hide(after: 4)
+        explain(typed ? .liveTextKeptTyped : .liveTextKept, typed ? Self.keptTypedNote : Self.keptNote, text: kept)
     }
+
+    /// pFlow did not put the text in: the card says why in one plain sentence
+    /// and offers the words when there are any (it stays until closed or the
+    /// next take); with nothing to copy it goes after a few seconds. The
+    /// capsule itself only ever shows an icon.
+    private func explain(_ phase: HUDPhase, _ reason: String, text: String?) {
+        hud.setLivePreview(true)
+        hud.setPhase(phase)
+        hud.setReason(reason)
+        if let text, !text.isEmpty {
+            hud.setPartial(text)
+            hud.offerCopy(text)
+        } else {
+            hud.hide(after: Self.noteSeconds)
+        }
+    }
+
+    static let noteSeconds: Double = 6
+    static let passwordNote = "That's a password field, so pFlow didn't type there."
+    static let startFailedNote = "pFlow couldn't start recording, so nothing was typed."
+    static let typedLeftNote = "Cancelled. The words pFlow already typed are still in the app."
+    static let keptNote = "pFlow stopped listening early, so nothing was typed."
+    static let keptTypedNote = "pFlow stopped listening early. The words it already typed stay in the app."
 }

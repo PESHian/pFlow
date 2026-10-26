@@ -15,16 +15,19 @@ final class PermissionsManager {
     var microphone: Status = .notDetermined
     var speech: Status = .notDetermined
     var accessibility: Bool = false
-    var automation: Status = .notDetermined
     var requiresSpeechRecognition = true
     /// What the last Accessibility Grant press did, for the hint under the step.
     var accessibilityGrant: AccessibilityGrantOutcome?
     private var pollTimer: Timer?
+    /// The key and click watch that follows the grant; tests pass their own.
+    var watch: PersonInput = .shared
+    /// The Accessibility trust check; tests pass their own.
+    var trustCheck: () -> Bool = { AXIsProcessTrusted() }
 
     init() {}
 
-    /// What one press of Grant does for Microphone, Speech Recognition and
-    /// Automation: Apple's own prompt while undecided, the System Settings
+    /// What one press of Grant does for Microphone and Speech Recognition:
+    /// Apple's own prompt while undecided, the System Settings
     /// pane once refused, nothing once granted. Never both at once.
     enum GrantPath: Equatable { case prompt, openSettings, nothing }
 
@@ -119,12 +122,6 @@ final class PermissionsManager {
         await grant(speech, prompt: prompt ?? requestSpeech, open: open ?? { Self.openPrivacyPane(.speechRecognition) })
     }
 
-    /// One Grant press for Automation: the prompt while undecided, the pane
-    /// once it was denied.
-    func grantAutomation(prompt: (() async -> Void)? = nil, open: (() -> Void)? = nil) async {
-        await grant(automation, prompt: prompt ?? requestAutomation, open: open ?? openAutomationSettings)
-    }
-
     private func grant(_ status: Status, prompt: () async -> Void, open: () -> Void) async {
         switch Self.grantPath(for: status) {
         case .prompt: await prompt()
@@ -134,77 +131,17 @@ final class PermissionsManager {
     }
 
     var allGranted: Bool {
-        microphone == .granted && (!requiresSpeechRecognition || speech == .granted) && accessibility && automation == .granted
+        microphone == .granted && (!requiresSpeechRecognition || speech == .granted) && accessibility
     }
 
     func refresh() {
         microphone = Self.map(AVCaptureDevice.authorizationStatus(for: .audio))
         speech = Self.map(SFSpeechRecognizer.authorizationStatus())
-        accessibility = AXIsProcessTrusted()
-
-        Self.wakeSystemEvents()
-        let latestAutomation = Self.automationStatus(prompt: false)
-        // System Events reports undetermined while asleep even though the grant
-        // is on file, so never let that transient reading undo a grant we've
-        // already observed; only an explicit denial should.
-        if !(latestAutomation == .notDetermined && automation == .granted) {
-            automation = latestAutomation
-        }
-    }
-
-    /// System Events launches on demand. Nudging it awake before checking keeps
-    /// the reported status honest.
-    private nonisolated static func wakeSystemEvents() {
-        let bundleID = "com.apple.systemevents"
-        guard NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty,
-              let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
-        else { return }
-
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = false
-        configuration.addsToRecentItems = false
-        NSWorkspace.shared.openApplication(at: url, configuration: configuration)
-    }
-
-    /// Runs off the main actor because the prompt call blocks until the user answers.
-    func requestAutomation() async {
-        let result = await Task.detached { () -> Status in
-            // Without System Events running the call returns "not found" instead
-            // of showing the prompt.
-            Self.wakeSystemEvents()
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            return Self.automationStatus(prompt: true)
-        }.value
-        automation = result
-    }
-
-    func openAutomationSettings() {
-        Self.openPrivacyPane(.automation)
-    }
-
-    private nonisolated static func automationStatus(prompt: Bool) -> Status {
-        let bundleID = "com.apple.systemevents"
-        var target = AEAddressDesc()
-
-        let created = bundleID.withCString { pointer in
-            AECreateDesc(typeApplicationBundleID, pointer, strlen(pointer), &target)
-        }
-        guard created == noErr else { return .notDetermined }
-        defer { AEDisposeDesc(&target) }
-
-        switch AEDeterminePermissionToAutomateTarget(&target, typeWildCard, typeWildCard, prompt) {
-        case noErr:
-            return .granted
-        case OSStatus(errAEEventNotPermitted):
-            return .denied
-        case OSStatus(errAEEventWouldRequireUserConsent):
-            return .notDetermined
-        case OSStatus(procNotFound):
-            // System Events isn't running yet; it launches on demand.
-            return .notDetermined
-        default:
-            return .notDetermined
-        }
+        accessibility = trustCheck()
+        // From launch on, so a key the person pressed before a take (an
+        // unfinished Japanese composition) is known when the take ends.
+        // A tap from before a revoke is replaced once trust comes back.
+        watch.follow(trusted: accessibility)
     }
 
     /// Three signals, because none alone is dependable: the (undocumented)
@@ -321,7 +258,6 @@ final class PermissionsManager {
         case accessibility = "Privacy_Accessibility"
         case microphone = "Privacy_Microphone"
         case speechRecognition = "Privacy_SpeechRecognition"
-        case automation = "Privacy_Automation"
     }
 
     /// Opens one Privacy & Security list. The newer and the older address

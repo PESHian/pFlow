@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>pFlowInput</string>
+<key>CFBundleIdentifier</key><string>com.pesh.inputmethod.pFlow</string>
+<key>CFBundleName</key><string>pFlow Dictation</string>
+<key>CFBundleDisplayName</key><string>pFlow Dictation</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleShortVersionString</key><string>0.3.15</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>LSMinimumSystemVersion</key><string>27.0</string>
+<key>LSBackgroundOnly</key><true/>
+<key>LSUIElement</key><true/>
+<key>InputMethodConnectionName</key><string>com.pesh.inputmethod.pFlow_Connection</string>
+<key>InputMethodServerControllerClass</key><string>PFlowSpikeController</string>
+<key>InputMethodType</key><string>palette</string>
+<key>ComponentInvisibleInSystemUI</key><true/>
+<key>TISInputSourceID</key><string>com.pesh.inputmethod.pFlow</string>
+<key>TISIntendedLanguage</key><string>en</string>
+<key>NSPrincipalClass</key><string>NSApplication</string>
+</dict></plist>

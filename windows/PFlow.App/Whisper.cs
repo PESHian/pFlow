@@ -1,13 +1,8 @@
-using System.Net.Http;
-using System.Security.Cryptography;
 
 namespace PFlow.Windows;
 
 internal sealed class Whisper : IAsyncDisposable
 {
-    public const string ModelUrl = "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.bin";
-    public const string ModelSha = "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b";
-    public const long ModelBytes = 487601967;
     readonly string root;
     readonly string assets;
     readonly SemaphoreSlim modelLock = new(1);
@@ -19,8 +14,37 @@ internal sealed class Whisper : IAsyncDisposable
     internal double WorkerLoadMs => worker?.LoadMs ?? 0;
     /// Progress frames the current worker sent during finished-text passes.
     internal int WorkerHeartbeats => worker?.Heartbeats ?? 0;
-    string DownloadPath => System.IO.Path.Combine(root, "ggml-small.bin");
-    public string ModelPath => File.Exists(DownloadPath) ? DownloadPath : System.IO.Path.Combine(assets, "models", "ggml-small.bin");
+    /// Whisper small, the one speech model (SpeechModels.Small): a copy in pFlow's own folder when an
+    /// earlier version downloaded one there and it is whole, else the package's (always installed). Checked
+    /// by size here and by size and hash when the worker starts; an own copy that fails either is passed
+    /// over for the package's, and Settings and the log say so.
+    public string ModelPath => OwnCopy == OwnCopyState.Usable ? OwnCopyPath : PackagePath;
+    string OwnCopyPath => System.IO.Path.Combine(root, SpeechModels.Small.FileName);
+    string PackagePath => System.IO.Path.Combine(assets, "models", SpeechModels.Small.FileName);
+    internal enum OwnCopyState { None, Usable, WrongSize, Damaged }
+    bool ownCopyDamaged;
+    internal OwnCopyState OwnCopy => !File.Exists(OwnCopyPath) ? OwnCopyState.None : ownCopyDamaged || DamagedBefore() ? OwnCopyState.Damaged
+        : new FileInfo(OwnCopyPath).Length != SpeechModels.Small.Bytes ? OwnCopyState.WrongSize : OwnCopyState.Usable;
+    /// A failed checksum is remembered for that very file (its size and last-write time), so a damaged
+    /// own copy is not hashed again at every start; a changed file is checked again.
+    string VerdictPath => System.IO.Path.Combine(root, "small-own-copy-damaged.txt");
+    static string Stamp(FileInfo file) => file.Length + " " + file.LastWriteTimeUtc.Ticks;
+    bool DamagedBefore()
+    {
+        try { return File.Exists(VerdictPath) && File.ReadAllText(VerdictPath).Trim() == Stamp(new FileInfo(OwnCopyPath)); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
+    }
+    internal void MarkOwnCopyDamaged()
+    {
+        ownCopyDamaged = true;
+        try { File.WriteAllText(VerdictPath, Stamp(new FileInfo(OwnCopyPath))); } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+    }
+    /// For Settings and the diagnostic report: null while nothing is wrong.
+    internal string? OwnCopyNote => OwnCopy is OwnCopyState.WrongSize or OwnCopyState.Damaged
+        ? "pFlow's own copy of Whisper small is damaged, so the copy included with pFlow is used." : null;
+    internal string ModelSource => OwnCopy switch {
+        OwnCopyState.Usable => "pFlow's own copy", OwnCopyState.WrongSize => "the package's (own copy has the wrong size)",
+        OwnCopyState.Damaged => "the package's (own copy failed its checksum)", _ => "the package's" };
     /// The small live-words model next to the main model, or null when it is not installed (then live
     /// windows run on the main model and Settings says so). Checked by size and hash when the worker starts.
     public string? LiveModelPath { get { string path = System.IO.Path.Combine(assets, "models", LiveSpeechModel.FileName); return File.Exists(path) ? path : null; } }
@@ -30,42 +54,63 @@ internal sealed class Whisper : IAsyncDisposable
     /// The AVX2 build on x64 processors that have it, else the baseline build (one rule: SpeechEngine.Choose).
     public string Executable => System.IO.Path.Combine(assets, "engine", SpeechEngine.Choose(
         RuntimeInformation.ProcessArchitecture == Architecture.X64, Native.Avx2Ready, name => File.Exists(System.IO.Path.Combine(assets, "engine", name))));
-    public bool ModelPresent => File.Exists(ModelPath);
-    /// Removes partial downloads of the speech model left in pFlow's folder by an earlier run.
-    public int SweepPartials() => PartialDownloads.Sweep(root, System.IO.Path.GetFileName(DownloadPath));
-    public bool FilesPresent => File.Exists(ModelPath) && File.Exists(Executable);
+    /// Removes unfinished speech model downloads an earlier version left in pFlow's folder.
+    public int SweepPartials() => PartialDownloads.Sweep(root, SpeechModels.Small.FileName) + SpeechModels.RetiredFiles.Sum(file => PartialDownloads.Sweep(root, file));
+    /// Deletes the speech models 0.1.25 could download and 0.1.26 removed (SpeechModels.RetiredFiles),
+    /// only those exact files in pFlow's own folder, and their unfinished downloads. Returns the names
+    /// removed; the log gets the file names only, never a path.
+    /// Only a file with the very size and SHA-256 pFlow downloaded is deleted (`retired` stands in for
+    /// SpeechModels.Retired in a test); anything else under that name is left and logged.
+    public IReadOnlyList<string> RemoveRetiredModels(IReadOnlyList<SpeechModel>? retired = null)
+    {
+        var removed = new List<string>();
+        foreach (var model in retired ?? SpeechModels.Retired) {
+            string file = model.FileName, path = System.IO.Path.Combine(root, file);
+            try {
+                if (File.Exists(path)) {
+                    if (!Downloaded(path, model)) InsertionLog.Record("retired speech model name kept: " + file + " is not the file pFlow downloaded (size or checksum differs)");
+                    else { File.Delete(path); removed.Add(file); }
+                }
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { InsertionLog.Record("retired speech model not removed: " + file + " (" + error.GetType().Name + ")"); }
+            int partial = PartialDownloads.Sweep(root, file);
+            if (partial > 0) removed.Add(file + " (unfinished download x" + partial + ")");
+        }
+        if (removed.Count > 0) InsertionLog.Record("removed retired speech models: " + string.Join(", ", removed));
+        return removed;
+    }
+    static bool Downloaded(string path, SpeechModel model)
+    {
+        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, FileOptions.SequentialScan);
+        if (file.Length != model.Bytes) return false;
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(file)).Equals(model.Sha, StringComparison.OrdinalIgnoreCase);
+    }
+    public bool FilesPresent => File.Exists(ModelPath) && new FileInfo(ModelPath).Length == SpeechModels.Small.Bytes && File.Exists(Executable);
     /// For Settings: "x64, fast speech engine (AVX2)" and the like (one rule: SpeechEngine.Describe).
     public string EngineDescription => SpeechEngine.Describe(RuntimeInformation.ProcessArchitecture.ToString(), System.IO.Path.GetFileName(Executable), LiveModelReady);
     public Whisper(string root, string? assetsRoot = null) { this.root = root; assets = assetsRoot ?? AppContext.BaseDirectory; }
-    public async Task Verify(string path, CancellationToken cancel)
-    {
-        if (new FileInfo(path).Length != ModelBytes) throw new InvalidDataException("The Whisper model has the wrong size. Download it again in Settings.");
-        await using var stream = File.OpenRead(path);
-        var digest = await SHA256.HashDataAsync(stream, cancel);
-        if (!Convert.ToHexString(digest).Equals(ModelSha, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("The Whisper model checksum did not match. Download it again in Settings.");
-    }
-    public async Task Download(IProgress<double> progress, CancellationToken cancel)
-    {
-        await modelLock.WaitAsync(cancel); string temp = PartialDownloads.TempPath(root, System.IO.Path.GetFileName(DownloadPath));
-        try {
-            using var client = new HttpClient { Timeout = TimeSpan.FromHours(1) };
-            using var response = await client.GetAsync(ModelUrl, HttpCompletionOption.ResponseHeadersRead, cancel); response.EnsureSuccessStatusCode();
-            await using (var source = await response.Content.ReadAsStreamAsync(cancel))
-            await using (var target = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None)) {
-                var bytes = new byte[1024 * 1024]; long total = 0; int count;
-                while ((count = await source.ReadAsync(bytes, cancel)) > 0) {
-                    total += count; if (total > ModelBytes) throw new InvalidDataException("Model download was larger than expected.");
-                    await target.WriteAsync(bytes.AsMemory(0, count), cancel); progress.Report((double)total / ModelBytes);
-                }
-            }
-            await Verify(temp, cancel); ResetWorker(); File.Move(temp, DownloadPath, true);
-        } finally { if (File.Exists(temp)) File.Delete(temp); modelLock.Release(); }
-    }
     void ResetWorker() { worker?.Dispose(); worker = null; }
+    /// A live worker is kept for every take; one that was lost is replaced (as 0.1.23 did, one model).
     async Task EnsureWorker(CancellationToken cancel)
     {
         if (worker != null && !worker.Exited) return;
-        ResetWorker(); worker = await SpeechWorker.Start(Executable, ModelPath, LiveModelPath, cancel);
+        ResetWorker();
+        string model = ModelPath; var clock = Stopwatch.StartNew();
+        try {
+            try { worker = await SpeechWorker.Start(Executable, model, LiveModelPath, cancel); }
+            catch (InvalidDataException) when (model == OwnCopyPath) {
+                // pFlow's own copy failed its size or checksum: the package's copy is used from now on.
+                MarkOwnCopyDamaged(); InsertionLog.Record("own copy of Whisper small failed its check; using the package's copy");
+                worker = await SpeechWorker.Start(Executable, ModelPath, LiveModelPath, cancel);
+            }
+            Diagnostics.Recorder.Event("worker.start", new DiagField("result", "ready"), new DiagField("ms", clock.ElapsedMilliseconds), new DiagField("loadMs", worker.LoadMs),
+                new DiagField("progressFrames", worker.StartHeartbeats), new DiagField("engine", System.IO.Path.GetFileName(Executable)), new DiagField("model", ModelSource),
+                new DiagField("liveModel", LiveModelPath == null ? "missing" : worker.LiveModelLoaded ? "loaded" : "rejected (size or checksum)"),
+                new DiagField("threads", SpeechThreads.Final(SpeechWorker.LogicalProcessors) + " final / " + SpeechThreads.Live(SpeechWorker.LogicalProcessors) + " live"));
+        } catch (Exception error) {
+            Diagnostics.Recorder.Event("worker.start", new DiagField("result", "failed"), new DiagField("ms", clock.ElapsedMilliseconds), new DiagField("reason", PrivateLog.Reason(error)));
+            throw;
+        }
     }
     internal async Task Prewarm(CancellationToken cancel = default)
     {

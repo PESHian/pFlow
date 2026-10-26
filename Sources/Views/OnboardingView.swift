@@ -38,19 +38,13 @@ struct OnboardingView: View {
                     granted: app.permissions.accessibility,
                     action: { Task { await app.permissions.grantAccessibility() } }
                 )
+                InputMethodSetupRow()
                 if let hint = app.permissions.accessibilityHint {
                     Text(hint)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                PermissionStep(
-                    icon: "wand.and.stars",
-                    title: "Automation",
-                    detail: "To place text in the focused field.",
-                    granted: app.permissions.automation == .granted,
-                    action: { Task { await app.permissions.grantAutomation() } }
-                )
             }
 
             Spacer(minLength: 0)
@@ -70,7 +64,7 @@ struct OnboardingView: View {
                 .frame(maxWidth: .infinity, alignment: .center)
         }
         .padding(Theme.s6)
-        .frame(width: 460, height: 560)
+        .frame(width: 460, height: 650)
         .onAppear { app.permissions.refresh() }
     }
 

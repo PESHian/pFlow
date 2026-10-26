@@ -127,7 +127,7 @@ final class LiveFakeInjector: TextInjecting {
     }
     func beginLive(session: String) -> LiveInlineStart {
         if fieldReadyAfterRetries != nil { return .waiting }
-        return live.begin(id: session, field: field)
+        return live.begin(id: session, field: liveField ?? field)
     }
     func retryLive(session: String) -> LiveInlineStart {
         retries += 1
@@ -142,6 +142,26 @@ final class LiveFakeInjector: TextInjecting {
     func typedLive(session: String) -> Bool { live.typed(session: session) }
     func finalizeLive(session: String, text: String) -> LiveInlineFinal { live.finalize(session: session, text: text) }
     func cancelLive(session: String) -> LiveInlineCancel { live.cancel(session: session) }
+    /// The end replace: what it was given, and what it answers.
+    var overSelection: [(String, OwnedWords)] = []
+    var overSelectionOutcome: InjectionOutcome?
+    func insertOverSelection(_ text: String, own: OwnedWords, formatted: NSAttributedString?) async -> InjectionOutcome {
+        overSelection.append((text, own))
+        if let overSelectionOutcome {
+            if case .savedToHistory = overSelectionOutcome { own.collapse() }
+            return overSelectionOutcome
+        }
+        // The paste goes over the selected words, as the real checked paste would.
+        if let keys = keyField { keys.paste(text, over: own.range) }
+        return .pasted
+    }
+    /// Set when the field is a typed-keys one, so the end replace lands in it.
+    var keyField: SimulatedKeyField?
+    /// Any other live field in place of `field`.
+    var liveField: LiveTextField?
+    var keyWaits = 0
+    var onWaitForKeys: (() -> Void)?
+    func waitForKeysToClear() async { keyWaits += 1; onWaitForKeys?() }
 }
 
 @MainActor
@@ -301,7 +321,7 @@ struct LiveInlineTests {
         await Task.yield()
         #expect(hud.previews == [false])
         try? await Task.sleep(for: .milliseconds(150))
-        #expect(hud.cards.isEmpty, "time ran out; the capsule stays and the words go in at the end")
+        #expect(hud.cards.last == true, "time ran out; pFlow's own preview shows the words, which go in at the end")
         #expect(hud.notes.last == "Can't type in this app")
         let retries = injector.retries
         #expect(retries >= 1)
@@ -339,7 +359,7 @@ struct LiveInlineTests {
         coordinator.begin()
         await Task.yield()
         try? await Task.sleep(for: .milliseconds(40))
-        #expect(hud.cards.isEmpty, "no card mid-take")
+        #expect(hud.cards.last == true, "the words show in pFlow's own preview, never in the field")
         #expect(hud.notes.last == "Secure input is on")
         await coordinator.finish()
         #expect(field.replaced.isEmpty)
@@ -387,7 +407,7 @@ struct LiveInlineTests {
         #expect(hud.previews == [false] && hud.cards.isEmpty, "capsule only while typing works")
         session.emit("thanks for the map and")
         #expect(hud.notes.last == "Stopped: cursor moved")
-        #expect(hud.cards.isEmpty, "typing stopped, but the capsule stays for the whole take")
+        #expect(hud.cards.last == true, "typing stopped: the words show in pFlow's own preview")
         field.current.selection = NSRange(location: 20, length: 0)
         session.emit("thanks for the map and the")
         await coordinator.finish()
@@ -563,7 +583,7 @@ struct LiveInlineTests {
         session.emit("meet at")
         session.emit("meet at the lighthouse")
         #expect(field.value == "Chat: " && field.replaced.count == 1)
-        #expect(hud.cards.isEmpty, "typing stopped; no card mid-take")
+        #expect(hud.cards.last == true, "typing stopped: the words show in pFlow's own preview")
         await coordinator.finish()
         #expect(injector.delivered == ["meet at the lighthouse at noon"], "the final goes in like Preview mode")
         #expect(history.saved == ["meet at the lighthouse at noon"])
@@ -629,7 +649,7 @@ struct LiveInlineTests {
         await Task.yield()
         session.emit("the light")
         session.emit("the lighthouse")
-        #expect(hud.cards.isEmpty, "typing stopped; the Copy card comes only after the take")
+        #expect(hud.cards.last == true, "typing stopped: the words show in pFlow's own preview")
         await coordinator.finish()
         #expect(injector.delivered.isEmpty)
         #expect(hud.offers == ["the lighthouse keeper waved"] && hud.livePreview)
@@ -747,7 +767,7 @@ struct LiveInlineTests {
         let (coordinator, injector) = typingCoordinator(field, session: session, hud: hud)
         coordinator.begin()
         await Task.yield()
-        #expect(hud.previews == [false])
+        #expect(hud.previews == [true], "no live field: pFlow's own preview shows the words")
         #expect(hud.notes.last == "Can't type in this app")
         session.emit("buy")
         session.emit("buy rope")
@@ -799,6 +819,8 @@ struct LiveInlineTests {
             #expect(coordinator.state == .idle, "\(mode)")
             #expect(session.startCalled == 0, "\(mode)")
             #expect(hud.phases == [.passwordField], "\(mode)")
+            #expect(hud.reasons.last == RecordingCoordinator.passwordNote, "the card says why: \(mode)")
+            #expect(hud.livePreview)
         }
     }
 

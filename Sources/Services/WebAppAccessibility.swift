@@ -62,7 +62,7 @@ enum WebAppAccessibility {
         AXUIElementSetMessagingTimeout(element, 0.3)
         let result = AXUIElementSetAttributeValue(element, attribute(for: kind) as CFString, kCFBooleanTrue)
         if result != .success {
-            NSLog("pFlow: \(app.localizedName ?? "the app") answered \(result.rawValue) to \(attribute(for: kind))")
+            ReasonLog.note("a web app answered the accessibility request with an error:", AXErrorName(result))
         }
         return true
     }

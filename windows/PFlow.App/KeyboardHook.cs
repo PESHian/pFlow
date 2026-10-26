@@ -77,6 +77,8 @@ internal sealed class KeyboardHook : IDisposable
         }
         Post(route.Action); return route.Consume;
     }
+    /// The selected activation key, as a low-level hook sees it (InputWatch, on its own thread: reads the selection only).
+    internal bool IsActivationKey(Native.HookKey key) => router.Selected.Matches(Normalize(key), key.Scan & 255, (key.Flags & 1) != 0);
     public void Reset() => router.Reset();
     public void Dispose() { if (hook != IntPtr.Zero) Native.UnhookWindowsHookEx(hook); hook = IntPtr.Zero; capture = null; }
 }

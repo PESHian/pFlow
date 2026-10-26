@@ -189,12 +189,16 @@ final class AppState {
             openOnboarding()
         }
 
+        // pFlow Dictation: installed or updated from this app, then the private channel.
+        InputMethodInstall.ensure()
+        InputMethodLink.shared.start()
+
         hotkeys.disable()
         modifierHotkeys.recordingIsBusy = { [weak self] in self?.coordinator.state != .idle }
         modifierHotkeys.onRightCommand = { [weak self] effect in
             guard let self else { return }
             if effect == .start {
-                NSLog("pFlow: recording requested; microphone=\(self.permissions.microphone), speech=\(self.permissions.speech), accessibility=\(self.permissions.accessibility), automation=\(self.permissions.automation)")
+                NSLog("pFlow: recording requested; microphone=\(self.permissions.microphone), speech=\(self.permissions.speech), accessibility=\(self.permissions.accessibility)")
             }
             self.coordinator.handle(effect)
         }
@@ -319,7 +323,7 @@ final class AppState {
     func openOnboarding() {
         WindowManager.shared.show(
             id: "onboarding", title: "Welcome to pFlow",
-            size: NSSize(width: 460, height: 560), resizable: false
+            size: NSSize(width: 460, height: 650), resizable: false
         ) { OnboardingView().environment(self) }
     }
 }

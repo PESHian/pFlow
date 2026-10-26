@@ -1,98 +1,99 @@
-# pFlow by Pesh
+# pFlow: free dictation for Mac that shows your words as you talk
 
-Native dictation for macOS and Windows. Hold a key, speak, and release to insert text into the field you were using. Speech recognition runs locally through whisper.cpp. No account, subscription, telemetry, or API key is required.
+pFlow is a free, open-source dictation app for macOS. Hold Right Command and talk. Your words appear in the app you're typing in while you speak, the way Apple Dictation shows them, in Chrome, Safari, Messages, Notes, VS Code and more. Let go, and pFlow puts in the finished, punctuated text once.
 
-## Downloads
+It runs on your Mac. No account, no subscription, no word limit.
 
-[Download pFlow for Mac or Windows](https://github.com/PESHian/pFlow/releases)
+**[Download pFlow for Mac 0.3.17](https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.25.1/pFlow-Mac-0.3.17.dmg)** · Apple Silicon · macOS 27 or later · [All releases](https://github.com/PESHian/pFlow/releases)
 
-These are testing builds. macOS and Windows may show an unsigned or unnotarized app warning. Only install downloads from this repository and check the supplied SHA-256 file.
+![pFlow shows words in a Chrome message box while you talk, then puts in the finished text when you let go](docs/images/demo.gif)
 
-| Platform | Download | Requirements |
-| --- | --- | --- |
-| Mac | pFlow-Mac-0.3.13.dmg | Apple Silicon, macOS 27 or later |
-| Windows | pFlow-Windows-Universal-0.1.15-testing.zip | Windows x64 (Intel/AMD), ARM64, or x86; Windows 10 1607+ / Windows 11 |
+## Why pFlow
 
-### Mac
+- **Words as you talk, in every app.** pFlow shows your words in the field you're typing in, not in a separate window. It works in web apps and in Electron apps like VS Code too.
+- **Fast.** The first words show about 1.2 seconds after you start talking.
+- **Private.** Your speech is recognized on your Mac. Cleanup uses Apple Intelligence on your Mac when it's available. pFlow has no account, no servers and no tracking.
+- **Free and open source.** MIT licensed. No trial, no weekly word cap, no ads.
+- **Careful with your text.** pFlow never types into password fields. If you click, type or switch apps mid-sentence, it stops and keeps your words in History. If it can't be sure where your words went, it doesn't paste; it shows them on a Copy card instead. Your clipboard is put back after a paste.
+- **Made to fit how you write.** A dictionary for names and terms, templates, local history, daily and per-app stats, and a small capsule with a Wave or Lines waveform in your colors.
 
-Open the disk image and drag **pFlow by Pesh** into Applications. Open it and grant Microphone, Speech Recognition, Accessibility, and Automation permissions when asked. Hold **Right Command** to record, then release. Double-tap for continuous dictation; tap again to stop. Left Command stays available for shortcuts.
+![Words appear in a Notes note while you talk, with pFlow's capsule at the bottom of the screen](docs/images/live-notes.png)
 
-If double-tapping opens Siri, change Siri's Keyboard Shortcut in System Settings so it does not use Command twice.
+## A free alternative to Wispr Flow and Superwhisper
 
-The first use may need a checksum-verified Whisper model download. Apple Intelligence provides cleanup and report formatting when available. If it is unavailable, plain dictation remains available. This testing download is ad-hoc signed and not notarized. If macOS blocks it, use [Apple's Open Anyway steps](https://support.apple.com/en-us/102445) after checking the download.
+Paid dictation apps charge for this. Wispr Flow Pro is $15 a month, or $12 a month billed yearly, and its free plan stops at 2,000 words a week on desktop. Superwhisper's Pro features are a paid plan too. pFlow shows your words live in every Mac app for free, and its code is open for anyone to read.
 
-### Windows
+<sub>Prices from [wisprflow.ai/pricing](https://wisprflow.ai/pricing) and [superwhisper.com](https://superwhisper.com), checked October 25, 2026.</sub>
 
-Extract the entire universal ZIP and double-click **Install.cmd**. It detects your native Windows architecture, checks the selected files, and installs the matching build for your user account. Open **pFlow by Pesh** from Start. It runs in the tray; open Settings from its tray menu. In **Settings → Shortcut**, choose **Press a key**, then press and release one key. Right Alt, either Ctrl, Menu/App, other F keys, and detectable vehicle buttons can be used. Common choices remain in the picker. Escape is reserved for cancellation. The chosen key records when used alone instead of its usual action; ordinary shortcut combinations remain available. Fn works only if the keyboard sends it as a usable keyboard event. Hold your chosen key to record, then release. Double-tap within about 300 ms for continuous dictation; tap to stop. Left Windows stays available unless you explicitly choose it. The choice is saved; existing installations keep Right Windows until changed.
+## Install on a Mac
 
-The Windows download includes the Whisper speech model and .NET runtime. AI cleanup and report formatting use an optional 2.5 GB Qwen text model: choose **Download or repair text model** in Settings if you want those features. Its size and SHA-256 are checked before use. This optional text model requires 64-bit Windows; 32-bit Windows keeps dictation, basic cleanup, dictionary, and full-narrative templates. Basic dictation works without it. After setup, model inference runs offline.
+1. Download [pFlow-Mac-0.3.17.dmg](https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.25.1/pFlow-Mac-0.3.17.dmg). You can check it against the `.sha256` file on the release page.
+2. Open the disk image and drag **pFlow by Pesh** into Applications.
+3. Open pFlow. This build isn't notarized by Apple yet, so macOS may block it the first time. Go to **System Settings › Privacy & Security** and choose **Open Anyway** ([Apple's steps](https://support.apple.com/en-us/102445)).
+4. pFlow's setup page opens. Allow **Microphone** and **Speech Recognition**, and press **Grant** next to **Accessibility**.
+5. For words as you talk in every app, add **pFlow Dictation** once. Press its button on the setup page, or go to **System Settings › Keyboard › Text Input › Edit… › + › English › pFlow Dictation › Add**.
 
-No administrator password, separate .NET installation, or architecture choice is needed. Do not run an EXE copied out of its payload folder. See [full installation instructions](windows/INSTALLATION.txt). Windows 10 builds require version 1607 or later; Microsoft supports .NET 10 on its listed LTSC/Enterprise editions. Windows 7, 8, Windows RT/ARM32, and older releases are unsupported.
+<p align="center"><img src="docs/images/setup.png" width="380" alt="pFlow's setup page with Microphone, Speech Recognition, Accessibility and pFlow Dictation ticked"> <img src="docs/images/appearance.png" width="380" alt="pFlow Settings with the Pesh, Aurora, Solar and Custom colors and the Wave and Lines waveforms"></p>
 
-Quit pFlow before updating. Turn Mac dictation off before testing Windows recording in a VM on the same Mac.
+## Use it
 
-## Updates
+- **Hold Right Command** and talk. Let go to finish.
+- **Double-tap Right Command** to keep talking hands-free. Tap it once to stop.
+- Left Command still works for your shortcuts.
+- At the start and end of each dictation, macOS shows a small keyboard label at the cursor. That's pFlow switching to pFlow Dictation and back to your keyboard.
+- If double-tapping opens Siri, change Siri's keyboard shortcut in System Settings so it doesn't use Command twice.
+- Speech engine: Apple's on-device engine is the default. You can pick Whisper (whisper.cpp, also on your Mac) in Settings; it downloads a checksum-checked model the first time.
 
-Choose **Check for updates** in the tray/menu bar or Settings, then **Install and restart**. pFlow checks a signed release list and verifies the download before replacing the app. Settings, history, and models stay on your device. Checks run only when requested. If your app has no Check for updates button, install a current build once using the steps above. Windows 0.1.11 and Mac 0.3.5 or later include the updater. Published GitHub binary releases become available in the app; source commits alone do not.
-
-**Mac permission after an update.** Mac builds are not yet signed with an Apple Developer ID, so macOS treats each new build as a new app. After installing a new build, press **Grant** next to Accessibility when pFlow asks and turn pFlow on. pFlow asks on the spot; nothing else to remove or re-add.
-
-**One-time Mac step.** Mac 0.3.5 and the 0.3.6 test downloads run under the old internal name Yap, which is why macOS can show Yap in its permission lists. They cannot install the first build named pFlow themselves; they report that the update could not finish and keep your app. Install that build once by hand: quit pFlow, open the new disk image, drag **pFlow by Pesh** into the same Applications folder, and choose **Replace**. Settings, history, dictionary, templates, and models stay. macOS may ask for Accessibility and Automation again. If **System Settings → Privacy & Security → Accessibility** or **Automation** still lists Yap, select Yap, click **−**, then open pFlow and allow it again. Later updates work from the app.
-
-Windows on/off controls show **On** or **Off** and a contrasting thumb. Settings shows the latest dictation time split into speech, AI cleanup, report formatting, and insertion when those stages ran. This readout contains no dictated words. AI cleanup remains optional; this release does not claim a processing speed improvement.
 
 ## Features
 
-- Compact movable waveform, Wave and Lines styles, Pesh colors, light/dark/system themes.
-- Dictionary, user templates, optional bold headings, local history, and daily/per-app statistics.
-- Sentence spacing and paragraph boundaries; original text is retained when AI edits fail checks.
-- Clipboard-copy can be off while insertion stays enabled. Clipboard restoration avoids replacing a newer copy.
-- Password fields are excluded. Focus changes and unsupported fields can prevent insertion; the transcript remains in local history.
-- Optional per-user launch at login.
+- Live words in the app as you talk, through pFlow Dictation, a small input method that comes inside pFlow. Fields that can't show them get pFlow's own small preview instead.
+- The finished text goes in once at the end, with punctuation and your dictionary.
+- Cleanup and report formatting with Apple Intelligence when it's available. Plain dictation works without it.
+- Dictionary, templates and optional bold headings.
+- Local history with daily and per-app statistics.
+- Wave or Lines waveform; Pesh, Aurora, Solar or custom colors; light, dark or system appearance.
+- Optional copy to clipboard, and launch at login.
 
-### Live text: Type in the current app (Mac)
 
-pFlow types words into the field you started in while you talk. It types only words two updates in a row agree on, so it runs a little behind. When you stop, it puts in the finished text (cleanup, dictionary, template) once. It writes with Accessibility text ranges, never keystrokes or the clipboard, and reads every write back.
+## Update
 
-Typing stops for the rest of the take if you move the cursor, type, switch apps or fields, the field becomes a password field, permission is removed, or a write does not read back exactly. The preview says why, and the finished text goes to History only. Cancel removes pFlow's words only if the field is still exactly as pFlow left it. Dictation does not start in password fields. Template styles such as bold arrive as plain text in this mode. The rules and their shared test cases are in `fixtures/live-text/inline-ownership`.
+Download the newest version from [Releases](https://github.com/PESHian/pFlow/releases), quit pFlow, and drag the new one into Applications (choose **Replace**). Your settings, history, dictionary and templates stay.
 
-| Destination | Checked behavior |
-|---|---|
-| AppKit text view and text field in a test window (Unicode, CRLF, styled text, selection, cancel, edits) | Inline, through AppKit's own accessibility methods in the same process |
-| Same, through real Accessibility calls | Not run: no test build on the test Mac has Accessibility permission |
-| TextEdit (plain and rich), Safari text box and text area, VS Code | Not run, same reason. A Debug-only self-test (`--pflow-inline-selftest <folder>`) drives these with throwaway documents once a build is allowed |
-| Field that cannot be read or set, has several cursors, or holds over 100,000 characters | Preview for the take (test field only) |
+Until pFlow is signed with an Apple Developer ID:
+- macOS treats each new version as a new app, so press **Grant** for Accessibility again after you update.
+- The in-app update button can't install new Mac versions. Get them from Releases.
 
-### Live text: Type in the current app (Windows)
-
-Same rules as the Mac, shared through the same test cases. pFlow types only into classic Windows text boxes (Notepad, and edit and rich edit boxes in desktop apps), writing with the box's own text messages, never keystrokes or the clipboard, and reading every write back. Line breaks follow the box. Other fields, such as web pages in Edge and apps running as administrator, show the preview and get the finished text once when you stop.
-
-| Destination | Checked behavior |
-|---|---|
-| Notepad, a Windows edit box and rich edit box in a test window (Unicode, CRLF, formatting, selection, cancel, edits, app and field switches, password field, a box that changes what was written) | Inline |
-| Edge text box and text area on a local page | Preview |
-| App running as administrator | Preview |
-| Electron editor (VS Code) | Not run: not installed on the test PC |
+Coming from Mac 0.3.6 or older, when the app was called Yap? Replace it the same way. If **System Settings › Privacy & Security › Accessibility** still lists Yap, select it, click **−**, then open pFlow and allow it again.
 
 ## Privacy
 
-Whisper transcribes audio on your device. Mac AI defaults to on-device processing. Source builds with Apple’s required entitlement can opt into Apple Private Cloud Compute, which sends text and formatting instructions to Apple; the supplied Mac testing download has no cloud entitlement. Windows AI runs locally. Model downloads contact their hosting services. History and settings stay in your user account, outside the app. Delete history entries when they are no longer needed.
+- Your speech is recognized on your Mac, by Apple's on-device speech engine or by Whisper if you pick it.
+- Cleanup and formatting use Apple Intelligence on your Mac. Source builds with Apple's required entitlement can opt into Apple Private Cloud Compute, which sends text and formatting instructions to Apple; the Mac download on this page has no cloud entitlement.
+- pFlow has no account, no analytics and no servers. It checks for updates only when you ask.
+- History and settings stay in your Mac user account. Delete History entries you don't need.
+- Speech models come from their hosts: Apple for its speech engine, and the Whisper model download if you choose Whisper.
+- When pFlow can't put words in, it writes a short reason to the Mac's log, never your words. To read it: `log show --last 1d --info --style compact --predicate 'subsystem == "com.pesh.pflow"'`
 
-This public repository contains application source, artwork, licenses, and fictional test fixtures. It does not include user settings, saved dictations, personal recordings, credentials, private development history, or device access files. The original private development repository has been retained separately.
+This public repository holds the app's source, artwork, licenses and fictional test fixtures. It contains no user settings, saved dictations, personal recordings or credentials.
+
+## How it was tested
+
+pFlow 0.3.17 was tested with recorded speech in TextEdit, Notes, Safari, Chrome (plain boxes and rich editors), Reminders, T3 Code, VS Code and LibreOffice, both holding and double-tapping Right Command: in 230 dictations the finished text went in exactly once every time. It was then used with live speech on a real Mac across everyday apps.
+
+Known: now and then, mostly on a quick second dictation, the words show in pFlow's small preview instead of in the app. The finished text still goes in once.
+
+## Windows (testing)
+
+pFlow for Windows is in testing. The latest test build is `pFlow-Setup-0.1.28-testing.exe` on the [testing release](https://github.com/PESHian/pFlow/releases/tag/pflow-desktop-2026.10.19.6), for x64, ARM64 or x86 on Windows 10 1607+ or Windows 11. See the [installation steps](windows/INSTALLATION.txt) and [Windows details](windows/README.md), including what has been tested. The Windows app isn't code-signed yet. Mac and Windows use different AI formatting engines and aren't claimed to behave the same.
 
 ## Build from source
 
 Mac: install Xcode with the macOS 27 SDK and [XcodeGen](https://github.com/yonaskolb/XcodeGen), run `xcodegen generate`, then build the Yap scheme from `Yap.xcodeproj`; it produces `pFlow.app`. `scripts/build-whisper.sh` prepares the pinned local engine. `release.sh` supports Developer ID signing/notarization when you supply your own credentials.
 
-For trusted Mac candidates, follow the [signing setup and release checks](updates/MAC-RELEASE.md). Production packaging requires an approved Developer ID identity and notarization access. Development builds cannot use the production updater. Public download claims above remain tied to the published builds until a new candidate passes the clean-Mac checks.
+For trusted Mac candidates, follow the [signing setup and release checks](updates/MAC-RELEASE.md). Production packaging requires an approved Developer ID identity and notarization access. Development builds cannot use the production updater.
 
 Windows: install .NET 10 SDK, CMake, and Visual Studio C++ tools for your architecture, then run `windows/scripts/build-windows.ps1`. See [Windows details](windows/README.md). Use `-Architecture x64`, `-Architecture arm64`, or `-Architecture x86`. ARM64 native compilation uses the Clang C++ toolset; the other builds use MSVC with a static speech runtime. The published Windows binaries omit debug symbols. Release builds are checked for personal build paths; source builds need the same checks before distribution. Each architecture needs its own build and verification.
-
-## Tested limits
-
-Windows x64 and ARM64 builds have passed native Windows ABI, private clipboard restoration, and saved-audio transcription/reuse checks; x86 passed the same checks under Windows x64 WOW64. A native 32-bit Windows installation and old Windows 10/older CPU hardware remain unverified. Architecture support does not promise support for every historic Windows release or identical speed on all CPUs. The earlier Windows ARM64 build has been exercised on a Windows 11 VM, including saved-audio recognition, Notepad insertion, settings, templates, themes, and statistics. Physical microphone/key behavior, Edge/Electron insertion, and actual login behavior have not all been verified. That VM presented only about 5–6 waveform frames per second; fluid animation there remains unresolved. Speeds vary with hardware, recording length, and optional AI formatting.
-
-Mac and Windows use different AI formatting engines and are not claimed to have identical behavior. The Mac download is not notarized, and the Windows executable is not Authenticode signed.
 
 ## License and attribution
 

@@ -328,8 +328,12 @@ internal static partial class Program
                 string before = Read(field!);
                 var (_, slot, refused) = Begin("edge");
                 slot.Reconcile("edge", "harbor lights"); slot.Reconcile("edge", "harbor lights glow");
-                Check($"Edge {label} uses the preview ({refused})", refused == LiveStop.Unsupported && Read(field!) == before);
-                matrix.Add($"Edge {label} (Chromium, file:// page): Preview fallback, page unchanged");
+                // 0.1.28: Edge fields get live words as typed keys (append only); a cancel leaves them (no Backspace).
+                await Task.Delay(400);
+                bool typed = Normalize(Read(field!)).Replace(" ", "") == Normalize(before + "harbor lights").Replace(" ", "");
+                var cancel = slot.Cancel("edge");
+                Check($"Edge {label}: live words typed with keys ({refused}); a cancel leaves them ({cancel.Result})", refused == null && typed && cancel.Result == LiveCancel.Left);
+                matrix.Add($"Edge {label} (Chromium, file:// page): live words typed, cancel leaves them");
             }
             if (window.TryGetCurrentPattern(WindowPattern.Pattern, out var pattern)) ((WindowPattern)pattern).Close();
         } finally {
@@ -368,7 +372,7 @@ internal static partial class Program
                 capsule.Set(Phase.Processing); preview.Finishing();
                 string audio = Path.Combine(directory, take + ".wav"); File.Copy(Path.Combine(root, "latency-long.wav"), audio, true);
                 var result = await pipeline.Run(audio, report.AudioMs / 1000, target, directory, owner.Handle, (phase, detail) => capsule.Set(phase, detail), CancellationToken.None, report.LiveWords,
-                    new LiveTyping(text => slot.Finalize(take, text), () => slot.Typed(take), () => slot.Cancel(take)));
+                    new LiveTyping(text => slot.Finalize(take, text), () => slot.Typed(take), () => slot.Cancel(take), () => slot.Collapse(take), () => slot.Selection(take)));
                 preview.Clear();
                 string after = Normalize(Read(field)), final = new StateStore(directory).History[0].Text;
                 string expected = Normalize(before) + Normalize(InsertionSpacing.AtCaret(final, before, before.Length, 0).Apply(final));

@@ -66,18 +66,21 @@ internal static partial class Program
     {
         if (args.Length == 2 && args[0] == "--update-helper") return RunUpdateHelper(args[1]);
         if (args.Length > 0 && args[0] == "--architecture-speech") return ArchitectureSpeech(args[1], args[2]).GetAwaiter().GetResult();
-        if (args.Length > 0 && args[0] == "--model") return ModelChecks(args[1], args.Contains("--cleanup-only"));
-        if (args.Length == 0 || args[0] is "--updates-only" or "--controls-only" or "--learn-keys-only" or "--insertion-only") { try { return LaunchPrivate(args.Length > 0 ? args[0] : ""); } catch (Exception error) { Console.Error.WriteLine(error); return 1; } }
+        if (args.Length > 0 && args[0] == "--model") return ModelChecks(args[1]);
+        if (args.Length == 0 || args[0] is "--updates-only" or "--controls-only" or "--learn-keys-only" or "--insertion-only" or "--scroll-only" or "--tray-only" or "--speech-models-only") { try { return LaunchPrivate(args.Length > 0 ? args[0] : ""); } catch (Exception error) { Console.Error.WriteLine(error); return 1; } }
         using var reportWriter = new StreamWriter(args[1]) { AutoFlush = true }; Console.SetOut(reportWriter); Console.SetError(reportWriter);
         try {
             Check("isolated window station", ObjectName(GetProcessWindowStation()) == args[2]);
             Check("isolated desktop", ObjectName(GetThreadDesktop(GetCurrentThreadId())) == "fixture");
-            if (args.Contains("--insertion-only")) { NativeInsertion(); NativeLiveTyping(); Console.WriteLine($"{passed} native insertion/caret checks passed."); return 0; }
+            if (args.Contains("--insertion-only")) { NativeInsertion(); NativeLiveTyping(); NativeReplaceEnd(); NativeRoundTwo(); NativeReports(); Console.WriteLine($"{passed} native insertion/caret checks passed."); return 0; }
             if (args.Contains("--learn-keys-only")) { _ = Application.Current ?? new PFlow.Windows.Program { ShutdownMode = ShutdownMode.OnExplicitShutdown }; NativeHotkeys(); NativeKeyCapture(); Console.WriteLine($"{passed} native learned-key checks passed."); return 0; }
-            if (args.Contains("--controls-only")) { NativeControls(); NativeHistory(); NativeDownloads(); NativeCapsule(); Console.WriteLine($"{passed} native settings controls checks passed."); return 0; }
+            if (args.Contains("--scroll-only")) { NativeScroll(); Console.WriteLine($"{passed} native scroll checks passed."); return 0; }
+            if (args.Contains("--tray-only")) { NativeTray(); Console.WriteLine($"{passed} native tray checks passed."); return 0; }
+            if (args.Contains("--speech-models-only")) { NativeSpeechModels(); Console.WriteLine($"{passed} native speech model checks passed."); return 0; }
+            if (args.Contains("--controls-only")) { NativeControls(); NativeHistory(); NativeDownloads(); NativeSpeechModels(); NativeScroll(); NativeTray(); NativeCapsule(); Console.WriteLine($"{passed} native settings controls checks passed."); return 0; }
             NativeUpdates();
             if (args.Contains("--updates-only")) { Console.WriteLine($"{passed} native update checks passed."); return 0; }
-            NativeHotkeys(); NativeKeyCapture(); NativeControls(); NativeHistory(); NativeDownloads(); NativeCapsule(); NativeInsertion(); NativeLiveTyping();
+            NativeHotkeys(); NativeKeyCapture(); NativeControls(); NativeHistory(); NativeDownloads(); NativeSpeechModels(); NativeScroll(); NativeTray(); NativeCapsule(); NativeInsertion(); NativeLiveTyping(); NativeReplaceEnd(); NativeRoundTwo(); NativeReports();
             Check("INPUT size matches Windows ABI", Marshal.SizeOf<Native.Input>() == (IntPtr.Size == 8 ? 40 : 28));
             Check("INPUT union alignment matches Windows ABI", Marshal.OffsetOf<Native.Input>(nameof(Native.Input.Data)).ToInt32() == (IntPtr.Size == 8 ? 8 : 4));
             Check("keyboard structure matches Windows ABI", Marshal.SizeOf<Native.KeyboardInput>() == (IntPtr.Size == 8 ? 24 : 16));
@@ -177,6 +180,7 @@ internal static partial class Program
                 Check("RTF preserves Unicode", range.Text.TrimEnd('\r', '\n') == rendered.Text.Replace("\n", "\r\n"));
                 Check("rich clipboard restored", lease.Restore());
             }
+            NativeClipboardPrivacy(window.Handle);
             Console.WriteLine($"{passed} native private-clipboard checks passed."); return 0;
         } catch (Exception error) { Console.Error.WriteLine(error); foreach (System.Collections.DictionaryEntry data in error.Data) Console.Error.WriteLine($"Fixture detail: {data.Key}={data.Value}"); return 1; }
     }
@@ -245,21 +249,11 @@ internal static partial class Program
         } catch (Exception error) { Console.Error.WriteLine(error); return 1; }
         finally { Directory.Delete(directory, true); }
     }
-    static int ModelChecks(string assets, bool cleanupOnly)
+    static int ModelChecks(string assets)
     {
         string directory = Path.Combine(Path.GetTempPath(), "pFlow-model-fictional-" + Guid.NewGuid()); Directory.CreateDirectory(directory);
         try {
             var model = new LocalTextModel(directory, assets);
-            string source = "The server server stopped. Officer Morgan Lee did not restart it.";
-            var watch = System.Diagnostics.Stopwatch.StartNew();
-            string cleaned = model.Cleanup(source, directory, CancellationToken.None).GetAwaiter().GetResult();
-            Console.WriteLine("Model fixture diagnostic: " + (model.LastIssue ?? "no error; response accepted"));
-            Check("real local model makes a cleanup edit", System.Text.RegularExpressions.Regex.Matches(cleaned, "server", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Count == 1);
-            Check("local cleanup preserves name and negation", cleaned.Contains("Morgan Lee") && cleaned.Contains("did not"));
-            string numeric = "The server server stopped at 14:30. Morgan said \"Alex hit Pesh\".";
-            Check("risky numeric and quoted block stays exact", model.Cleanup(numeric, directory, CancellationToken.None).GetAwaiter().GetResult() == numeric);
-            Console.WriteLine($"Cleanup seconds: {watch.Elapsed.TotalSeconds:F1}");
-            if (cleanupOnly) { Console.WriteLine($"{passed} actual cleanup checks passed."); return 0; }
             var template = DictationTemplate.LegacyExamples()[0]; template.BoldHeadings = true;
             string narrative = "I am Officer Morgan Lee, badge 123, with the fictional training agency. On October 12 at 14:30, I arrived at 12 Maple Street. I spoke with Alex Rivera. No staff were injured. I photographed a blue bicycle as evidence item 101. No property was collected.";
             var result = model.Report(narrative, template, directory, CancellationToken.None).GetAwaiter().GetResult();

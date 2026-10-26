@@ -77,6 +77,12 @@ enum LiveStableText {
 struct LiveInlineOwnership {
     enum Stop: String, Codable, Error, Equatable {
         case unsupported, permission, app, focus, secure, text, caret, uncertain
+        /// Keys only (append only): the recognizer changed a word pFlow already
+        /// typed, or a line break came. Typing stops; the end replace still runs.
+        case revised
+        /// Live words were taken back out of a client that was not the target, and pFlow could
+        /// not prove they are not still there (the app may have committed them): no paste.
+        case otherWindow
     }
 
     struct Write: Equatable {
@@ -105,6 +111,9 @@ struct LiveInlineOwnership {
     private(set) var owned: String
     private(set) var caret: NSRange
     private(set) var stopped: Stop?
+    /// How the field read back when typing stopped over a write or a changed
+    /// field (kinds only, for the reason log); nil otherwise.
+    private(set) var mismatch: ReadBackShape?
     /// A write call succeeded this take, so the destination may hold pFlow's text.
     private(set) var touched = false
     /// Write calls made this take, accepted or refused. While it is zero
@@ -155,7 +164,7 @@ struct LiveInlineOwnership {
     /// A new whole transcript arrived. Returns the one write to make, if any.
     mutating func update(transcript: String, observed state: LiveFieldState) -> Step {
         guard stopped == nil, pending == nil else { return .none }
-        if let reason = check(state) { return stop(reason) }
+        if let reason = check(state) { return stop(reason, observed: state) }
         let words = LiveStableText.agreed(previous: previous, current: transcript)
         previous = transcript
         let spoken = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -170,7 +179,7 @@ struct LiveInlineOwnership {
     mutating func finalize(text: String, observed state: LiveFieldState) -> Step {
         if let stopped { return .stopped(stopped) }
         guard pending == nil else { return stop(.uncertain) }
-        if let reason = check(state) { return stop(reason) }
+        if let reason = check(state) { return stop(reason, observed: state) }
         return plan(words: text, text: spaced(text))
     }
 
@@ -199,7 +208,10 @@ struct LiveInlineOwnership {
         // A refused write can still land (an Accessibility call that timed
         // out): any difference from what the field held before also counts.
         if accepted || !unchanged(state) { touched = true }
-        guard accepted, settled(pending, state) else { return stop(.uncertain) }
+        guard accepted, settled(pending, state) else {
+            mismatch = ReadBackShape.classify(expected: before + pending.owned + after, read: state.value)
+            return stop(.uncertain)
+        }
         owned = pending.owned
         typedWords = pending.words
         caret = pending.caret
@@ -232,6 +244,30 @@ struct LiveInlineOwnership {
         if !unchanged(state) { touched = true }
     }
 
+    /// pFlow's own typed words, without the spaces around them, while the field
+    /// is exactly as pFlow left it and the take began at a caret (no selection
+    /// replaced). Nil when anything is in doubt. A take stopped only because a
+    /// word was revised still has its span.
+    func ownSpan(_ state: LiveFieldState) -> NSRange? {
+        guard pending == nil, stopped == nil || stopped == .revised, check(state) == nil, original.length == 0 else { return nil }
+        let trimmed = owned.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let lead = owned.range(of: trimmed) else { return nil }
+        let start = original.location + owned[..<lead.lowerBound].utf16.count
+        return NSRange(location: start, length: trimmed.utf16.count)
+    }
+
+    /// The words already typed are the finished text, spaced as pFlow would put it in.
+    func finished(_ text: String) -> Bool {
+        owned.utf16.elementsEqual(spaced(text).utf16)
+    }
+
+    /// Ends typing for the take without a write (append only: a revision).
+    /// The planned write was never made, so it does not count as one.
+    mutating func halt(_ reason: Stop) -> Step {
+        if pending != nil { pending = nil; writes -= 1 }
+        return stop(reason)
+    }
+
     private func settled(_ pending: (owned: String, words: String, caret: NSRange), _ state: LiveFieldState) -> Bool {
         let expected = before + pending.owned + after
         return state.trusted && state.app == app && state.element == LiveFieldState.target && !state.secure
@@ -241,6 +277,11 @@ struct LiveInlineOwnership {
     private mutating func stop(_ reason: Stop) -> Step {
         stopped = reason
         return .stopped(reason)
+    }
+
+    private mutating func stop(_ reason: Stop, observed state: LiveFieldState) -> Step {
+        if reason == .text { mismatch = ReadBackShape.classify(expected: expectedValue, read: state.value) }
+        return stop(reason)
     }
 
     private func spaced(_ words: String) -> String {

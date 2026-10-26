@@ -35,11 +35,14 @@ internal static partial class Program
         public bool CanInsert => true;
         public string ApplicationName => "FictionalEditor";
         public string ApplicationId => "FictionalEditor";
-        public Task<string> Insert(string text, IntPtr owner, bool keepClipboard, CancellationToken cancel, string? rtf = null) { Inserted.Add(text); return Task.FromResult("Inserted"); }
+        public string Outcome = "Inserted";
+        public Task<string> Insert(string text, IntPtr owner, bool keepClipboard, CancellationToken cancel, string? rtf = null) { Inserted.Add(text); return Task.FromResult(Outcome); }
     }
 
     static void NativeLiveTyping()
     {
+        // 0.1.28: live key typing in Chrome and Edge is on again, with the end-of-take replace (0.1.27 had it off).
+        Check("browser live key typing is on by default", LiveKeyField.Enabled);
         string root = Path.Combine(Path.GetTempPath(), "pflow-live-typing-fictional-" + Guid.NewGuid().ToString("N"));
         try {
             // The preview names the app as it names itself, read from its program file only.
@@ -129,6 +132,17 @@ internal static partial class Program
                 Check("nothing typed means one normal delivery", target.Inserted.SequenceEqual(new[] { plain.Text }) && field.Writes == 0 && result.Status == "Inserted");
             }
             {
+                // W028: words pasted into an app pFlow cannot read (Notepad++-like, PasteOnly) are a done take.
+                var target = new RecordingTarget { Outcome = InsertionTarget.Pasted }; var phases = new List<Phase>();
+                var result = Wait(pipeline.Deliver(plain, 3, target, IntPtr.Zero, (phase, _) => phases.Add(phase), CancellationToken.None));
+                Check("pasted without a check: no Copy card, no balloon, History keeps it and says to check the field",
+                    result.Prompt == null && result.Notice == null && phases.Last() == Phase.Inserted && store.History[0].InsertionStatus == InsertionTarget.Pasted
+                    && HistoryRow.Status(store.History[0].InsertionStatus) == HistoryRow.CheckTheField && target.Inserted.Count == 1);
+                target.Outcome = "The app did not take the text. Your words are in History.";
+                result = Wait(pipeline.Deliver(plain, 3, target, IntPtr.Zero, (_, _) => { }, CancellationToken.None));
+                Check("a paste the app's own text shows did not take gets the Copy card", result.Prompt != null);
+            }
+            {
                 // Words were typed, then the whole-take recognition failed: they stay, History says so.
                 var target = new RecordingTarget(); var field = new OwnedField("Note: "); var slot = new LiveInlineSlot(); slot.Begin("t", field);
                 slot.Reconcile("t", "harbor lights"); slot.Reconcile("t", "harbor lights glow");
@@ -138,5 +152,24 @@ internal static partial class Program
                 Check("a failed final writes nothing more", field.Value == "Note: harbor lights" && target.Inserted.Count == 0);
             }
         } finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+}
+
+internal static partial class Program
+{
+    /// Reports go to Downloads only when it is really local: a Downloads that is a junction or link into a
+    /// cloud folder counts as cloud (W028, review minor).
+    static void NativeReports()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "pflow-reports-fictional-" + Guid.NewGuid().ToString("N"));
+        try {
+            string plainProfile = Path.Combine(root, "plain"), linkedProfile = Path.Combine(root, "linked"), cloud = Path.Combine(root, "OneDrive - Fictional", "Downloads");
+            Directory.CreateDirectory(Path.Combine(plainProfile, "Downloads")); Directory.CreateDirectory(linkedProfile); Directory.CreateDirectory(cloud);
+            var link = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c mklink /J \"" + Path.Combine(linkedProfile, "Downloads") + "\" \"" + cloud + "\"") { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true })!;
+            link.WaitForExit(10000);
+            Check("fixture junction made", Directory.Exists(Path.Combine(linkedProfile, "Downloads")) && new DirectoryInfo(Path.Combine(linkedProfile, "Downloads")).LinkTarget != null);
+            Check("an ordinary local Downloads is used", DiagnosticEnvironment.LocalDownloads(Path.Combine(plainProfile, "Downloads"), plainProfile));
+            Check("a Downloads junction into OneDrive counts as cloud", !DiagnosticEnvironment.LocalDownloads(Path.Combine(linkedProfile, "Downloads"), linkedProfile));
+        } finally { try { if (Directory.Exists(root)) { foreach (var d in Directory.GetDirectories(root, "*", SearchOption.AllDirectories).Where(d => new DirectoryInfo(d).LinkTarget != null)) Directory.Delete(d); Directory.Delete(root, true); } } catch (IOException) { } }
     }
 }

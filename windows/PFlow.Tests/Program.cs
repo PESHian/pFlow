@@ -6,7 +6,8 @@ if (args.Contains("--updates-network-only")) { await UpdateChecks.Network(); ret
 if (args.Contains("--capture-only")) { KeyCaptureChecks.Run(); return; }
 if (args.Contains("--learn-keys-only")) { HotkeyChecks.Run(); KeyCaptureChecks.Run(); return; }
 if (args.Contains("--live-text-only")) { await LiveTextChecks.Run(); LiveInlineChecks.Run(); SpeechChecks.Run(); InstalledChecks.Run(); return; }
-if (args.Contains("--installed-only")) { InstalledChecks.Run(); return; }
+if (args.Contains("--installed-only")) { InstalledChecks.Run(); InsertionRuleChecks.Run(); return; }
+if (args.Contains("--diagnostics-only")) { DiagnosticChecks.Run(); ScrollGlideChecks.Run(); return; }
 UpdateChecks.Run();
 if (!args.Contains("--hotkeys-only")) await UpdateChecks.Network();
 if (args.Contains("--updates-only")) return;
@@ -16,7 +17,10 @@ if (args.Contains("--hotkeys-only")) return;
 await LiveTextChecks.Run();
 LiveInlineChecks.Run();
 SpeechChecks.Run();
+ScrollGlideChecks.Run();
+DiagnosticChecks.Run();
 InstalledChecks.Run();
+InsertionRuleChecks.Run();
 int passed = 0;
 void Check(string name, bool condition) { if (!condition) throw new Exception("FAIL: " + name); passed++; Console.WriteLine("PASS: " + name); }
 string Words(string value) => string.Join(" ", Regex.Split(value.Trim(), @"\s+"));
@@ -216,10 +220,24 @@ foreach(var value in new[] { "Um, Morgan said \"five\".", "Um, at -12, Morgan ca
 var directory = Path.Combine(Path.GetTempPath(), "pflow-fast-" + Guid.NewGuid());
 try {
  var store = new StateStore(directory);
- Check("new dictation uses English and immediate cleanup", store.Preferences.Language == "en" && store.Preferences.Cleanup && !store.Preferences.UseAICleanup);
- store.Preferences.UseAICleanup = true; store.Preferences.Language = "es"; store.SavePreferences();
+ Check("new dictation uses English and immediate cleanup", store.Preferences.Language == "en" && store.Preferences.Cleanup);
+ store.Preferences.Language = "es"; store.SavePreferences();
  var loaded = new StateStore(directory);
- Check("explicit preset and AI choices persist", loaded.Preferences.UseAICleanup && loaded.Preferences.Language == "es");
+ Check("explicit preset persists", loaded.Preferences.Language == "es");
+ // A settings file from 0.1.24 or earlier with AI cleanup switched on: read without complaint, and the switch is gone after the next save.
+ File.WriteAllText(Path.Combine(directory, "settings.json"), "{\"language\":\"es\",\"cleanup\":true,\"useAICleanup\":true,\"paragraphs\":false}");
+ var migrated = new StateStore(directory);
+ Check("a saved AI cleanup choice is dropped silently and the other choices survive", migrated.Preferences.Language == "es" && migrated.Preferences.Cleanup && !migrated.Preferences.Paragraphs);
+ migrated.SavePreferences();
+ Check("the saved file no longer carries the AI cleanup switch", !File.ReadAllText(Path.Combine(directory, "settings.json")).Contains("useAICleanup", StringComparison.OrdinalIgnoreCase));
+// A settings file from 0.1.25 with large-v3-turbo or medium chosen: read without complaint (every take runs on small), the choice gone after the next save.
+foreach (string retired in new[] { "large-v3-turbo-q8_0", "medium-q5_0" }) {
+    File.WriteAllText(Path.Combine(directory, "settings.json"), "{\"language\":\"es\",\"liveTextMode\":\"type\",\"speechModel\":\"" + retired + "\",\"paragraphs\":false}");
+    var fromTurbo = new StateStore(directory);
+    Check("a saved " + retired + " choice is dropped silently and the other choices survive", fromTurbo.Preferences.Language == "es" && fromTurbo.Preferences.LiveTextMode == LiveTextModes.TypeInApp && !fromTurbo.Preferences.Paragraphs);
+    fromTurbo.SavePreferences();
+    Check("the saved file no longer carries the " + retired + " choice", !File.ReadAllText(Path.Combine(directory, "settings.json")).Contains("speechModel", StringComparison.OrdinalIgnoreCase));
+}
  File.WriteAllText(Path.Combine(directory, "settings.json"), "{\"language\":\"auto\"}");
  Check("legacy auto becomes English preset", new StateStore(directory).Preferences.Language == "en");
 } finally { Directory.Delete(directory, true); }
@@ -250,8 +268,6 @@ Check("cleanup never collapses a repeated number word before another", !TextFide
 Check("cleanup never collapses oh inside a number run", !TextFidelity.CleanupIsFaithful("agent oh oh seven", "Agent oh seven."));
 Check("cleanup still punctuates a repeated number word", TextFidelity.CleanupIsFaithful("room five five", "Room five, five."));
 Check("cleanup still repairs oh oh outside a number", TextFidelity.CleanupIsFaithful("oh oh well we tried", "Oh well, we tried."));
-Check("symbols-only difference is told apart from changed words", TextFidelity.OnlySymbolsDiffer("5,6,7", "5, 6, 7") && TextFidelity.OnlySymbolsDiffer("it cost $40", "It cost 40.")
-    && !TextFidelity.OnlySymbolsDiffer("we didn't go", "We did not go.") && !TextFidelity.OnlySymbolsDiffer("room five five", "Room five."));
 // The model now sees takes with numbers, contractions and symbols; punctuation and case may change, nothing else.
 Check("cleanup accepts punctuation and case around numbers", TextFidelity.CleanupIsFaithful("so next year in 4040 bc jimmy dean was born in a sea of pee", "So next year in 4040 BC, Jimmy Dean was born in a sea of pee."));
 Check("cleanup accepts a comma in far far away with a contraction", TextFidelity.CleanupIsFaithful("far far away we didn't stop at 4:30", "Far, far away, we didn't stop at 4:30."));

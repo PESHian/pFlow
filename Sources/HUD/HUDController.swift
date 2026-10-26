@@ -61,6 +61,8 @@ final class HUDController: HUDControlling {
 
         // Reset state BEFORE the panel is on screen, so no stale frame from the previous session is ever visible.
         model.device = device
+        // Every card can be closed, the reason-only ones included.
+        model.onClose = { [weak self] in self?.hide(after: 0) }
         model.partial = ""
         model.liveNote = nil
         model.copyOffer = nil

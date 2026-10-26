@@ -14,7 +14,7 @@ enum YapMain {
             let permissions = PermissionsManager()
             permissions.refresh()
             let login = LaunchAtLoginService()
-            print("MICROPHONE=\(permissions.microphone) SPEECH=\(permissions.speech) ACCESSIBILITY=\(permissions.accessibility) AUTOMATION=\(permissions.automation)")
+            print("MICROPHONE=\(permissions.microphone) SPEECH=\(permissions.speech) ACCESSIBILITY=\(permissions.accessibility)")
             print("LOGIN_ENABLED=\(login.isEnabled) LOGIN_NEEDS_APPROVAL=\(login.needsApproval) APPLE_INTELLIGENCE=\(TranscriptCleanupService().isAvailable)")
             return
         }
@@ -22,6 +22,10 @@ enum YapMain {
         // Debug builds only: the live typing self-test. Runs before any app setup.
         if CommandLine.arguments.contains(InlineSelfTest.flag) {
             InlineSelfTest.start(arguments: CommandLine.arguments)
+            return
+        }
+        if CommandLine.arguments.contains(TrustedTakes.flag) {
+            TrustedTakes.start(arguments: CommandLine.arguments)
             return
         }
         #endif
@@ -95,6 +99,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         AppState.shared.presentMainWindow()
         return true
+    }
+
+    /// Quitting mid-take: the person's own input source comes back.
+    func applicationWillTerminate(_ notification: Notification) {
+        InputMethodLink.shared.end()
     }
 
     /// Yap is a background dictation tool — closing a window must not quit it.

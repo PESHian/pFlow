@@ -15,12 +15,12 @@ using PFlow.Windows;
 // test-owned Edit box in a separate process (needs the signed-in desktop).
 internal static partial class Program
 {
-    static bool speedOnly, speedInsertOnly;
+    static bool speedOnly, speedInsertOnly, werOnly;
     static readonly Dictionary<string, string> speedOptions = [];
 
     static void SpeedArguments(string[] args)
     {
-        speedOnly = args.Contains("--speed"); speedInsertOnly = args.Contains("--speed-insert");
+        speedOnly = args.Contains("--speed"); speedInsertOnly = args.Contains("--speed-insert"); werOnly = args.Contains("--wer");
         foreach (string arg in args) if (arg.IndexOf('=') is > 0 and var at) speedOptions[arg[..at]] = arg[(at + 1)..];
     }
 
@@ -39,6 +39,37 @@ internal static partial class Program
         return (double)row[h.Length] / r.Length;
     }
 
+    /// --wer files=a.wav,b.wav [model=<id>] label=name: the finished-text pass alone (no live feed), one
+    /// warm pass per file after a prewarm: recognition time and word error rate against the fixture text.
+    static async Task Wer()
+    {
+        string directory = Path.Combine(root, "wer-fictional-" + Guid.NewGuid()); Directory.CreateDirectory(directory);
+        var store = new StateStore(directory); store.Preferences.Language = "en";
+        var whisper = new Whisper(directory, PackageAssets);
+        string label = SpeedOption("label", "run");
+        var rows = new List<Dictionary<string, object>>();
+        try {
+            var warm = Stopwatch.StartNew(); await whisper.Prewarm(); double prewarmMs = warm.Elapsed.TotalMilliseconds;
+            var timing = new Dictionary<string, double>();
+            var pipeline = new DictationPipeline(store, whisper, new LocalTextModel(directory, PackageAssets)) { Timing = (name, ms) => timing[name] = ms };
+            foreach (string audio in SpeedOption("files", "short-1.wav").Split(',')) {
+                double seconds = (new FileInfo(Path.Combine(root, audio)).Length - 44) / 32000.0; timing.Clear();
+                var clock = Stopwatch.StartNew();
+                var prepared = await pipeline.Prepare(Path.Combine(root, audio), seconds, directory, (_, _) => { }, CancellationToken.None);
+                string reference = Reference(audio);
+                rows.Add(new() { ["label"] = label, ["model"] = "small", ["file"] = audio, ["audioMs"] = Math.Round(seconds * 1000), ["prewarmMs"] = Math.Round(prewarmMs),
+                    ["recognitionMs"] = Math.Round(timing.GetValueOrDefault("recognitionMs", -1)), ["totalMs"] = Math.Round(clock.Elapsed.TotalMilliseconds),
+                    ["audioContext"] = whisper.LastMetrics.AudioContext, ["final"] = prepared.Text, ["wordErrorRate"] = Math.Round(WordErrorRate(prepared.Text, reference), 4),
+                    ["referenceWords"] = Words(reference).Split(' ', StringSplitOptions.RemoveEmptyEntries).Length });
+                Console.WriteLine("WER " + JsonSerializer.Serialize(rows[^1]));
+                Check(audio + " finished text is not empty", !string.IsNullOrWhiteSpace(prepared.Text));
+            }
+        } finally {
+            File.WriteAllText(Path.Combine(root, $"wer-{label}-{DateTime.UtcNow:yyyyMMddHHmmss}.json"), JsonSerializer.Serialize(rows, new JsonSerializerOptions { WriteIndented = true }));
+            // The worker holds the model file open: end it before the folder with the copied model goes.
+            await whisper.DisposeAsync(); Directory.Delete(directory, true);
+        }
+    }
     static string Reference(string audio) => File.ReadAllText(Path.ChangeExtension(Path.Combine(root, audio), ".txt")).Trim();
 
     static async Task Speed()
@@ -73,7 +104,7 @@ internal static partial class Program
                 var gaps = report.Updates.Where(u => u.Ms <= report.AudioEndMs).Zip(report.Updates.Skip(1).Where(u => u.Ms <= report.AudioEndMs), (a, b) => b.Ms - a.Ms).OrderBy(x => x).ToList();
                 string reference = Reference(audio);
                 rows.Add(new() {
-                    ["label"] = label, ["file"] = audio, ["mode"] = report.Mode, ["take"] = take, ["cold"] = take == 1, ["prewarmMs"] = Math.Round(prewarmMs),
+                    ["label"] = label, ["model"] = "small", ["file"] = audio, ["mode"] = report.Mode, ["take"] = take, ["cold"] = take == 1, ["prewarmMs"] = Math.Round(prewarmMs),
                     ["audioMs"] = Math.Round(report.AudioMs), ["firstWordsMs"] = Math.Round(report.FirstUpdateMs), ["updatesBeforeEnd"] = report.UpdatesBeforeEnd,
                     ["medianGapMs"] = gaps.Count > 0 ? Math.Round(gaps[gaps.Count / 2]) : -1, ["windows"] = report.Windows,
                     ["liveStopMs"] = Math.Round(report.StopMs), ["recognitionMs"] = Math.Round(timing.GetValueOrDefault("recognitionMs", -1)),

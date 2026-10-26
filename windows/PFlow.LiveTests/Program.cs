@@ -35,7 +35,7 @@ internal static partial class Program
     static bool compactFixOnly;
     static bool waveformsOnly, waveCaptureOnly, payloadOnly, payloadSpacingOnly;
     static bool speechOnly, warmLatencyOnly, extendedLatencyOnly, insertionLatencyOnly, workerSafetyOnly, templateCatalogOnly;
-    static bool cleanupModelOnly, optionalAIOnly, statisticsOnly, finalPriorityOnly, touchScrollOnly, touchCapsuleOnly, chromiumOnly, chromiumColdOnly;
+    static bool statisticsOnly, finalPriorityOnly, touchScrollOnly, touchCapsuleOnly, chromiumOnly, chromiumColdOnly;
     static void Check(string name, bool condition) { if (!condition) throw new Exception("FAIL: " + name); Console.WriteLine("PASS: " + name); passed++; }
     static string Normalize(string text) => text.Replace("\r\n", "\n").Replace('\r', '\n');
     [STAThread] static int Main(string[] args)
@@ -62,12 +62,13 @@ internal static partial class Program
         compactOnly = args.Contains("--compact-only");
         compactFixOnly = args.Contains("--compact-fix-only");
         waveCaptureOnly = args.Contains("--wave-capture-only"); waveformsOnly = args.Contains("--waveforms-only") || waveCaptureOnly; payloadSpacingOnly = args.Contains("--payload-spacing-only"); payloadOnly = args.Contains("--payload-only") || payloadSpacingOnly;
-        optionalAIOnly = args.Contains("--optional-ai-only"); cleanupModelOnly = args.Contains("--cleanup-model");
         finalPriorityOnly = args.Contains("--final-priority"); touchScrollOnly = args.Contains("--touch-scroll"); touchCapsuleOnly = args.Contains("--touch-capsule"); chromiumOnly = args.Contains("--chromium-fields"); chromiumColdOnly = args.Contains("--chromium-cold");
         SpeedArguments(args);
+        scrollFramesOnly = args.Contains("--scroll-frames"); ownerStateOnly = args.Contains("--owner-state");
+        diagTakesOnly = args.Contains("--diag-takes"); writerOnly = args.Contains("--writer"); imePasteOnly = args.Contains("--ime-paste"); terminalsOnly = args.Contains("--terminals"); historyCopyOnly = args.Contains("--history-copy"); chromeReplaceOnly = args.Contains("--chrome-replace"); reportButtonOnly = args.Contains("--report-button"); chromeGuardOnly = args.Contains("--chrome-live-guard"); chromeLiveOnly = args.Contains("--chrome-live"); slowLiveOnly = args.Contains("--slow-live");
         liveTextOnly = args.Contains("--live-text-only"); liveFocusOnly = args.Contains("--live-focus-only"); inlineOnly = args.Contains("--inline-only"); inlineElevatedOnly = args.Contains("--inline-elevated");
-        workerSafetyOnly = args.Contains("--worker-safety-only"); extendedLatencyOnly = args.Contains("--extended-latency-only"); insertionLatencyOnly = args.Contains("--insertion-latency-only"); warmLatencyOnly = args.Contains("--warm-latency-only"); speechOnly = args.Contains("--speech-only") || optionalAIOnly;
-        if (statisticsOnly || templateCatalogOnly || appearanceOnly || appearanceRenderOnly || appearanceColorsOnly || fallbackOnly || settingsOnly || capsuleOnly || compactOnly || compactFixOnly || waveformsOnly || payloadOnly || liveTextOnly || liveFocusOnly || inlineOnly || inlineElevatedOnly || speedOnly || speedInsertOnly || finalPriorityOnly || touchScrollOnly || touchCapsuleOnly || chromiumOnly || chromiumColdOnly) _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        workerSafetyOnly = args.Contains("--worker-safety-only"); extendedLatencyOnly = args.Contains("--extended-latency-only"); insertionLatencyOnly = args.Contains("--insertion-latency-only"); warmLatencyOnly = args.Contains("--warm-latency-only"); speechOnly = args.Contains("--speech-only");
+        if (writerOnly || imePasteOnly || chromeReplaceOnly || chromeGuardOnly || reportButtonOnly || diagTakesOnly || chromeLiveOnly || slowLiveOnly || scrollFramesOnly || ownerStateOnly || statisticsOnly || templateCatalogOnly || appearanceOnly || appearanceRenderOnly || appearanceColorsOnly || fallbackOnly || settingsOnly || capsuleOnly || compactOnly || compactFixOnly || waveformsOnly || payloadOnly || liveTextOnly || liveFocusOnly || inlineOnly || inlineElevatedOnly || speedOnly || speedInsertOnly || werOnly || finalPriorityOnly || touchScrollOnly || touchCapsuleOnly || chromiumOnly || chromiumColdOnly) _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext());
         if (waveformsOnly) {
             var application = Application.Current;
@@ -158,6 +159,7 @@ internal static partial class Program
     static async Task Run()
     {
         if (speedOnly) { await Speed(); return; }
+        if (werOnly) { await Wer(); return; }
         if (speedInsertOnly) { await SpeedInsert(); return; }
         if (finalPriorityOnly) { await FinalPriority(); return; }
         if (touchScrollOnly) { await TouchScroll(); return; }
@@ -167,6 +169,26 @@ internal static partial class Program
         if (liveTextOnly) { await LiveText(); return; }
         if (liveFocusOnly) { await LiveFocus(); return; }
         if (inlineOnly) { await Inline(); return; }
+        if (scrollFramesOnly) { await ScrollFramesRun(); return; }
+        if (ownerStateOnly) { await OwnerState(); return; }
+        if (diagTakesOnly) { await DiagTakes(); return; }
+        if (terminalsOnly) { await Terminals(IntPtr.Zero); return; }
+        if (historyCopyOnly) {
+            // The Copy card's copy stays on the clipboard: clipboard history (Win+V) must still leave it out. A copy of
+            // the harness's own right after it is the positive control (the probe looks for both).
+            string kept = "pflow fictional kept copy " + Guid.NewGuid().ToString("N")[..8], control = "pflow fictional history control " + Guid.NewGuid().ToString("N")[..8];
+            ClipboardLease.KeepCopy(IntPtr.Zero, kept); await Task.Delay(3000);
+            System.Windows.Forms.Clipboard.SetDataObject(control, true, 100, 100); await Task.Delay(3000);
+            Console.WriteLine("HISTORY kept copy: " + kept); Console.WriteLine("HISTORY control: " + control);
+            return;
+        }
+        if (writerOnly) { await Writer(); return; }
+        if (imePasteOnly) { await ImePaste(); return; }
+        if (chromeReplaceOnly) { await ChromeReplace(); return; }
+        if (reportButtonOnly) { await ReportButton(); return; }
+        if (chromeGuardOnly) { await ChromeGuard(); return; }
+        if (chromeLiveOnly) { await ChromeLive(); return; }
+        if (slowLiveOnly) { await SlowLive(); return; }
         if (inlineElevatedOnly) { await InlineElevated(); return; }
         if (statisticsOnly) { await StatisticsPage(); return; }
         if (templateCatalogOnly) { await CustomTemplates(); return; }
@@ -175,7 +197,6 @@ internal static partial class Program
         if (insertionLatencyOnly) { await Processing(); return; }
         if (warmLatencyOnly) { await WarmLatency(); return; }
         if (speechOnly) { await SpeechLatency(); return; }
-        if (cleanupModelOnly) { await CleanupModel(); return; }
         if (waveformsOnly) { await WaveformFrames(); return; }
         if (payloadSpacingOnly) { SpacingProviderChecks(); return; }
         if (payloadOnly) { PayloadSpacing(); return; }
@@ -304,10 +325,11 @@ internal static partial class Program
                 Native.Send(new Native.Input { Type = 1, Data = new() { Keyboard = new() { Vk = key } } }, new Native.Input { Type = 1, Data = new() { Keyboard = new() { Vk = key, Flags = Native.KEYEVENTF_KEYUP } } });
                 await Task.Delay(150);
             }
-            var ai = Descendants<System.Windows.Controls.CheckBox>(window).Single(x => x.Content as string == "AI cleanup (slower, English)");
-            Check("AI cleanup starts optional", ai.IsChecked == false);
-            await Key(ai, 0x20); Check("AI cleanup choice persists", new PFlow.Core.StateStore(directory).Preferences.UseAICleanup);
-            await Key(ai, 0x20); Check("fast cleanup choice persists", !new PFlow.Core.StateStore(directory).Preferences.UseAICleanup);
+            Check("no AI cleanup switch is offered", !Descendants<System.Windows.Controls.CheckBox>(window).Any(x => (x.Content as string ?? "").Contains("AI cleanup")));
+            var paragraphs = Descendants<System.Windows.Controls.CheckBox>(window).Single(x => x.Content as string == "Group long narrations into paragraphs");
+            Check("paragraphs start on", paragraphs.IsChecked == true);
+            await Key(paragraphs, 0x20); Check("paragraph choice persists", !new PFlow.Core.StateStore(directory).Preferences.Paragraphs);
+            await Key(paragraphs, 0x20); Check("paragraph choice persists again", new PFlow.Core.StateStore(directory).Preferences.Paragraphs);
             var language = Descendants<System.Windows.Controls.ComboBox>(window).Single(x => AutomationProperties.GetName(x) == "Speech language");
             Check("English starts selected", language.SelectedValue as string == "en");
             Check("automatic guessing is absent", !language.Items.Cast<KeyValuePair<string, string>>().Any(x => x.Key == "auto"));
@@ -776,16 +798,14 @@ internal static partial class Program
         string assets = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "pFlow");
         var whisper = new Whisper(directory, assets); var model = new LocalTextModel(directory, assets);
         try {
-            foreach (bool optionalAI in optionalAIOnly ? new[] { true } : new[] { false }) {
-                store.Preferences.UseAICleanup = optionalAI;
+            {
                 var stages = new List<string?>(); var watch = Stopwatch.StartNew();
-                var pipeline = new DictationPipeline(store, whisper, model) { CleanupBudget = optionalAI ? TimeSpan.FromMilliseconds(1) : TimeSpan.FromSeconds(8) };
+                var pipeline = new DictationPipeline(store, whisper, model);
                 var prepared = await pipeline.Prepare(Path.Combine(directory, "speech.wav"), 2.6, directory, (_, detail) => stages.Add(detail), CancellationToken.None);
-                Check("production processing keeps exact fictional sentence " + optionalAI, prepared.Text == "Morgan checked the blue bicycle." && prepared.SpokenWords == 5);
-                if (!optionalAI) Check("ordinary processing stays below six seconds", watch.Elapsed < TimeSpan.FromSeconds(6));
-                Check("AI is used only when explicitly selected " + optionalAI, stages.Contains("Cleaning up") == optionalAI);
-                Check("optional AI deadline preserves words " + optionalAI, prepared.CleanupIncomplete == optionalAI && prepared.CleanupTimedOut == optionalAI);
-                Console.WriteLine($"Production speech processing elapsed {watch.Elapsed.TotalSeconds:F2}s, optional AI={optionalAI}");
+                Check("production processing keeps exact fictional sentence", prepared.Text == "Morgan checked the blue bicycle." && prepared.SpokenWords == 5);
+                Check("ordinary processing stays below six seconds", watch.Elapsed < TimeSpan.FromSeconds(6));
+                Check("the only processing stage is transcription", stages.All(x => x == "Transcribing"));
+                Console.WriteLine($"Production speech processing elapsed {watch.Elapsed.TotalSeconds:F2}s");
             }
         } finally { Directory.Delete(directory, true); }
     }
@@ -803,23 +823,21 @@ internal static partial class Program
         File.Copy(Path.Combine(root, "short-fictional.wav"), Path.Combine(directory, "speech.wav"));
         try {
             if (insertionLatencyOnly) await whisper.Prewarm();
-            foreach (bool forceTimeout in insertionLatencyOnly ? new[] { false } : new[] { false, true }) {
-                store.Preferences.UseAICleanup = forceTimeout;
+            {
                 await Focus(notepad, edit); End(edit); var target = InsertionTarget.Capture(); string before = Read(edit);
                 uint clipboard = Native.GetClipboardSequenceNumber(); var stages = new List<PFlow.Core.Phase>(); var details = new List<string?>();
                 var timing = new Dictionary<string, double>();
-                var pipeline = new DictationPipeline(store, whisper, model) { Timing = (name, ms) => timing[name] = ms, CleanupBudget = forceTimeout ? TimeSpan.FromMilliseconds(1) : TimeSpan.FromSeconds(8) };
+                var pipeline = new DictationPipeline(store, whisper, model) { Timing = (name, ms) => timing[name] = ms };
                 var watch = Stopwatch.StartNew();
                 var result = await pipeline.Run(Path.Combine(directory, "speech.wav"), 2.6, target, directory, owner.Handle, (phase, detail) => { stages.Add(phase); details.Add(detail); }, CancellationToken.None);
                 if (insertionLatencyOnly) { Console.WriteLine($"TOTAL_PIPELINE_MS={watch.Elapsed.TotalMilliseconds:F0}"); foreach (var stage in timing) Console.WriteLine($"STAGE {stage.Key}={stage.Value:F0}"); }
-                Check("production pipeline inserts in Notepad " + forceTimeout, result.Status == "Inserted" && Normalize(Read(edit)) == Normalize(before + "Morgan checked the blue bicycle."));
-                Check("pipeline persists fictional History " + forceTimeout, new PFlow.Core.StateStore(directory).History.Count == (forceTimeout ? 2 : 1) && new PFlow.Core.StateStore(directory).History[0].InsertionStatus == "Inserted");
-                Check("pipeline preserves clipboard " + forceTimeout, Native.GetClipboardSequenceNumber() == clipboard);
-                Check("pipeline reaches insertion state " + forceTimeout, stages.Contains(PFlow.Core.Phase.Processing) && stages.Contains(PFlow.Core.Phase.Inserting) && stages.Last() == PFlow.Core.Phase.Inserted);
-                Check("short pipeline has bounded completion " + forceTimeout, watch.Elapsed < TimeSpan.FromSeconds(6));
-                if (!forceTimeout) Check("ordinary dictation never starts AI cleanup", !details.Contains("Cleaning up"));
-                if (forceTimeout) Check("cleanup deadline keeps dictation usable", result.Notice?.Contains("original words were kept") == true);
-                Console.WriteLine($"Fictional pipeline elapsed {watch.Elapsed.TotalSeconds:F1}s, forced cleanup timeout={forceTimeout}");
+                Check("production pipeline inserts in Notepad", result.Status == "Inserted" && Normalize(Read(edit)) == Normalize(before + "Morgan checked the blue bicycle."));
+                Check("pipeline persists fictional History", new PFlow.Core.StateStore(directory).History.Count == 1 && new PFlow.Core.StateStore(directory).History[0].InsertionStatus == "Inserted");
+                Check("pipeline preserves clipboard", Native.GetClipboardSequenceNumber() == clipboard);
+                Check("pipeline reaches insertion state", stages.Contains(PFlow.Core.Phase.Processing) && stages.Contains(PFlow.Core.Phase.Inserting) && stages.Last() == PFlow.Core.Phase.Inserted);
+                Check("short pipeline has bounded completion", watch.Elapsed < TimeSpan.FromSeconds(6));
+                Check("the only processing detail is transcription", details.Where(x => x != null).All(x => x == "Transcribing"));
+                Console.WriteLine($"Fictional pipeline elapsed {watch.Elapsed.TotalSeconds:F1}s");
             }
         } finally { Directory.Delete(directory, true); }
     }

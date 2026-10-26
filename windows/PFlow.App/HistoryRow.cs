@@ -27,6 +27,6 @@ internal static class HistoryRow
     /// One word for the insertion status: the words went in, went out unchecked, or stayed in History.
     public static string Status(string status) =>
         status.StartsWith("Inserted", StringComparison.Ordinal) ? Inserted
-        : status.StartsWith(InsertionTarget.Unchecked, StringComparison.Ordinal) || status.StartsWith(InsertionTarget.Unconfirmed, StringComparison.Ordinal) ? CheckTheField
+        : InsertionTarget.WentInUnchecked(status) || status.StartsWith(InsertionTarget.Unconfirmed, StringComparison.Ordinal) ? CheckTheField
         : Kept;
 }

@@ -26,6 +26,28 @@ public static partial class PrivateLog
         line = QuotedHomePath().Replace(line, "<path>"); return HomePath().Replace(line, "<path>");
     }
 
+    /// Apps whose program names a log or diagnostic report may carry; any other app is "other", so a
+    /// program name never tells what a person was working on.
+    static readonly HashSet<string> KnownApps = new(StringComparer.OrdinalIgnoreCase) {
+        "notepad", "wordpad", "write", "msedge", "chrome", "firefox", "brave", "opera", "vivaldi", "winword", "excel", "powerpnt", "outlook", "olk",
+        "onenote", "teams", "ms-teams", "slack", "discord", "code", "cursor", "explorer", "pflow", "pflow.livetests", "pflow.windowstests" };
+    public static string AppLabel(string? program) => program != null && KnownApps.Contains(program) ? program : "other";
+
+    /// Window and control classes a log or report may name: the Win32, WinForms, WPF, UWP and Chromium
+    /// classes pFlow reasons about; any other class (an app's own, or a web page's) is "other".
+    static readonly HashSet<string> KnownClasses = new(StringComparer.OrdinalIgnoreCase) {
+        "Edit", "RichEdit20W", "RichEdit20A", "RICHEDIT50W", "RichEditD2DPT", "RichEditD2D", "Notepad", "NotepadTextBox", "Scintilla", "_WwG", "EXCEL7",
+        "TextBox", "RichTextBox", "PasswordBox", "RichEditBox", "Windows.UI.Core.CoreWindow", "ApplicationFrameWindow", "Chrome_WidgetWin_1",
+        "Chrome_RenderWidgetHostHWND", "Chrome_WidgetWin_0", "MozillaWindowClass", "Static", "Button", "#32770" };
+    public static string ClassLabel(string? name)
+    {
+        if (string.IsNullOrEmpty(name)) return "-";
+        if (KnownClasses.Contains(name)) return name;
+        // WinForms wraps the system controls: WindowsForms10.EDIT.app.0.<hash> names only its base.
+        var parts = name.Split('.');
+        return parts.Length > 3 && parts[0].StartsWith("WindowsForms", StringComparison.Ordinal) && KnownClasses.Contains(parts[1]) ? "WindowsForms." + parts[1] : "other";
+    }
+
     /// An exception as a log reason: its type and its message with paths removed.
     public static string Reason(Exception error) => error.GetType().Name + ": " + Scrub(error.Message);
 }

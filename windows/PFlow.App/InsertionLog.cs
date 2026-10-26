@@ -12,6 +12,13 @@ internal static class InsertionLog
     internal static event Action<string>? Written;
     internal static void Record(string line)
     {
+        // The same line goes with the take into the diagnostic report.
+        Diagnostics.Recorder.Log(line);
+        Append(line);
+    }
+    /// A line written to the log only: the diagnostic recorder's compact lines come back here.
+    internal static void Append(string line)
+    {
         string entry = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss.fff zzz") + " " + PrivateLog.Scrub(line);
         Written?.Invoke(entry);
         if (Path == null) return;

@@ -21,7 +21,7 @@ public sealed record LiveFieldState(long App, string Element, bool Secure, bool 
 
 /// Why live typing did not start or stopped for the take. The names match the
 /// fixtures' `beginResult` and `reason` strings in lower case.
-public enum LiveStop { Unsupported, Permission, App, Focus, Secure, Text, Caret, Uncertain }
+public enum LiveStop { Unsupported, Permission, App, Focus, Secure, Text, Caret, Uncertain, Revised }
 
 /// One decision of the ownership rules: write nothing, make one write, or stop.
 public abstract record LiveStep
@@ -125,17 +125,45 @@ public sealed class LiveInlineOwnership
 
     /// Checks the destination captured before any pFlow window appeared.
     /// `writable` is the native probe, made without writing anything.
-    public static LiveInlineOwnership? Begin(LiveFieldState state, bool writable, out LiveStop? refused)
+    public static LiveInlineOwnership? Begin(LiveFieldState state, bool writable, out LiveStop? refused) => Begin(state, writable, out refused, out _);
+
+    /// As above; `detail` names the first check that refused (for the diagnostic report), or "ok".
+    public static LiveInlineOwnership? Begin(LiveFieldState state, bool writable, out LiveStop? refused, out string detail)
     {
         refused = !state.Trusted ? LiveStop.Permission : state.Secure ? LiveStop.Secure : null;
+        detail = !state.Trusted ? "app above pFlow or gone" : state.Secure ? "password field" : "ok";
         if (refused != null) return null;
-        if (!writable || state.Element != LiveFieldState.Target || state.Value is not string value || value.Length > MaxFieldLength
-            || state.Selection is not TextSpan selection || selection.Start < 0 || selection.Length < 0 || selection.End > value.Length
-            || SplitsCharacter(value, selection.Start) || SplitsCharacter(value, selection.End)) {
-            refused = LiveStop.Unsupported;
-            return null;
+        detail = !writable ? "no range write (read-only, disabled, unknown selection or above pFlow)"
+            : state.Element != LiveFieldState.Target ? "focus is not the captured field"
+            : state.Value is not string text ? "field text unreadable"
+            : text.Length > MaxFieldLength ? "field longer than " + MaxFieldLength
+            : state.Selection is not TextSpan span ? "selection unreadable or units disagree"
+            : span.Start < 0 || span.Length < 0 || span.End > text.Length ? "selection outside the text"
+            : SplitsCharacter(text, span.Start) || SplitsCharacter(text, span.End) ? "selection splits a character" : "ok";
+        if (detail != "ok") { refused = LiveStop.Unsupported; return null; }
+        return new LiveInlineOwnership(state.App, state.Value!, state.Selection!.Value);
+    }
+
+    /// How `state` differs from what pFlow expects, as numbers only (lengths, positions), for the
+    /// diagnostic report when live typing stops. Never the text.
+    public DiagField[] Compare(LiveFieldState state) => Compare(state, ExpectedValue, Caret);
+
+    /// As `Compare`, against what the last write should have left (after a write that did not read back right).
+    public DiagField[] CompareWritten(LiveFieldState state) => Compare(state, lastWrite.Expected ?? ExpectedValue, lastWrite.Caret ?? Caret);
+    (string? Expected, TextSpan? Caret) lastWrite;
+
+    DiagField[] Compare(LiveFieldState state, string expected, TextSpan caret)
+    {
+        int difference = -1;
+        if (state.Value is string read) {
+            int shared = 0;
+            while (shared < read.Length && shared < expected.Length && read[shared] == expected[shared]) shared++;
+            difference = shared == read.Length && shared == expected.Length ? -1 : shared;
         }
-        return new LiveInlineOwnership(state.App, value, selection);
+        return [new DiagField("sameApp", state.App == app), new DiagField("sameField", state.Element == LiveFieldState.Target), new DiagField("trusted", state.Trusted), new DiagField("password", state.Secure),
+            new DiagField("textRead", state.Value != null), new DiagField("expectedLength", expected.Length), new DiagField("readLength", state.Value?.Length ?? -1), new DiagField("firstDifferenceAt", difference),
+            new DiagField("caretExpected", caret.Start + "+" + caret.Length), new DiagField("caretRead", state.Selection is TextSpan s ? s.Start + "+" + s.Length : "-"),
+            new DiagField("ownedLength", Owned.Length), new DiagField("insertAt", Original.Start)];
     }
 
     /// A position between the two halves of a surrogate pair is not a place text can go.
@@ -201,10 +229,42 @@ public sealed class LiveInlineOwnership
         pending = null;
         Touched = true;
         string expected = before + owned + after;
+        lastWrite = (expected, caret);
         if (!accepted || !state.Trusted || state.App != app || state.Element != LiveFieldState.Target || state.Secure
             || !string.Equals(state.Value, expected, StringComparison.Ordinal) || state.Selection != caret) return Stop(LiveStop.Uncertain);
         Owned = owned; typedWords = words; Caret = caret;
         return LiveStep.None;
+    }
+
+    /// An append-only field (typed characters) cannot take back what pFlow typed: when the recognizer
+    /// revises a word already typed, live typing ends for the take and the planned write is dropped.
+    public LiveStep Halt(LiveStop reason) { pending = null; return Stop(reason); }
+
+    /// The end of a take in an append-only field: pFlow's own words, where they are, in a field still exactly
+    /// as pFlow left them (a take stopped only because a word was revised still counts). The spaces pFlow put
+    /// around them stay outside: the finished text replaces the words and keeps that spacing. Null otherwise.
+    public TextSpan? OwnSpan(LiveFieldState state)
+    {
+        if (pending != null || Stopped is LiveStop stopped && stopped != LiveStop.Revised || Check(state) != null || Original.Length != 0) return null;
+        int lead = Owned.Length - Owned.TrimStart().Length, words = Owned.Trim().Length;
+        return words == 0 ? null : new TextSpan(Original.Start + lead, words);
+    }
+
+    /// The same words as the finished text: nothing to replace.
+    public bool Finished(string text) => string.Equals(Owned, Spaced(text), StringComparison.Ordinal);
+
+    /// (W027, unused since W028's end-of-take replace) The finished text goes in only as an addition right after
+    /// exactly what pFlow typed, in a field still exactly as pFlow left it, and never with a line break.
+    /// Anything else keeps what is there (Stopped). A take stopped only because a word was revised may
+    /// still end this way. None means the typed words already are the finished text.
+    public LiveStep FinalizeAppend(string text, LiveFieldState state)
+    {
+        if (pending != null) return Stop(LiveStop.Uncertain);
+        if (Stopped is LiveStop stopped && stopped != LiveStop.Revised) return new LiveStep.Stopped(stopped);
+        if (Check(state) is LiveStop reason) return Stop(reason);
+        string target = Spaced(text);
+        if (target.IndexOfAny(['\r', '\n']) >= 0 || !target.StartsWith(Owned, StringComparison.Ordinal)) return Stop(LiveStop.Revised);
+        return Plan(text, target);
     }
 
     LiveStep Stop(LiveStop reason)
@@ -247,9 +307,25 @@ public interface ILiveTextField
     bool Select(TextSpan range);
     /// The line break the field stores: "\r\n" for an edit control, "\r" for rich edit.
     string LineBreak { get; }
+    /// How writes reach the field, for the diagnostic report.
+    string Method => "range write";
+    /// False while a write cannot be made safely right now (a key the person holds would change
+    /// typed characters); the update is skipped, nothing is written and typing goes on.
+    bool ReadyToWrite => true;
+    /// True for a field typed into with keys: while words come, pFlow only ever adds characters at the caret
+    /// after its own words, and a revised word ends live typing. At the end pFlow's own span is selected
+    /// (Select, no keys) and the finished text goes over it the normal checked way; nothing else is touched.
+    bool AppendOnly => false;
+    /// Ends a selection pFlow made without a key, leaving the caret at its end. True when nothing is selected.
+    bool Collapse() => true;
+    /// After Select: whether the person pressed a key or a mouse button since (OwnedWords.PersonActed). Asked once,
+    /// right before the first key; asking ends the watch. A field that does not watch cannot say: true.
+    bool PersonActedSinceSelect() => true;
 }
 
-public enum LiveFinal { Applied, NotTyped, Kept }
+/// Replace: pFlow's own typed words are selected (no keys) for the finished text to go over them the normal,
+/// checked way. Left: the live words stay as typed and the finished text is offered in the card.
+public enum LiveFinal { Applied, NotTyped, Kept, Replace, Left }
 public enum LiveCancel { NothingTyped, Removed, Left }
 
 /// One take's live typing: the ownership rules applied to one real field.
@@ -260,6 +336,7 @@ public sealed class LiveInlineSession
     public string Id { get; }
     readonly ILiveTextField field;
     readonly LiveInlineOwnership ownership;
+    static DiagnosticRecorder Recorder => Diagnostics.Recorder;
 
     LiveInlineSession(string id, ILiveTextField field, LiveInlineOwnership ownership) { Id = id; this.field = field; this.ownership = ownership; }
 
@@ -267,7 +344,10 @@ public sealed class LiveInlineSession
     {
         var state = field.State();
         bool writable = state.Selection != null && field.CanWriteRanges();
-        var ownership = LiveInlineOwnership.Begin(state, writable, out refused);
+        var ownership = LiveInlineOwnership.Begin(state, writable, out refused, out string detail);
+        Recorder.Event("typing.begin", new DiagField("result", refused?.ToString() ?? "started"), new DiagField("why", detail), new DiagField("method", field.Method),
+            new DiagField("textRead", state.Value != null), new DiagField("textLength", state.Value?.Length ?? -1), new DiagField("selection", state.Selection is TextSpan s ? s.Start + "+" + s.Length : "-"),
+            new DiagField("sameField", state.Element == LiveFieldState.Target), new DiagField("trusted", state.Trusted), new DiagField("password", state.Secure));
         return ownership == null ? null : new LiveInlineSession(id, field, ownership);
     }
 
@@ -279,33 +359,88 @@ public sealed class LiveInlineSession
     {
         // Once typing has stopped for the take, the field is not read again.
         if (ownership.Stopped != null) return null;
-        return Perform(ownership.Update(LineBreaks(transcript), field.State()));
+        if (!field.ReadyToWrite) { Recorder.Detail("typing.wait", new DiagField("why", "a key is held"), new DiagField("words", DiagnosticRecorder.Words(transcript))); return null; }
+        var state = field.State();
+        var step = ownership.Update(LineBreaks(transcript), state);
+        if (step is LiveStep.Nothing) Recorder.Detail("typing.none", new DiagField("words", DiagnosticRecorder.Words(transcript)));
+        // Append-only: a write that would change pFlow's own typed words ends live typing instead; no key is sent.
+        if (field.AppendOnly && step is LiveStep.Write revision && (revision.Range.Length > 0 || revision.Select != null)) step = ownership.Halt(LiveStop.Revised);
+        return Perform(step, state, "live");
     }
 
     public (LiveFinal Result, LiveStop? Stop) Finalize(string text)
     {
         if (ownership.Stopped != null && !ownership.Touched) return (LiveFinal.NotTyped, null);
-        return Perform(ownership.Finalize(LineBreaks(text), field.State())) is LiveStop stop ? (LiveFinal.Kept, stop) : (LiveFinal.Applied, null);
+        if (field.AppendOnly) {
+            // Nothing typed: the finished text goes in the normal, checked way.
+            if (!ownership.Touched) return (LiveFinal.NotTyped, null);
+            var now = field.State();
+            if (ownership.OwnSpan(now) is not TextSpan span) {
+                var reason = ownership.Stopped is LiveStop s && s != LiveStop.Revised ? s : ownership.Check(now) ?? LiveStop.Uncertain;
+                Recorder.Event("typing.final", new DiagField("result", "left"), new DiagField("stop", reason.ToString()), new DiagField("mode", "replace own words"));
+                return (LiveFinal.Left, reason);
+            }
+            if (ownership.Finished(text.Replace("\r\n", "\n").Replace('\r', '\n'))) { Recorder.Event("typing.final", new DiagField("result", "Applied"), new DiagField("mode", "typed words are the finished text")); return (LiveFinal.Applied, null); }
+            // pFlow's own words, selected without a key and read back; the caller types or pastes the finished text over them.
+            if (!field.Select(span)) {
+                field.Collapse();
+                Recorder.Event("typing.final", new DiagField("result", "left"), new DiagField("stop", "selection not confirmed"), new DiagField("mode", "replace own words"));
+                return (LiveFinal.Left, LiveStop.Uncertain);
+            }
+            selected = true; Selection = new OwnedWords(span.Start, ownership.Owned.Trim()) { PersonActed = field.PersonActedSinceSelect };
+            Recorder.Event("typing.final", new DiagField("result", "Replace"), new DiagField("mode", "replace own words"), new DiagField("selected", span.Length), new DiagField("chars", text.Length));
+            return (LiveFinal.Replace, null);
+        }
+        if (!field.ReadyToWrite) {
+            if (!ownership.Touched) return (LiveFinal.NotTyped, null);
+            Recorder.Event("typing.final", new DiagField("result", "kept"), new DiagField("why", "a key is held"));
+            return (LiveFinal.Kept, LiveStop.Uncertain);
+        }
+        var state = field.State();
+        var result = Perform(ownership.Finalize(LineBreaks(text), state), state, "final") is LiveStop failed ? (LiveFinal.Kept, failed) : (LiveFinal.Applied, (LiveStop?)null);
+        Recorder.Event("typing.final", new DiagField("result", result.Item1.ToString()), new DiagField("stop", result.Item2?.ToString()), new DiagField("chars", text.Length));
+        return result;
     }
+
+    bool selected;
+    /// After a Replace: pFlow's own words as it selected them, for the insert to check the selection against.
+    public OwnedWords? Selection { get; private set; }
+    /// After a Replace that did not go in: pFlow's selection is ended without a key.
+    public bool Collapse() => !selected || field.Collapse();
 
     public (LiveCancel Result, LiveStop? Stop) Cancel()
     {
         if (!ownership.Touched) return (LiveCancel.NothingTyped, null);
-        return Perform(ownership.Cancel(field.State())) is LiveStop stop ? (LiveCancel.Left, stop) : (LiveCancel.Removed, null);
+        // Append-only: what pFlow typed is never taken back out with keys; it stays and the person is told.
+        if (field.AppendOnly) { Recorder.Event("typing.cancel", new DiagField("result", "left (append only)")); return (LiveCancel.Left, null); }
+        var state = field.State();
+        return Perform(ownership.Cancel(state), state, "cancel") is LiveStop stop ? (LiveCancel.Left, stop) : (LiveCancel.Removed, null);
     }
 
     /// Every line break in pFlow's words is the one the field itself stores,
     /// so what is read back can be compared exactly.
     string LineBreaks(string text) => LiveInlineText.LineBreaks(text, field.LineBreak);
 
-    LiveStop? Perform(LiveStep step)
+    LiveStop? Perform(LiveStep step, LiveFieldState before, string stage)
     {
         switch (step) {
-            case LiveStep.Stopped stopped: return stopped.Reason;
+            case LiveStep.Stopped stopped:
+                Recorder.Event("typing.stop", [new DiagField("reason", stopped.Reason.ToString()), new DiagField("stage", stage), .. ownership.Compare(before)]);
+                return stopped.Reason;
             case LiveStep.Write write:
+                long started = Environment.TickCount64;
                 bool accepted = field.Replace(write.Range, write.Text);
                 if (accepted && write.Select is TextSpan select) accepted = field.Select(select);
-                return ownership.Confirm(accepted, field.State()) is LiveStep.Stopped failed ? failed.Reason : null;
+                var after = field.State();
+                var confirmed = ownership.Confirm(accepted, after);
+                bool matched = confirmed is not LiveStep.Stopped;
+                Recorder.Detail("typing.write", new DiagField("stage", stage), new DiagField("method", field.Method), new DiagField("replaces", write.Range.Length), new DiagField("chars", write.Text.Length),
+                    new DiagField("accepted", accepted), new DiagField("readBackMatches", matched), new DiagField("ms", Environment.TickCount64 - started));
+                if (confirmed is LiveStep.Stopped failed) {
+                    Recorder.Event("typing.stop", [new DiagField("reason", failed.Reason.ToString()), new DiagField("stage", stage), new DiagField("writeAccepted", accepted), .. ownership.CompareWritten(after)]);
+                    return failed.Reason;
+                }
+                return null;
             default: return null;
         }
     }
@@ -337,9 +472,14 @@ public sealed class LiveInlineSlot
     public (LiveFinal Result, LiveStop? Stop) Finalize(string session, string text)
     {
         if (current is not { } live || live.Id != session) return (LiveFinal.NotTyped, null);
-        current = null;
+        current = null; finished = live;
         return live.Finalize(text);
     }
+    LiveInlineSession? finished;
+    /// Ends the selection a Replace made, when the finished text did not go over it.
+    public bool Collapse(string session) => finished is not { } live || live.Id != session || live.Collapse();
+    /// pFlow's own words a Replace selected for this take, or null.
+    public OwnedWords? Selection(string session) => finished is { } live && live.Id == session ? live.Selection : null;
 
     public (LiveCancel Result, LiveStop? Stop) Cancel(string session)
     {
@@ -387,6 +527,7 @@ public static class LiveInlineText
         LiveStop.Secure => "Stopped: password field",
         LiveStop.Text => "Stopped: text changed",
         LiveStop.Caret => "Stopped: cursor moved",
+        LiveStop.Revised => "Stopped: words changed",
         _ => "Stopped: couldn't check"
     };
 
@@ -398,9 +539,12 @@ public static class LiveInlineText
         LiveStop.Secure => "a password field took over",
         LiveStop.Text => "the text changed",
         LiveStop.Caret => "the cursor moved",
+        LiveStop.Revised => "the words changed after pFlow typed them",
         _ => "pFlow couldn't check what it typed"
     } + ". The finished text is in History.";
 
+    /// The finished text could not replace pFlow's live words safely: they stay, and the card offers the finished text.
+    public const string LiveLeft = "Your live words are still in the field; the finished text could not replace them safely. Copy it from the card.";
     public const string Left = "Canceled. The words pFlow already typed are still in your app, because the field changed.";
     public const string KeptTyped = "Kept in History. Recognition stopped before it finished; the words already typed stay in your app.";
 }

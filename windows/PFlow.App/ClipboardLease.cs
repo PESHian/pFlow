@@ -47,7 +47,15 @@ internal sealed class ClipboardLease : IDisposable
         } catch { Dispose(); throw; }
         finally { Native.CloseClipboard(); }
     }
-    void Open() { if (!Native.OpenClipboard(owner)) throw new InvalidOperationException("The clipboard is busy. Your text is in History."); }
+    /// Clipboard history, sync tools and remote-desktop helpers open the clipboard for a moment after every
+    /// change: a busy clipboard gets up to half a second before the take gives up.
+    void Open()
+    {
+        for (int attempt = 0; !Native.OpenClipboard(owner); attempt++) {
+            if (attempt >= 20) throw new InvalidOperationException("The clipboard is busy. Your text is in History.");
+            Thread.Sleep(25);
+        }
+    }
     static IntPtr Allocate(byte[] bytes)
     {
         var handle = Native.GlobalAlloc(2, (UIntPtr)bytes.Length);
@@ -61,6 +69,8 @@ internal sealed class ClipboardLease : IDisposable
     {
         var incoming = new List<(uint Format, IntPtr Handle)>();
         try {
+            // The privacy marking first: if Windows refuses any of it, no text goes on (Restore puts the person's back).
+            foreach (var (name, data) in Private) incoming.Add((Native.RegisterClipboardFormat(name), Allocate(data)));
             incoming.Add((13, Allocate(Encoding.Unicode.GetBytes(text + "\0"))));
             // Materialize Windows' synthesized text formats now, so reads/CloseClipboard cannot advance our ownership sequence.
             incoming.Add((1, Allocate(CodePageText(text, 0))));
@@ -74,12 +84,23 @@ internal sealed class ClipboardLease : IDisposable
                 installed = true;
                 for (int i = 0; i < incoming.Count; i++) {
                     var item = incoming[i];
-                    if (Native.SetClipboardData(item.Format, item.Handle) == IntPtr.Zero) throw new InvalidOperationException("Windows blocked the clipboard.");
+                    if (SetData(item.Format, item.Handle) == IntPtr.Zero) throw new InvalidOperationException("Windows blocked the clipboard. Your text is in History.");
                     incoming[i] = (item.Format, IntPtr.Zero);
                 }
             } finally { installedSequence = Native.GetClipboardSequenceNumber(); Native.CloseClipboard(); }
         } finally { foreach (var item in incoming) Free(item.Format, item.Handle); }
     }
+    /// SetClipboardData; the native checks make one format fail.
+    internal static Func<uint, IntPtr, IntPtr> SetData { get; set; } = Native.SetClipboardData;
+    /// Every pFlow write (the words it pastes, the card's Copy, "Copy dictation to clipboard") is private:
+    /// Windows' clipboard history (Win+V) and cloud clipboard leave it out. The person's own clipboard,
+    /// put back by Restore, goes back exactly as it was, without these. Windows refuses an empty clipboard
+    /// item, so the first (whose presence is what counts: "any data") carries a DWORD 0 like the others.
+    internal static readonly (string Name, byte[] Data)[] Private = [
+        ("ExcludeClipboardContentFromMonitorProcessing", BitConverter.GetBytes(0)),
+        ("CanIncludeInClipboardHistory", BitConverter.GetBytes(0)),
+        ("CanUploadToCloudClipboard", BitConverter.GetBytes(0)),
+    ];
     static byte[] CodePageText(string text, uint codePage)
     {
         int count = Native.WideCharToMultiByte(codePage, 0, text, -1, null, 0, IntPtr.Zero, IntPtr.Zero);
@@ -115,15 +136,17 @@ internal sealed class ClipboardLease : IDisposable
         using var lease = new ClipboardLease(owner, false);
         lease.Put(text); lease.Keep();
     }
+    /// Ctrl+V, right after the caller's last checks: nothing here waits. The clipboard is not opened (another
+    /// program holding it, such as clipboard history right after Put, would make this wait after the focus
+    /// checks); the sequence number, readable without the lock, says the clipboard still holds pFlow's words.
     public void DispatchPaste()
     {
-        Open();
-        try {
-            if (!installed || Native.GetClipboardSequenceNumber() != installedSequence)
-                throw new InvalidOperationException("The clipboard changed before insertion. Your text is in History.");
-            Native.Send(Native.Key(0x11), Native.Key(0x56), Native.Key(0x56, true), Native.Key(0x11, true));
-        } finally { Native.CloseClipboard(); }
+        if (!installed || Native.GetClipboardSequenceNumber() != installedSequence)
+            throw new InvalidOperationException("The clipboard changed before insertion. Your text is in History.");
+        SendKeys([Native.Key(0x11), Native.Key(0x56), Native.Key(0x56, true), Native.Key(0x11, true)]);
     }
+    /// SendInput; the native checks record the keys instead (their private desktop must not send Ctrl+V anywhere).
+    internal static Action<Native.Input[]> SendKeys { get; set; } = inputs => Native.Send(inputs);
     static IntPtr Clone(uint format, IntPtr handle)
     {
         IntPtr result;

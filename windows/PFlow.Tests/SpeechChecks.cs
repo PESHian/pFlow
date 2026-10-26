@@ -9,6 +9,12 @@ internal static class SpeechChecks
     public static void Run()
     {
         passed = 0;
+        Check("Whisper small is the one speech model, pinned by size and SHA-256, named in Settings as included",
+            SpeechModels.Small.FileName == "ggml-small.bin" && SpeechModels.Small.Bytes == 487601967 && SpeechModels.Small.Sha == "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
+            && SpeechModels.SettingsLine == "Speech model: Whisper small (included)");
+        Check("the retired speech models are exactly 0.1.25's two downloads, never small, the live model or the text model",
+            SpeechModels.RetiredFiles.SequenceEqual(new[] { "ggml-large-v3-turbo-q8_0.bin", "ggml-medium-q5_0.bin" })
+            && !SpeechModels.RetiredFiles.Contains(SpeechModels.Small.FileName) && !SpeechModels.RetiredFiles.Contains(LiveSpeechModel.FileName) && SpeechModels.RetiredFiles.All(f => f.EndsWith(".bin")));
         Check("Settings names the architecture and the speech engine in use", SpeechEngine.Describe("X64", SpeechEngine.Avx2) == "x64, fast speech engine (AVX2)"
             && SpeechEngine.Describe("X64", SpeechEngine.Baseline) == "x64, standard speech engine (no AVX2)" && SpeechEngine.Describe("Arm64", SpeechEngine.Baseline) == "ARM64 speech engine"
             && SpeechEngine.Describe("X86", SpeechEngine.Baseline) == "x86 (32-bit) speech engine");

@@ -12,8 +12,8 @@ settings:
     SWIFT_STRICT_CONCURRENCY: minimal
     SWIFT_SERIALIZE_DEBUGGING_OPTIONS: NO
     OTHER_SWIFT_FLAGS: '$(inherited) -file-prefix-map "$(SRCROOT)=/_/pflow" -debug-prefix-map "$(SRCROOT)=/_/pflow"'
-    MARKETING_VERSION: "0.3.13"
-    CURRENT_PROJECT_VERSION: "35"
+    MARKETING_VERSION: "0.3.17"
+    CURRENT_PROJECT_VERSION: "44"
     PFLOW_DEVELOPER_TEAM: ""
     DEAD_CODE_STRIPPING: YES
     # Apple Silicon only. The on-device SpeechAnalyzer needs it, and the Intel
@@ -34,6 +34,14 @@ targets:
       - path: Sources
     dependencies:
       - package: KeyboardShortcuts
+      # pFlow Dictation, the input method for live words, ships inside the app;
+      # pFlow installs or updates it in ~/Library/Input Methods at launch.
+      - target: pFlowInput
+        embed: true
+        codeSign: false
+        copy:
+          destination: wrapper
+          subpath: Contents/Library/Input Methods
     postCompileScripts:
       - name: Bundle local Whisper engine
         script: 'bash "$SRCROOT/scripts/build-whisper.sh"'
@@ -57,6 +65,31 @@ targets:
       configs:
         # Release drops the debug map, which records each object file by its
         # build-machine path (the builder's home folder) inside the app binary.
+        Release:
+          DEPLOYMENT_POSTPROCESSING: YES
+          STRIP_INSTALLED_PRODUCT: YES
+          STRIP_STYLE: debugging
+
+  pFlowInput:
+    type: application
+    platform: macOS
+    sources:
+      - path: InputMethod
+        excludes:
+          - Info.plist
+      - path: Sources/Services/InputMethodWire.swift
+      - path: Sources/Services/InputMethodCore.swift
+    settings:
+      base:
+        INFOPLIST_FILE: InputMethod/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.pesh.inputmethod.pFlow
+        PRODUCT_NAME: pFlow Dictation
+        PRODUCT_MODULE_NAME: pFlowInput
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_HARDENED_RUNTIME: NO
+        SKIP_INSTALL: YES
+      configs:
         Release:
           DEPLOYMENT_POSTPROCESSING: YES
           STRIP_INSTALLED_PRODUCT: YES

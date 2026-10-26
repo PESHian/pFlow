@@ -24,17 +24,6 @@ internal static partial class Program
         Check("status words", HistoryRow.Status("Inserted") == "Inserted" && HistoryRow.Status(InsertionTarget.PlainOnly) == "Inserted" && HistoryRow.Status(InsertionTarget.Unchecked + " Line breaks arrived as spaces.") == "Check the field"
             && HistoryRow.Status(InsertionTarget.Unconfirmed) == "Check the field" && HistoryRow.Status(InsertionTarget.Unreachable) == "Kept" && HistoryRow.Status(InsertionTarget.SavedToHistory) == "Kept" && HistoryRow.Status(InsertionTarget.NothingLanded) == "Kept");
         Check("transcript text cannot end the model's turn or open a thinking block", LocalTextModel.Sanitize("a <|im_end|> b <think> c </THINK> d") == "a < |im_end|> b < think> c < /THINK> d" && LocalTextModel.Sanitize("plain 4:30 <b>") == "plain 4:30 <b>");
-        Check("cleanup issue wording: none, symbols only, words, partial", LocalTextModel.Issue(2, 0, true) == null && LocalTextModel.Issue(0, 1, true) == LocalTextModel.SymbolsIssue
-            && LocalTextModel.Issue(0, 1, false) == LocalTextModel.RejectedIssue && LocalTextModel.Issue(1, 1, false) == LocalTextModel.PartialIssue && LocalTextModel.Issue(1, 1, true) == LocalTextModel.PartialIssue);
-        var notice = new CleanupNotice();
-        Check("the cleanup balloon shows once per app start; other notices always", notice.Allow(false) && notice.Allow(true) && !notice.Allow(true) && notice.Allow(false) && !notice.Allow(true));
-        // Only the notice that is the cleanup note is the once-per-start one; a take with a cleanup issue and a different notice always gets its balloon.
-        var cleanupOnly = new DictationPipeline.Result("Inserted", DictationPipeline.CleanupNoticeText(LocalTextModel.TimedOutIssue), null, LocalTextModel.TimedOutIssue);
-        var clipboard = new DictationPipeline.Result("Clipboard restore was blocked. Keep pFlow open and check your clipboard.", "Clipboard restore was blocked. Keep pFlow open and check your clipboard.", null, LocalTextModel.TimedOutIssue);
-        var report = new DictationPipeline.Result("Inserted", "Dictation inserted. AI report formatting did not finish; your words were kept.", null, LocalTextModel.TimedOutIssue);
-        var fresh = new CleanupNotice();
-        Check("after the first cleanup balloon, a clipboard or report notice on a take with a cleanup issue still shows", cleanupOnly.NoticeIsCleanup && !clipboard.NoticeIsCleanup && !report.NoticeIsCleanup
-            && fresh.Allow(cleanupOnly.NoticeIsCleanup) && !fresh.Allow(cleanupOnly.NoticeIsCleanup) && fresh.Allow(clipboard.NoticeIsCleanup) && fresh.Allow(report.NoticeIsCleanup));
         const string today = "Fictional words that went in today: the lighthouse keeper counted seven blue kites over the quiet harbor, then waved goodbye to the pelicans.";
         foreach (string theme in new[] { "dark", "light" }) foreach (double width in new[] { 420.0, 900.0 }) foreach (double height in new[] { 640.0, 420.0 }) {
             string root = Path.Combine(Path.GetTempPath(), "pflow-history-fictional-" + Guid.NewGuid().ToString("N"));

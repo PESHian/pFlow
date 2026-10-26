@@ -136,7 +136,7 @@ final class FakeCleaner: TranscriptCleaning {
 @MainActor
 func makeCoordinator(
     session: FakeSession? = nil,
-    injector: FakeInjector? = nil,
+    injector: (any TextInjecting)? = nil,
     history: FakeHistory? = nil,
     hud: FakeHUD? = nil,
     cleaner: FakeCleaner? = nil,
@@ -220,7 +220,9 @@ struct RecordingCoordinatorTests {
         await coordinator.toggle()
         #expect(coordinator.state == .idle)
         #expect(hud.phases.last == .failed)
-        #expect(hud.hideDelays == [2])
+        #expect(hud.reasons.last == RecordingCoordinator.startFailedNote)
+        #expect(hud.livePreview)
+        #expect(hud.hideDelays == [RecordingCoordinator.noteSeconds], "the card with the reason goes after a few seconds")
         #expect(session.stopCalled == 1)
         #expect(injector.delivered.isEmpty)
         session.startError = nil
@@ -332,6 +334,10 @@ struct RecordingCoordinatorTests {
         #expect(history.saved == ["hello world"])
         #expect(coordinator.lastOutcome == .leftOnClipboard)
         #expect(hud.phases.last == .copied)
+        // "Press ⌘V" is on the card, never as words in the one-size capsule.
+        #expect(hud.livePreview)
+        #expect(hud.reasons.last == RecordingCoordinator.onClipboardNote)
+        #expect(hud.offers == ["hello world"])
     }
 
     @Test func unverifiedPasteHidesImmediatelyAndKeepsTruthfulOutcomeAndHistory() async {

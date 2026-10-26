@@ -12,19 +12,11 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         var clock = Stopwatch.StartNew();
         try { return await action(); } finally { Timing?.Invoke(name, clock.Elapsed.TotalMilliseconds); }
     }
-    /// A fixed wait for AI cleanup (the live checks); otherwise the model's own Budget for the take's words.
-    internal TimeSpan? CleanupBudget { get; init; }
     internal const string CopyFailed = "Inserted, but it could not be copied to the clipboard. Copy it from History.";
     /// `Prompt` carries the words for pFlow's "couldn't type this" card, with the
     /// reason line, whenever the words did not go into the app (one rule: InsertionPrompt.Offer).
-    internal readonly record struct Result(string Status, string? Notice, (string Text, string Reason)? Prompt = null, string? CleanupIssue = null)
-    {
-        /// True only when the balloon would say nothing but the cleanup note; any other notice
-        /// (clipboard, live typing kept, report formatting) is never the one shown just once.
-        public bool NoticeIsCleanup => CleanupIssue != null && Notice == CleanupNoticeText(CleanupIssue);
-    }
-    internal static string CleanupNoticeText(string issue) => "Dictation inserted. " + issue;
-    internal readonly record struct Prepared(string Text, string? Rtf, int SpokenWords, bool ReportUnavailable, bool CleanupIncomplete, bool CleanupTimedOut, string? CleanupIssue = null);
+    internal readonly record struct Result(string Status, string? Notice, (string Text, string Reason)? Prompt = null);
+    internal readonly record struct Prepared(string Text, string? Rtf, int SpokenWords, bool ReportUnavailable);
     internal async Task<Prepared> Prepare(string audio, double seconds, string folder, Action<Phase, string?> state, CancellationToken cancel)
     {
         state(Phase.Processing, "Transcribing");
@@ -40,28 +32,17 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         }
         return await Shape(raw, folder, state, cancel);
     }
-    /// Dictionary, cleanup, paragraphs and templates, once, on the whole take's words.
+    /// Dictionary, cleanup (the rule-based one: fillers, capitals and spacing), paragraphs and
+    /// templates, once, on the whole take's words. The local text model only sorts sentences into a
+    /// report template's sections; it never rewrites dictation.
     internal async Task<Prepared> Shape(string raw, string folder, Action<Phase, string?> state, CancellationToken cancel)
     {
         var preferences = store.Preferences;
         string text = TextProcessing.Replace(raw, preferences.DictionaryReplacements);
-        bool localReady = preferences.UseLocalAI && textModel.FilesPresent, cleanupSkipped = false;
+        bool localReady = preferences.UseLocalAI && textModel.FilesPresent;
         var spoken = localReady ? TemplateCommand.Parse(text, preferences.Templates) : null;
         if (spoken != null && !string.IsNullOrWhiteSpace(spoken.Text)) text = spoken.Text;
         if (preferences.Cleanup) text = TextProcessing.RemoveFillers(text, preferences.DictionaryTerms, preferences.Language);
-        bool aiCleanup = localReady && preferences.Cleanup && preferences.UseAICleanup && TextProcessing.SupportsEnglishCleanup(preferences.Language);
-        string? cleanupIssue = null;
-        if (aiCleanup) {
-            state(Phase.Processing, "Cleaning up");
-            using var cleanup = CancellationTokenSource.CreateLinkedTokenSource(cancel);
-            cleanup.CancelAfter(CleanupBudget ?? textModel.Budget(TextProcessing.WordCount(text)));
-            var outcome = CleanupOutcome.TimedOut;
-            try { text = await Measure("cleanupMs", () => textModel.Cleanup(text, folder, cleanup.Token)); outcome = textModel.LastOutcome; cleanupIssue = textModel.LastIssue; }
-            catch (OperationCanceledException) when (!cancel.IsCancellationRequested) { cleanupSkipped = true; cleanupIssue = LocalTextModel.TimedOutIssue; }
-            Timing?.Invoke("cleanupOutcome", (double)outcome);
-        }
-        // AI cleanup is on but cannot run: the processing line says which switch or file is missing.
-        else if (preferences.Cleanup && preferences.UseAICleanup && !localReady) Timing?.Invoke("cleanupOutcome", (double)(preferences.UseLocalAI ? CleanupOutcome.NotRun : CleanupOutcome.LocalAIOff));
         if (preferences.Paragraphs) text = TextProcessing.Paragraphs(text);
         var template = spoken?.Template ?? preferences.Templates.FirstOrDefault(x => x.Id == preferences.ActiveTemplateId);
         bool unavailable = template?.NeedsAI == true;
@@ -77,8 +58,7 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
         }
         else if (template != null && !template.NeedsAI) { var formatted = RichText.Render(text, template); text = formatted.Text; rtf = formatted.Rtf; }
         cancel.ThrowIfCancellationRequested();
-        return new Prepared(text, rtf, TextProcessing.WordCount(raw), unavailable,
-            aiCleanup && (cleanupSkipped || cleanupIssue != null), cleanupSkipped, aiCleanup ? cleanupIssue : null);
+        return new Prepared(text, rtf, TextProcessing.WordCount(raw), unavailable);
     }
     internal async Task<Result> Run(string audio, double seconds, IInsertionTarget originalTarget, string folder,
         IntPtr owner, Action<Phase, string?> state, CancellationToken cancel, string? liveWords = null, LiveTyping? typing = null)
@@ -122,27 +102,37 @@ internal sealed class DictationPipeline(StateStore store, Whisper whisper, Local
                 }
             }
             else if (final == LiveFinal.Kept) { result = LiveInlineText.Kept(stop ?? LiveStop.Uncertain); kept = true; }
+            else if (final == LiveFinal.Left) result = LiveInlineText.LiveLeft;
+            else if (final == LiveFinal.Replace) {
+                // pFlow's own live words are selected: the finished text goes over them through the normal checked path.
+                // Without pFlow's own words to hold the selection to, nothing goes over it.
+                try { result = typing.Selection?.Invoke() is { } own ? await Measure("insertionMs", () => originalTarget.InsertOverSelection(text, own, owner, preferences.CopyDictationToClipboard, cancel, rtf)) : "The field changed. Your text is in History."; }
+                catch (Exception error) when (error is not OperationCanceledException) { result = error.Message; InsertionLog.Record("replace failed: " + InsertionLog.Reason(error)); }
+                if (InsertionPrompt.Needed(result, false)) {
+                    // Nothing went over the live words: the selection ends without a key, the words stay, the card offers the text.
+                    bool collapsed = typing.Collapse?.Invoke() ?? true;
+                    InsertionLog.Record("live typing final: replace refused (" + result + "); live words left" + (collapsed ? "" : "; selection could not be ended"));
+                    result = LiveInlineText.LiveLeft;
+                }
+            }
         }
         if (result == null) {
             try { result = await Measure("insertionMs", () => originalTarget.Insert(text, owner, preferences.CopyDictationToClipboard, cancel, rtf)); }
             catch (Exception error) when (error is not OperationCanceledException) { result = error.Message; InsertionLog.Record("insert failed: " + InsertionLog.Reason(error)); }
         } else InsertionLog.Record("live typing final: " + result);
-        // History carries the cleanup note with the status, so a take whose words were kept as recognized can be told apart later.
-        string? cleanupIssue = prepared.CleanupIncomplete ? prepared.CleanupIssue ?? LocalTextModel.TimedOutIssue : null;
         int index = store.History.FindIndex(x => x.Id == entry.Id);
-        if (index >= 0) { store.History[index] = entry with { InsertionStatus = cleanupIssue == null ? result : result + " · " + cleanupIssue }; store.Write("history.json", store.History); }
-        // Words typed without a check went in the way a person's typing would: that is a done take, not a failure.
-        bool inserted = result.StartsWith("Inserted", StringComparison.Ordinal) || result.StartsWith(InsertionTarget.Unchecked, StringComparison.Ordinal);
+        if (index >= 0) { store.History[index] = entry with { InsertionStatus = result }; store.Write("history.json", store.History); }
+        // Words typed or pasted without a check went in the way a person's typing would: a done take, not a failure.
+        bool inserted = result.StartsWith("Inserted", StringComparison.Ordinal) || InsertionTarget.WentInUnchecked(result);
         // A write that went out but could not be read back is nearly always in the field already (web
         // boxes read back late): no balloon and no card for it; the History status says to check.
         bool unconfirmed = result.StartsWith(InsertionTarget.Unconfirmed, StringComparison.Ordinal);
         state(inserted ? Phase.Inserted : kept || unconfirmed || result is InsertionTarget.SavedToHistory or InsertionTarget.Unreachable ? Phase.Saved : Phase.Failed, result);
         // Anything short of a done take is said every time; words that never went in are shown in the card to copy.
-        string? notice = !inserted ? unconfirmed ? null : result : unavailable ? "Dictation inserted. AI report formatting did not finish; your words were kept."
-            : cleanupIssue != null ? CleanupNoticeText(cleanupIssue) : null;
-        return new Result(result, notice, unconfirmed ? null : InsertionPrompt.Offer(text, result, kept), cleanupIssue);
+        string? notice = !inserted ? unconfirmed ? null : result : unavailable ? "Dictation inserted. AI report formatting did not finish; your words were kept." : null;
+        return new Result(result, notice, unconfirmed ? null : InsertionPrompt.Offer(text, result, kept));
     }
 }
 
 /// One take's live typing, as the pipeline sees it at the end of the take.
-internal sealed record LiveTyping(Func<string, (LiveFinal Result, LiveStop? Stop)> Finalize, Func<bool> Typed, Func<(LiveCancel Result, LiveStop? Stop)> Cancel);
+internal sealed record LiveTyping(Func<string, (LiveFinal Result, LiveStop? Stop)> Finalize, Func<bool> Typed, Func<(LiveCancel Result, LiveStop? Stop)> Cancel, Func<bool>? Collapse = null, Func<OwnedWords?>? Selection = null);

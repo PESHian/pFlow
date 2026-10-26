@@ -29,17 +29,18 @@ internal sealed class LiveTextField : ILiveTextField
 
     /// The focused control of `window`, if it is an edit or rich edit control
     /// and the same one UI Automation reports as focused. Otherwise null: Preview.
-    internal static LiveTextField? Create(AutomationElement element, IntPtr window, uint process)
+    internal static LiveTextField? Create(AutomationElement element, IntPtr window, uint process, out string why)
     {
         try {
             IntPtr control = FocusedControl(window);
-            if (control == IntPtr.Zero || element.Current.NativeWindowHandle != control.ToInt32()) return null;
+            why = control == IntPtr.Zero ? "no focused window control" : element.Current.NativeWindowHandle != control.ToInt32() ? "the focused element is not the focused control (" + PrivateLog.ClassLabel(BaseClass(control)) + ")" : "ok";
+            if (why != "ok") return null;
             string kind = BaseClass(control);
             bool rich = Rich.Contains(kind, StringComparer.OrdinalIgnoreCase);
-            if (!rich && !Plain.Contains(kind, StringComparer.OrdinalIgnoreCase)) return null;
+            if (!rich && !Plain.Contains(kind, StringComparer.OrdinalIgnoreCase)) { why = "control class " + PrivateLog.ClassLabel(kind) + " is not an edit or rich edit"; return null; }
             return new LiveTextField(element, window, control, rich, TargetAboveUs(process));
-        } catch (ElementNotAvailableException) { return null; }
-        catch (COMException) { return null; }
+        } catch (ElementNotAvailableException) { why = "field went away"; return null; }
+        catch (COMException) { why = "field went away"; return null; }
     }
 
     /// What the live-typing check sees in a field, for the provider matrix in the tests. No text.
@@ -137,7 +138,7 @@ internal sealed class LiveTextField : ILiveTextField
     /// The control's own class even when an app subclasses it. WinForms
     /// registers its own copies, named WindowsForms10.Edit.app.0.… and
     /// WindowsForms10.RichEdit50W.app.0.…, around the system controls.
-    static string BaseClass(IntPtr control)
+    internal static string BaseClass(IntPtr control)
     {
         var name = new System.Text.StringBuilder(256);
         string kind = RealGetWindowClass(control, name, (uint)name.Capacity) > 0 ? name.ToString() : "";
@@ -147,7 +148,7 @@ internal sealed class LiveTextField : ILiveTextField
 
     /// An app running as administrator is above pFlow: Windows blocks writes
     /// into it (UIPI), so it is never typed into. Unknown counts as above.
-    static bool TargetAboveUs(uint process) => Integrity(0) is not int ours || Integrity(process) is not int theirs || theirs > ours;
+    internal static bool TargetAboveUs(uint process) => Integrity(0) is not int ours || Integrity(process) is not int theirs || theirs > ours;
 
     /// A process's integrity level (0x2000 medium, 0x3000 high), or null when
     /// it cannot be read. 0 means pFlow itself.

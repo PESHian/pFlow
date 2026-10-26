@@ -11,13 +11,22 @@ struct RecordingHUDView: View {
         }
     }
 
-    /// The recording capsule, the same control in every phase and for every
-    /// Live text choice: solid black (no material, no glass, no blur, so
-    /// Reduce Transparency changes nothing), a hairline outline in the
-    /// person's colour palette, the waveform or a short status inside. One
-    /// size for the whole take.
-    static let capsuleSize = CGSize(width: 96, height: 26)
+    /// The recording capsule, the same control for every Live text choice:
+    /// a low pill, 70x22 pt (shorter and a little wider than Superwhisper's
+    /// 58x30, as the owner asked after 0.3.14), dark Liquid Glass (an opaque
+    /// dark fill with Reduce Transparency), with a hairline outline in the
+    /// person's colour palette and the waveform or the sweep inside. One
+    /// size in every phase; a status after the take is an icon only.
+    static let capsuleSize = CGSize(width: 70, height: 22)
     static let capsuleOutlineOpacity = 0.65
+    /// The capsule draws exactly what the Appearance picker shows for the
+    /// person's style (RecordingWaveform), in their colours, from live levels.
+    static func capsuleWaveformView(_ model: HUDModel) -> RecordingWaveform {
+        RecordingWaveform(levels: model.levels, style: model.waveformStyle, palette: model.palette, size: capsuleWaveform)
+    }
+
+    /// The capsule's waveform, inside its rounded ends.
+    static let capsuleWaveform = CGSize(width: 46, height: 14)
 
     /// The Copy card shows all of the text up to this many lines, then scrolls.
     static let wholeTextLines = 10
@@ -35,24 +44,22 @@ struct RecordingHUDView: View {
     private var compact: some View {
         status
         .foregroundStyle(.white.opacity(0.9))
-        .padding(.horizontal, Theme.s2)
+        // One size in every phase; a status after the take is an icon only,
+        // its words are on the card or in the tooltip and VoiceOver label.
         .frame(width: Self.capsuleSize.width, height: Self.capsuleSize.height)
         .contentShape(Capsule())
-        .background {
-            Capsule().fill(Color.black)
-                .overlay(Capsule().strokeBorder(model.palette.gradient.opacity(Self.capsuleOutlineOpacity), lineWidth: 1))
-        }
-        // Everything inside draws for a black background, the spinner included.
+        .background { CapsuleBackground(palette: model.palette) }
+        // Everything inside draws for the capsule's dark glass. Not
+        // preferredColorScheme: that turns the whole panel dark and the card
+        // shown after the take in the same panel would stay dark in light mode.
         .environment(\.colorScheme, .dark)
-        .preferredColorScheme(.dark)
         .accessibilityLabel(title)
     }
 
     private var status: some View {
         Group {
             if isRecordingPhase {
-                RecordingWaveform(levels: Array(model.levels.suffix(25)),
-                                  style: model.waveformStyle, compact: true, palette: model.palette)
+                Self.capsuleWaveformView(model)
             } else if model.phase == .pasteUnconfirmed {
                 capsuleLabel("Check paste", "info.circle")
                     .help("The app could not verify the paste. Check your text before pasting again.")
@@ -79,17 +86,26 @@ struct RecordingHUDView: View {
                 capsuleLabel("Words stay", "info.circle")
                     .help(title)
             } else {
-                ProgressView().controlSize(.small).tint(Theme.accent)
+                // The system spinner draws for the window's light or dark
+                // look, which is dark on the capsule's dark glass.
+                ProcessingSweep(palette: model.palette)
+                    .frame(width: Self.capsuleWaveform.width, height: Self.capsuleWaveform.height)
             }
         }
     }
 
-    /// One short status that fits the capsule on one line.
+    /// A status after the take: its icon in the capsule; the words in the
+    /// tooltip and the VoiceOver label (the card carries them when it shows).
     private func capsuleLabel(_ text: String, _ systemImage: String) -> some View {
-        Label(text, systemImage: systemImage)
-            .font(.system(size: 10.5, weight: .medium))
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
+        Self.statusMark(text, systemImage)
+    }
+
+    /// The one thing a status shows in the capsule: its icon. No words.
+    static func statusMark(_ text: String, _ systemImage: String) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 11, weight: .medium))
+            .accessibilityLabel(text)
+            .help(text)
     }
 
     static let shadowInsets = EdgeInsets()
@@ -114,12 +130,12 @@ struct RecordingHUDView: View {
         case .copied: return "Text copied. Press Command V to paste."
         case .savedToHistory: return "Text saved in History. Clipboard unchanged."
         case .restarting: return "Restarting pFlow"
-        case .liveTextKept: return "Speech recognition stopped early. The words so far are saved in History."
+        case .liveTextKept: return "pFlow stopped listening early. The words so far are saved in History."
         case .liveTextKeptTyped:
-            return "Speech recognition stopped early. The words already typed stay in your app, and the words so far are saved in History."
+            return "pFlow stopped listening early. The words already typed stay in your app, and the words so far are saved in History."
         case .passwordField: return "Dictation is off in password fields."
         case .typingStopped: return "Typing stopped, so the finished text was not put in. Copy it here; it is also in History."
-        case .typedTextLeft: return "Cancelled. The app changed, so words pFlow already typed are still there."
+        case .typedTextLeft: return "Cancelled. Words pFlow already typed are still in the app."
         }
     }
 }
@@ -145,7 +161,53 @@ private struct LivePreviewCard<Status: View>: View {
     private var boxLines: Int { 4 }
     private var headerHeight: CGFloat { 20 }
 
+    /// Only a reason to give (password field, recording did not start,
+    /// cancelled): one compact row, sized to the sentence, with close.
+    private var messageOnly: Bool {
+        model.reason != nil && model.copyOffer == nil && !model.needsAccessibility && !isRecordingPhase && !isProcessingPhase
+    }
+
+    @ViewBuilder private var content: some View {
+        if messageOnly, let reason = model.reason {
+            HStack(alignment: .center, spacing: Theme.s2) {
+                PeshMark(size: 16)
+                status()
+                Text(reason)
+                    .font(.system(size: 12))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("reason")
+                HUDButton(systemName: "xmark", tint: .secondary) { model.onClose?() }
+                    .accessibilityLabel("Close")
+            }
+            .padding(.horizontal, Theme.s4)
+            .padding(.vertical, Theme.s3)
+        } else {
+            fullCard
+        }
+    }
+
     var body: some View {
+        content
+        .frame(width: model.previewMaxWidth)
+        .contentShape(Rectangle())
+        .background {
+            let shape = RoundedRectangle(cornerRadius: Theme.radiusLarge, style: .continuous)
+            if reduceTransparency {
+                shape.fill(Color(nsColor: .windowBackgroundColor))
+            } else {
+                shape.fill(.regularMaterial)
+            }
+            shape.strokeBorder(contrast == .increased ? Theme.switchOffStrong : Theme.hairlineStrong,
+                               lineWidth: contrast == .increased ? 1 : 0.75)
+        }
+        .environment(\.colorScheme, model.colorScheme ?? systemScheme)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(messageOnly ? (model.reason ?? "") : model.partial)
+    }
+
+    private var fullCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
                 .frame(height: headerHeight)
@@ -182,22 +244,6 @@ private struct LivePreviewCard<Status: View>: View {
                     .padding(.bottom, Theme.s3)
             }
         }
-        .frame(width: model.previewMaxWidth)
-        .contentShape(Rectangle())
-        .background {
-            let shape = RoundedRectangle(cornerRadius: Theme.radiusLarge, style: .continuous)
-            if reduceTransparency {
-                shape.fill(Color(nsColor: .windowBackgroundColor))
-            } else {
-                shape.fill(.regularMaterial)
-            }
-            shape.strokeBorder(contrast == .increased ? Theme.switchOffStrong : Theme.hairlineStrong,
-                               lineWidth: contrast == .increased ? 1 : 0.75)
-        }
-        .environment(\.colorScheme, model.colorScheme ?? systemScheme)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(title)
-        .accessibilityValue(model.partial)
     }
 
     private var header: some View {
@@ -229,7 +275,7 @@ private struct LivePreviewCard<Status: View>: View {
     /// takes focus, so the app the person was in keeps it.
     private var copyRow: some View {
         HStack(spacing: Theme.s2) {
-            Text(model.reason == nil ? title : "Also saved in History.")
+            Text(model.reason == nil ? title : "Saved in History")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -453,33 +499,65 @@ struct RecordingWaveform: View {
     var compact = false
     /// The palette read when the take started; nil draws the app's current one.
     var palette: ThemePalette?
+    /// Another size than the picker's 100x20 (the capsule): the same drawing
+    /// at the same density, so it holds the newest levels that fit.
+    var size: CGSize?
+
+    /// The picker's thumbnail: 25 samples across 100 pt.
+    static let thumbnailSamples = 25
+    static let thumbnailSize = CGSize(width: 100, height: 20)
+
+    var frame: CGSize { size ?? (compact ? CGSize(width: 84, height: 16) : Self.thumbnailSize) }
+
+    /// The levels drawn: all of them, or at another size the newest that keep
+    /// the picker's spacing, eased to quiet at both ends as the picker's
+    /// thumbnail is (its pointed wave ends and dotted bar ends).
+    var shownLevels: [Float] {
+        guard let size else { return levels }
+        let count = max(2, Int((Double(Self.thumbnailSamples) * size.width / Self.thumbnailSize.width).rounded()))
+        let newest = Array(levels.suffix(count))
+        let padded = newest.count == count ? newest : Array(repeating: 0, count: count - newest.count) + newest
+        return padded.enumerated().map { index, level in
+            let edge = min(index, count - 1 - index)
+            return level * (edge < Self.endEase.count ? Self.endEase[edge] : 1)
+        }
+    }
+
+    /// How much of the level the outermost samples keep, from each end inward.
+    static let endEase: [Float] = [0.12, 0.45, 0.8]
 
     var body: some View {
         switch style {
         case .wave:
-            Waveform(levels: levels, compact: compact, gradient: palette?.gradient ?? Theme.gradient)
+            Waveform(levels: shownLevels, compact: compact, gradient: palette?.gradient ?? Theme.gradient, frame: frame)
         case .lines:
-            WaveformLines(levels: AudioLevel.waveformLevels(levels))
+            WaveformLines(levels: AudioLevel.waveformLevels(shownLevels))
                 .fill(palette?.gradient ?? Theme.gradient)
-                .frame(width: compact ? 84 : 100, height: compact ? 16 : 20)
+                .frame(width: frame.width, height: frame.height)
                 .shadow(color: .black.opacity(compact ? 0 : 0.25), radius: 1.5, x: 0, y: 1)
         }
     }
 }
 
-private struct WaveformLines: Shape {
+/// "Lines": symmetric thin bars, one per level, never shorter than a dot.
+struct WaveformLines: Shape {
     let levels: [Float]
 
-    func path(in rect: CGRect) -> Path {
+    static func bars(_ levels: [Float], in rect: CGRect) -> [CGRect] {
         let samples = levels.isEmpty ? Array(repeating: Float(0), count: 25) : levels
         let spacing = rect.width / CGFloat(samples.count)
         let width = min(2, spacing * 0.65)
-        var path = Path()
-        for (index, level) in samples.enumerated() {
+        return samples.enumerated().map { index, level in
             let height = max(1.2, CGFloat(level) * rect.height * 0.92)
-            let bar = CGRect(x: rect.minX + (CGFloat(index) + 0.5) * spacing - width / 2,
-                             y: rect.midY - height / 2, width: width, height: height)
-            path.addRoundedRect(in: bar, cornerSize: CGSize(width: width / 2, height: width / 2))
+            return CGRect(x: rect.minX + (CGFloat(index) + 0.5) * spacing - width / 2,
+                          y: rect.midY - height / 2, width: width, height: height)
+        }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        for bar in Self.bars(levels, in: rect) {
+            path.addRoundedRect(in: bar, cornerSize: CGSize(width: bar.width / 2, height: bar.width / 2))
         }
         return path
     }
@@ -490,18 +568,20 @@ private struct Waveform: View {
     let levels: [Float]
     var compact = false
     var gradient: LinearGradient = Theme.gradient
+    var frame = RecordingWaveform.thumbnailSize
 
     var body: some View {
         let outline = WaveformOutline(levels: AudioLevel.waveformLevels(levels))
         outline
             .fill(gradient)
             .overlay(outline.stroke(.black.opacity(compact ? 0 : 0.5), lineWidth: 0.75))
-            .frame(width: compact ? 84 : 100, height: compact ? 16 : 20)
+            .frame(width: frame.width, height: frame.height)
             .shadow(color: .black.opacity(compact ? 0 : 0.25), radius: 1.5, x: 0, y: 1)
     }
 }
 
-private struct WaveformOutline: Shape {
+/// "Wave": a smooth filled envelope, mirrored about the middle.
+struct WaveformOutline: Shape {
     let levels: [Float]
 
     func path(in rect: CGRect) -> Path {
@@ -528,5 +608,64 @@ private struct WaveformOutline: Shape {
                                          y: (previous.y + current.y) / 2), control: previous)
         }
         if let last = points.last { path.addLine(to: last) }
+    }
+}
+
+/// The capsule's material: dark Liquid Glass, as Superwhisper's pill uses
+/// (SwiftUI glassEffect, regular), tinted so the white waveform and labels
+/// read over any background; with Reduce Transparency an opaque dark fill.
+/// The outline is the person's palette.
+private struct CapsuleBackground: View {
+    let palette: ThemePalette
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    /// Superwhisper's pill reads #2B2B2A over a light desktop.
+    static let solidFill = Color(red: 0x2B / 255, green: 0x2B / 255, blue: 0x2A / 255)
+    static let glassTint = Color.black.opacity(0.72)
+
+    var body: some View {
+        let shape = Capsule()
+        Group {
+            if reduceTransparency {
+                shape.fill(Self.solidFill)
+            } else {
+                // Glass alone follows the window's light appearance; the dark
+                // layer over it gives the pill's near-black read, the glass
+                // its blur and edge light.
+                Color.clear.glassEffect(.regular, in: shape)
+                    .overlay(shape.fill(Self.glassTint))
+            }
+        }
+        .overlay(shape.strokeBorder(palette.gradient.opacity(RecordingHUDView.capsuleOutlineOpacity), lineWidth: 1))
+    }
+}
+
+/// The capsule's "still working" sign, as on Windows: a short line in the
+/// palette sweeping back and forth. With Reduce Motion it rests in the middle.
+private struct ProcessingSweep: View {
+    let palette: ThemePalette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        // About 30 frames a second is smooth for a slow sweep; the display's
+        // 120 Hz would redraw four times as often for nothing.
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
+            let sweep = reduceMotion ? Double.pi / 2 : context.date.timeIntervalSinceReferenceDate * 2.6
+            SweepShape(sweep: sweep)
+                .stroke(palette.gradient, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+        }
+        .accessibilityHidden(true)
+    }
+
+    private struct SweepShape: Shape {
+        let sweep: Double
+        func path(in rect: CGRect) -> Path {
+            let length = rect.width * 0.32
+            let x = rect.minX + (rect.width - length) * (1 - cos(sweep)) / 2
+            var path = Path()
+            path.move(to: CGPoint(x: x, y: rect.midY))
+            path.addLine(to: CGPoint(x: x + length, y: rect.midY))
+            return path
+        }
     }
 }
