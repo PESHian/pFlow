@@ -1,12 +1,8 @@
 import Foundation
 
-enum CommandKey {
-    static func rightCommandTransition(keyCode: Int64, flags: UInt64) -> Bool? {
-        guard keyCode == 54 else { return nil }
-        return flags & 0x10 != 0
-    }
-}
-
+/// Hold the activation key to dictate, double-tap it for continuous recording,
+/// tap it again to finish. Named for Right Command, the first and default key;
+/// the rule is the same for every key (`ActivationKey`).
 struct RightCommandActivation {
     enum State: Equatable { case idle, recording, awaitingSecondTap, continuous, processing, inserting }
     enum Effect: Equatable { case start, pause, resume, finish, cancel }
@@ -59,9 +55,9 @@ struct RightCommandActivation {
     }
 
     // A modifier can remain held even when its virtual-key bitmap says up.
-    // The normal right-specific event handles release with Left Command held.
-    mutating func recoverRelease(commandIsDown: Bool, at time: TimeInterval) -> [Effect] {
-        guard isDown, !commandIsDown else { return [] }
+    // The normal side-specific event handles release with the other side held.
+    mutating func recoverRelease(keyIsDown: Bool, at time: TimeInterval) -> [Effect] {
+        guard isDown, !keyIsDown else { return [] }
         return release(at: time)
     }
 

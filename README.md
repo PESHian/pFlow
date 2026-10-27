@@ -40,8 +40,9 @@ Paid dictation apps charge for this. Wispr Flow Pro is $15 a month, or $12 a mon
 - **Hold Right Command** and talk. Let go to finish.
 - **Double-tap Right Command** to keep talking hands-free. Tap it once to stop.
 - Left Command still works for your shortcuts.
+- Want another key? In Settings → Shortcut, pick Right Control, or choose **Press a key…** and press the one you want, like an F key (on a laptop, hold fn as you press it). Keys that type (Option and Shift among them) and Escape, which stops a dictation, can't be chosen.
 - At the start and end of each dictation, macOS shows a small keyboard label at the cursor. That's pFlow switching to pFlow Dictation and back to your keyboard.
-- If double-tapping opens Siri, change Siri's keyboard shortcut in System Settings so it doesn't use Command twice.
+- If double-tapping opens Siri or Apple's Dictation, change its keyboard shortcut in System Settings so it doesn't use your key twice.
 - Speech engine: Apple's on-device engine is the default. You can pick Whisper (whisper.cpp, also on your Mac) in Settings; it downloads a checksum-checked model the first time.
 
 

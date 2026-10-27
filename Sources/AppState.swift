@@ -43,19 +43,16 @@ final class AppState {
 
     var mainPage: MainPage = .settings
 
-    var modifierTrigger: ModifierTrigger {
+    /// Hold it to dictate (Settings → Shortcut). Takes effect at once.
+    var activationKey: ActivationKey {
         didSet {
-            UserDefaults.standard.set(modifierTrigger.rawValue, forKey: "modifierTrigger")
-            modifierHotkeys.trigger = modifierTrigger
+            activationKey.save()
+            activationKeys.key = activationKey
         }
     }
 
-    var functionKeyTrigger: FunctionKeyTrigger {
-        didSet {
-            UserDefaults.standard.set(functionKeyTrigger.rawValue, forKey: "functionKeyTrigger")
-            functionKeys.trigger = functionKeyTrigger
-        }
-    }
+    /// Settings → Shortcut → Press a key, while it listens.
+    let keyLearning = KeyLearning()
 
     var showInDock: Bool {
         didSet {
@@ -90,8 +87,7 @@ final class AppState {
     private(set) var coordinator: RecordingCoordinator!
 
     private let hotkeys = HotkeyManager()
-    private let modifierHotkeys = ModifierHotkeyMonitor()
-    private let functionKeys = FunctionKeyMonitor()
+    private let activationKeys = ActivationKeyMonitor()
     private let escapeMonitor = EscapeMonitor()
     private let injector = TextInjector()
     private let hud = HUDController()
@@ -117,12 +113,7 @@ final class AppState {
         showInDock = (UserDefaults.standard.object(forKey: "showInDock") as? Bool) ?? false
         showInMenuBar = (UserDefaults.standard.object(forKey: "showInMenuBar") as? Bool) ?? true
         cleanupEnabled = (UserDefaults.standard.object(forKey: "cleanupEnabled") as? Bool) ?? true
-        modifierTrigger = ModifierTrigger(
-            rawValue: UserDefaults.standard.string(forKey: "modifierTrigger") ?? ""
-        ) ?? .none
-        functionKeyTrigger = FunctionKeyTrigger(
-            rawValue: UserDefaults.standard.string(forKey: "functionKeyTrigger") ?? ""
-        ) ?? .none
+        activationKey = ActivationKey.saved()
         currentInputName = AudioDevices.defaultInputName()
 
         let language = UserDefaults.standard.string(forKey: "dictationLanguage") ?? Self.systemLanguage
@@ -194,22 +185,16 @@ final class AppState {
         InputMethodLink.shared.start()
 
         hotkeys.disable()
-        modifierHotkeys.recordingIsBusy = { [weak self] in self?.coordinator.state != .idle }
-        modifierHotkeys.onRightCommand = { [weak self] effect in
+        activationKeys.recordingIsBusy = { [weak self] in self?.coordinator.state != .idle }
+        activationKeys.onActivation = { [weak self] effect in
             guard let self else { return }
             if effect == .start {
                 NSLog("pFlow: recording requested; microphone=\(self.permissions.microphone), speech=\(self.permissions.speech), accessibility=\(self.permissions.accessibility)")
             }
             self.coordinator.handle(effect)
         }
-        modifierHotkeys.trigger = .rightCommand
-        modifierHotkeys.start()
-
-        functionKeys.onTap = { [weak self] in
-            guard let self else { return }
-            Task { await self.coordinator.toggle() }
-        }
-        functionKeys.trigger = .none
+        activationKeys.key = activationKey
+        activationKeys.start()
 
         escapeMonitor.onEscape = { [weak self] in
             self?.coordinator.handleEscape()
@@ -273,7 +258,17 @@ final class AppState {
             ?? locale.identifier(.bcp47)
     }
 
+    /// Settings → Shortcut → Press a key: the activation key starts nothing
+    /// until the new one is pressed, or listening stops.
+    func learnActivationKey() {
+        guard coordinator.state == .idle else { return }
+        activationKeys.paused = true
+        keyLearning.start(onLearned: { [weak self] key in self?.activationKey = key },
+                          onEnd: { [weak self] in self?.activationKeys.paused = false })
+    }
+
     func toggleRecording() {
+        keyLearning.stop()
         Task { await coordinator.toggle() }
     }
 

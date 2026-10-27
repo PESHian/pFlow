@@ -14,6 +14,10 @@ struct SettingsView: View {
             SettingsContent(model: model)
         }
         .onAppear { app.permissions.refresh(); app.launchAtLogin.refresh() }
+        // A take started while a key was being learned: stop listening, the key stays.
+        .onChange(of: app.coordinator.state == .idle) { _, idle in
+            if !idle { app.keyLearning.stop() }
+        }
     }
 
     /// Everything the page shows, read from the app once per draw. The page
@@ -30,6 +34,11 @@ struct SettingsView: View {
             openStatistics: { onOpenStatistics?() },
             openHistory: { onOpenHistory?() },
             openDictionary: { onOpenDictionary?() },
+            activationKey: $app.activationKey,
+            learningKey: app.keyLearning.listening,
+            learningNote: app.keyLearning.note,
+            learnKey: { app.learnActivationKey() },
+            cancelLearning: { app.keyLearning.stop() },
             liveTextMode: $app.liveTextMode,
             engine: $app.transcriptionEngine,
             idle: app.coordinator.state == .idle,
@@ -66,6 +75,13 @@ struct SettingsPageModel {
     var openStatistics: () -> Void = {}
     var openHistory: () -> Void = {}
     var openDictionary: () -> Void = {}
+    var activationKey: Binding<ActivationKey> = .constant(.rightCommand)
+    /// Settings → Shortcut → Press a key is listening.
+    var learningKey = false
+    /// Why the last key pressed can't be used.
+    var learningNote: String?
+    var learnKey: () -> Void = {}
+    var cancelLearning: () -> Void = {}
     var liveTextMode: Binding<LiveTextMode>
     var engine: Binding<TranscriptionEngine>
     var idle = true
@@ -187,12 +203,53 @@ struct SettingsContent: View {
         return sections
     }
 
+    /// The list, with a learned key in it while that key is chosen.
+    private var keyChoices: [ActivationKey] {
+        let key = model.activationKey.wrappedValue
+        return ActivationKey.presets.contains(key) ? ActivationKey.presets : ActivationKey.presets + [key]
+    }
+
     private var shortcutSection: some View {
         VStack(alignment: .leading, spacing: Theme.s3) {
             SectionLabel("Shortcut")
-            Card(padding: Theme.s3) {
-                Text("Hold Right Command to dictate. Release to insert. Double-tap for continuous recording; tap again to finish.")
-                    .peshText(13)
+            Card(padding: Theme.s2) {
+                VStack(spacing: 0) {
+                    HStack(spacing: Theme.s3) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Activation key").peshText(13, .medium)
+                            Text("Hold \(model.activationKey.wrappedValue.name) to dictate. Release to insert. Double-tap it for continuous recording; tap again to finish.")
+                                .peshText(12).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: Theme.s3)
+                        Picker("", selection: model.activationKey) {
+                            ForEach(keyChoices) { key in Text(key.name).tag(key) }
+                        }
+                        .labelsHidden()
+                        .frame(width: 168)
+                        .disabled(!model.idle || model.learningKey)
+                    }
+                    .padding(.horizontal, Theme.s3)
+                    .padding(.vertical, Theme.s2 + 2)
+                    Divider().overlay(Theme.hairline).padding(.horizontal, Theme.s3)
+                    HStack(spacing: Theme.s3) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(model.learningKey ? "Press the key you want to use" : "Use another key").peshText(13, .medium)
+                            Text(model.learningKey
+                                 ? model.learningNote ?? "Press it and let go. On a laptop, hold fn for an F key. Escape cancels."
+                                 : "Press a key that doesn't type, like an F key, and pFlow learns it.")
+                                .peshText(12).foregroundStyle(model.learningNote == nil ? .secondary : .primary)
+                        }
+                        Spacer(minLength: Theme.s3)
+                        if model.learningKey {
+                            Button("Cancel", action: model.cancelLearning)
+                        } else {
+                            Button("Press a key…", action: model.learnKey)
+                                .disabled(!model.idle)
+                        }
+                    }
+                    .padding(.horizontal, Theme.s3)
+                    .padding(.vertical, Theme.s2 + 2)
+                }
             }
         }
     }

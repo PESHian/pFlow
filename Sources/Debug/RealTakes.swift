@@ -6,11 +6,12 @@ import Carbon
 import SwiftUI
 
 /// Takes the way the owner dictates (Debug harness, test VM only, fictional
-/// audio): the real Right Command monitor, the real coordinator, the real
+/// audio): the real activation key monitor, the real coordinator, the real
 /// Apple speech recognizer fed from a recording at real-time pace (no
 /// microphone), the real injector and capsule, and the person's own saved
-/// settings. The harness presses Right Command as a person would: held for the
-/// whole take (push-to-talk), or double-tapped and tapped again to finish.
+/// settings, the activation key among them. The harness presses that key as a
+/// person would: held for the whole take (push-to-talk), or double-tapped and
+/// tapped again to finish.
 @MainActor
 final class RealPipeline {
     let next: URL
@@ -18,7 +19,7 @@ final class RealPipeline {
     let injector = TextInjector()
     let hud = HUDController()
     let coordinator: RecordingCoordinator
-    private let hotkeys = ModifierHotkeyMonitor()
+    private let hotkeys = ActivationKeyMonitor()
 
     init(folder: URL) {
         next = folder.appendingPathComponent("next-audio.txt")
@@ -37,8 +38,8 @@ final class RealPipeline {
         InputMethodInstall.ensure()
         InputMethodLink.shared.start()
         hotkeys.recordingIsBusy = { [weak self] in self?.coordinator.state != .idle }
-        hotkeys.onRightCommand = { [weak self] effect in self?.coordinator.handle(effect) }
-        hotkeys.trigger = .rightCommand
+        hotkeys.onActivation = { [weak self] effect in self?.coordinator.handle(effect) }
+        hotkeys.key = ActivationKey.saved()
         hotkeys.start()
         hud.prepare()
     }
@@ -68,11 +69,17 @@ extension TakeHarness {
         }
     }
 
+    /// The saved activation key, down or up, as the keyboard sends it.
     func rightCommand(down: Bool) {
+        let key = ActivationKey.saved()
         let source = CGEventSource(stateID: .hidSystemState)
-        let event = CGEvent(keyboardEventSource: source, virtualKey: 54, keyDown: down)
-        event?.type = .flagsChanged
-        event?.flags = down ? CGEventFlags(rawValue: CGEventFlags.maskCommand.rawValue | 0x10) : []
+        let event = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(key.keyCode), keyDown: down)
+        if let flag = key.flag, let bit = ActivationKey.deviceBits[key.keyCode] {
+            event?.type = .flagsChanged
+            event?.flags = down ? CGEventFlags(rawValue: flag.rawValue | bit) : []
+        } else {
+            event?.flags = []
+        }
         event?.post(tap: .cghidEventTap)
     }
 
@@ -149,11 +156,11 @@ extension TakeHarness {
             previewSeen = max(previewSeen, shown)
             if !duringRan, Date().timeIntervalSince(started) > 1.6, let during { duringRan = true; await during() }
         }
-        // Finish: let go, or tap once.
+        // Finish: let go, or tap once ("taplong": that tap held 1.5 s, past the paste).
         if way == "hold" {
             rightCommand(down: false)
         } else {
-            rightCommand(down: true); await pause(0.06); rightCommand(down: false)
+            rightCommand(down: true); await pause(way == "taplong" ? 1.5 : 0.06); rightCommand(down: false)
         }
         _ = await waitFor(25) { pipeline.coordinator.state == .idle }
         Self.lastIdleAt = Date()
@@ -229,6 +236,70 @@ extension TakeHarness {
             result["take"] = await realTake(target, way: parts[3], label: spec)
         }
         note("\(spec): \(result.filter { $0.key != "take" })")
+        return result
+    }
+
+    /// "keyprobe:<target>:<accent|shortcut|escape>": the saved activation key
+    /// with other keys, outside a full take. accent: ⌥E then E, with Option
+    /// held as the activation key when it is one (else Left Option): é, not ´e.
+    /// shortcut: the key with Command held starts nothing. escape: Escape while
+    /// the key is held cancels.
+    func keyProbe(_ parts: [String]) async -> [String: Any] {
+        let spec = parts.joined(separator: ":")
+        guard parts.count == 3, let target = await openTarget(parts[1]) else { return ["spec": spec, "error": "could not open"] }
+        let pipeline = realPipeline()
+        let key = ActivationKey.saved()
+        // A take started by the key needs a recording to play, as in a real take.
+        if let (audio, _) = Self.recordings().first { try? audio.path.write(to: pipeline.next, atomically: true, encoding: .utf8) }
+        _ = await activate(target.app)
+        await emptyField(target)
+        let before = await target.readBack() ?? ""
+        var states: [String] = []
+        func state() { states.append("\(pipeline.coordinator.state)") }
+        ActivationKeyMonitor.trace.removeAll()
+        ReasonLog.recent.removeAll()
+        switch parts[2] {
+        case "accent":
+            let option = [kVK_Option, kVK_RightOption].contains(Int(key.keyCode))
+            let alt = CGEventFlags.maskAlternate
+            if option { rightCommand(down: true) } else { personModifier(58, down: true, flags: CGEventFlags(rawValue: alt.rawValue | 0x20)) }
+            await pause(0.5)
+            state()
+            personModifier(CGKeyCode(kVK_ANSI_E), down: true, flags: alt)
+            personModifier(CGKeyCode(kVK_ANSI_E), down: false, flags: alt)
+            await pause(0.4)
+            if option { rightCommand(down: false) } else { personModifier(58, down: false, flags: []) }
+            await pause(0.4)
+            personKey(CGKeyCode(kVK_ANSI_E))
+        case "shortcut":
+            let code = CGKeyCode(key.keyCode)
+            personModifier(code, down: true, flags: .maskCommand)
+            await pause(0.5)
+            state()
+            personModifier(code, down: false, flags: .maskCommand)
+        case "escape":
+            rightCommand(down: true)
+            await pause(0.8)
+            state()
+            personKey(CGKeyCode(kVK_Escape))
+            await pause(0.6)
+            state()
+            rightCommand(down: false)
+        default:
+            return ["spec": spec, "error": "unknown probe"]
+        }
+        _ = await waitFor(8) { pipeline.coordinator.state == .idle }
+        await pause(0.8)
+        state()
+        let after = await target.readBack() ?? ""
+        let result: [String: Any] = [
+            "spec": spec, "key": key.name, "states": states,
+            "typed": after.count >= before.count ? String(after.dropFirst(before.count)) : "<shorter>",
+            "sourceAfter": InputMethodInstall.currentSourceID() ?? "?",
+        ]
+        note("\(spec): key \(key.name), states \(states), typed \"\(result["typed"]!)\", source after \(result["sourceAfter"]!)")
+        note("  monitor: \(ActivationKeyMonitor.trace)")
+        note("  reasons: \(ReasonLog.recent)")
         return result
     }
 
@@ -412,6 +483,8 @@ extension TakeHarness {
         if parts.first == "updaterenders" { return await updateRenders() }
         if parts.first == "setup" { return setupRenders(parts.count > 1 ? parts[1] : "now") }
         if parts.first == "realguard" { return await realGuard(parts) }
+        if parts.first == "keyprobe" { return await keyProbe(parts) }
+        if parts.first == "learnkey" { return await learnKeyProbe() }
         let spec = parts.joined(separator: ":")
         guard parts.count >= 3, let target = await openTarget(parts[1]) else { return ["spec": spec, "error": "could not open"] }
         if parts[0] == "realframes" {

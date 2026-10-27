@@ -625,7 +625,7 @@ final class TakeHarness {
             return ["spec": spec, "takes": takes, "exactlyOnce": once, "withLiveWords": live, "count": count]
         }
         if parts.count == 2, parts[0] == "probe" { return await probe(parts[1]) }
-        if ["real", "realframes", "realguard", "thumbs", "setup", "twowin", "updaterenders"].contains(parts[0]) { return await realRun(parts) }
+        if ["real", "realframes", "realguard", "keyprobe", "learnkey", "thumbs", "setup", "twowin", "updaterenders"].contains(parts[0]) { return await realRun(parts) }
         if parts.count == 2, parts[0] == "im" { return await imSpike(parts[1]) }
         if parts.count == 2, parts[0] == "imside" { return await imSide(parts[1]) }
         if parts.first == "capsules" { return await capsules(hold: Double(parts.count > 1 ? parts[1] : "4") ?? 4) }

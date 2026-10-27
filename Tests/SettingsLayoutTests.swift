@@ -114,6 +114,31 @@ struct SettingsLayoutTests {
         }
     }
 
+    /// Settings → Shortcut in each of its states: Right Command, a learned
+    /// key in the list, listening for a key, a key refused, and a take running.
+    @Test func everyShortcutStateFitsTheWindow() throws {
+        var learned = Self.fixture()
+        learned.activationKey = .constant(ActivationKey(keyCode: 0x64))
+        var listening = Self.fixture()
+        listening.learningKey = true
+        var refused = listening
+        refused.learningNote = ActivationKey.refusal(for: 0)
+        var busy = Self.fixture()
+        busy.idle = false
+        for (state, model) in [("default", Self.fixture()), ("learned", learned), ("listening", listening), ("refused", refused), ("busy", busy)] {
+            let section = try #require(SettingsContent(model: model).sections.first { $0.name == "Shortcut" })
+            for width in Self.widths {
+                for (look, name) in Self.looks {
+                    for (size, text) in Self.textSizes {
+                        let shot = size == "normal" ? "shortcut-\(state)-\(Int(width))-\(look)" : nil
+                        let fit = try fit(ScrollView { section.view.padding(Theme.s5) }, width: width, look: name, text: text, shot: shot)
+                        #expect(!fit.clipped, "Shortcut (\(state)) at \(Int(width)) \(look) \(size): \(fit.detail)")
+                    }
+                }
+            }
+        }
+    }
+
     @Test func theWholeSettingsPageFitsTheWindow() throws {
         for (mode, engine) in [(LiveTextMode.typeInApp, TranscriptionEngine.apple), (.typeInApp, .whisper)] {
             for width in Self.widths {
