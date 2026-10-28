@@ -3,8 +3,30 @@ import Carbon
 import InputMethodKit
 import os
 
-/// Reason lines, the same subsystem as pFlow's (fixed words, no text, no client names).
-let reasons = Logger(subsystem: "com.pesh.pflow", category: "inputmethod")
+/// Reason lines, the same subsystem as pFlow's (fixed words, no text, no client
+/// names), kept only while pFlow's Troubleshooting log is on (`TroubleshootingLog`).
+struct ReasonLines {
+    private let logger = Logger(subsystem: "com.pesh.pflow", category: "inputmethod")
+
+    func notice(_ line: String) {
+        let on = TroubleshootingLog.isOn
+        #if DEBUG
+        logger.notice("\(line, privacy: .public)")
+        #else
+        if on { logger.notice("\(line, privacy: .public)") }
+        #endif
+        if on { TroubleshootingLog.append(line, by: .inputMethod) }
+    }
+
+    /// Only in the system log, and only on a test Mac.
+    func debug(_ line: String) {
+        #if DEBUG
+        logger.debug("\(line, privacy: .public)")
+        #endif
+    }
+}
+
+let reasons = ReasonLines()
 
 /// The input method's side of the private channel, and its one take.
 final class Link {
@@ -133,7 +155,7 @@ final class Link {
             let window = message.frame.flatMap { $0.count == 4 ? CGRect(x: $0[0], y: $0[1], width: $0[2], height: $0[3]) : nil }
             #if DEBUG
             let caret = client.caretRect ?? .zero
-            reasons.notice("trace probe: caret \(Int(caret.midX), privacy: .public),\(Int(caret.midY), privacy: .public) window \(Int(window?.minX ?? -1), privacy: .public),\(Int(window?.minY ?? -1), privacy: .public) \(Int(window?.width ?? -1), privacy: .public)x\(Int(window?.height ?? -1), privacy: .public) same app \(client.bundle == take.bundle ? "yes" : "no", privacy: .public)")
+            reasons.notice("trace probe: caret \(Int(caret.midX)),\(Int(caret.midY)) window \(Int(window?.minX ?? -1)),\(Int(window?.minY ?? -1)) \(Int(window?.width ?? -1))x\(Int(window?.height ?? -1)) same app \(client.bundle == take.bundle ? "yes" : "no")")
             #endif
             if core.probe(ObjectIdentifier(current), client: client, window: window) {
                 reasons.notice("probation: the client still active in the app, until pFlow sees the words in the target")
@@ -164,16 +186,16 @@ final class Link {
             // Back out of the very client that shows the words, with an empty mark, and confirmed gone.
             #if DEBUG
             if let client = currentClient {
-                reasons.notice("trace take-back: caret \(client.caretLocation ?? -1, privacy: .public) length \(client.textLength ?? -1, privacy: .public) marked \(client.markedLength, privacy: .public)")
+                reasons.notice("trace take-back: caret \(client.caretLocation ?? -1) length \(client.textLength ?? -1) marked \(client.markedLength)")
             }
             #endif
             let result = core.clear()
             #if DEBUG
             if let client = currentClient {
-                reasons.notice("trace take-back after: caret \(client.caretLocation ?? -1, privacy: .public) result \(result.rawValue, privacy: .public)")
+                reasons.notice("trace take-back after: caret \(client.caretLocation ?? -1) result \(result.rawValue)")
             }
             #endif
-            if result != .gone { reasons.notice("take-back not proven: \(result.rawValue, privacy: .public)") }
+            if result != .gone { reasons.notice("take-back not proven: \(result.rawValue)") }
             send(.init(.cleared, take: message.take, ok: result == .gone, reason: result.rawValue))
         case .keep:
             core.keepAsIs()
@@ -236,7 +258,7 @@ final class Link {
     func activated(_ controller: PFlowInputController, client: (IMKTextInput & NSObjectProtocol)?) {
         #if DEBUG
         let same = current.map { $0 === controller } ?? false
-        reasons.notice("trace activated: \(same ? "same controller" : "new controller", privacy: .public), take \(self.take != nil ? "yes" : "no", privacy: .public)")
+        reasons.notice("trace activated: \(same ? "same controller" : "new controller"), take \(self.take != nil ? "yes" : "no")")
         if take?.simulateNoActivation == true { return }
         #endif
         current = controller
@@ -247,7 +269,7 @@ final class Link {
         let event = core.activated(activation)
         if event == .none, take != nil, core.binding.bound == nil, core.binding.provisional == nil {
             let why = activation.bundle == core.binding.bundle ? "before the take's selection" : "another app"
-            reasons.notice("activation not bound: \(why, privacy: .public)")
+            reasons.notice("activation not bound: \(why)")
         }
         apply(event)
         reportClient()
@@ -259,7 +281,7 @@ final class Link {
     func deactivated(_ controller: PFlowInputController) {
         #if DEBUG
         let same = current.map { $0 === controller } ?? false
-        reasons.notice("trace deactivated: \(same ? "current controller" : "other controller", privacy: .public), take \(self.take != nil ? "yes" : "no", privacy: .public)")
+        reasons.notice("trace deactivated: \(same ? "current controller" : "other controller"), take \(self.take != nil ? "yes" : "no")")
         #endif
     }
 
@@ -316,7 +338,7 @@ final class Link {
 
     private func broken(_ reason: String) {
         guard take != nil, take?.broken == nil else { return }
-        reasons.notice("take interrupted: \(reason, privacy: .public)")
+        reasons.notice("take interrupted: \(reason)")
         take?.broken = reason
         send(.init(.interrupted, take: take?.id, reason: reason))
     }

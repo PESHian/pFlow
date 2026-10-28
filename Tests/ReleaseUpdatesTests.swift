@@ -4,6 +4,15 @@ import Testing
 
 private final class UpdateTestBundle: NSObject { }
 struct ReleaseUpdatesTests {
+    /// MacUpdateInstaller.verifyBundle, also accepting the Debug test host's own bundle ID
+    /// (Debug builds are com.pesh.Yap.debug so they never share pFlow's identity).
+    static func verifyBundleOrTestHost(_ app: URL, version: String) throws {
+        let info = try MacUpdateInstaller.metadata(app)
+        guard let id = info["CFBundleIdentifier"] as? String, ["com.pesh.Yap", Bundle.main.bundleIdentifier].contains(id),
+              info["CFBundleShortVersionString"] as? String == version else { throw UpdateError.invalid }
+        try MacUpdateInstaller.run("/usr/bin/lipo", ["-verify_arch", "arm64", try MacUpdateInstaller.executable(app).path])
+    }
+
     @Test func productionTrustRejectsAdHocAppAndInvalidTeams() throws {
         for team in ["", "$(PFLOW_DEVELOPER_TEAM)", "SHORT", "TEAM\" or true"] {
             #expect(throws: (any Error).self) { try MacUpdateInstaller.developerRequirement(team: team) }
@@ -27,7 +36,7 @@ struct ReleaseUpdatesTests {
         let original = Bundle.main.bundleURL, helper = root.appendingPathComponent("helper.app")
         let version = try #require(MacUpdateInstaller.metadata(original)["CFBundleShortVersionString"] as? String)
         func integrityOnly(_ app: URL, _ version: String) throws {
-            try MacUpdateInstaller.verifyBundle(app, version: version)
+            try Self.verifyBundleOrTestHost(app, version: version)
             try MacUpdateInstaller.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app.path])
         }
         try MacUpdateInstaller.copyHelper(from: original, to: helper, version: version, validate: integrityOnly)

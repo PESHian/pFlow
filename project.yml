@@ -12,8 +12,8 @@ settings:
     SWIFT_STRICT_CONCURRENCY: minimal
     SWIFT_SERIALIZE_DEBUGGING_OPTIONS: NO
     OTHER_SWIFT_FLAGS: '$(inherited) -file-prefix-map "$(SRCROOT)=/_/pflow" -debug-prefix-map "$(SRCROOT)=/_/pflow"'
-    MARKETING_VERSION: "0.3.17"
-    CURRENT_PROJECT_VERSION: "44"
+    MARKETING_VERSION: "0.3.20"
+    CURRENT_PROJECT_VERSION: "48"
     PFLOW_DEVELOPER_TEAM: ""
     DEAD_CODE_STRIPPING: YES
     # Apple Silicon only. The on-device SpeechAnalyzer needs it, and the Intel
@@ -36,15 +36,24 @@ targets:
       - package: KeyboardShortcuts
       # pFlow Dictation, the input method for live words, ships inside the app;
       # pFlow installs or updates it in ~/Library/Input Methods at launch.
+      # Built first, copied in by "Embed pFlow Dictation" below.
       - target: pFlowInput
-        embed: true
-        codeSign: false
-        copy:
-          destination: wrapper
-          subpath: Contents/Library/Input Methods
+        embed: false
     postCompileScripts:
       - name: Bundle local Whisper engine
         script: 'bash "$SRCROOT/scripts/build-whisper.sh"'
+        basedOnDependencyAnalysis: false
+    postBuildScripts:
+      # A copy step, not `embed: true`: the input method's product name differs by
+      # configuration, and an embed step only knows one of them (Release failed to
+      # find "pFlow Dictation Debug.app"). Runs before the app is signed.
+      - name: Embed pFlow Dictation
+        script: |
+          set -e
+          dst="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Library/Input Methods"
+          rm -rf "$dst"
+          mkdir -p "$dst"
+          ditto "$BUILT_PRODUCTS_DIR/$PFLOW_IM_PRODUCT_NAME.app" "$dst/$PFLOW_IM_PRODUCT_NAME.app"
         basedOnDependencyAnalysis: false
     settings:
       base:
@@ -54,6 +63,8 @@ targets:
         # bundle ID and Swift module stay Yap to keep data, login and tests.
         PRODUCT_NAME: pFlow
         PRODUCT_MODULE_NAME: Yap
+        # pFlowInput's PRODUCT_NAME, per configuration (InputMethodWire.bundleName says the same).
+        PFLOW_IM_PRODUCT_NAME: pFlow Dictation
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Yap-Bridging-Header.h
         PFLOW_ENTITLEMENTS_FILE: Sources/Yap.entitlements
         CODE_SIGN_ENTITLEMENTS: $(PFLOW_ENTITLEMENTS_FILE)
@@ -63,6 +74,12 @@ targets:
         LD_RUNPATH_SEARCH_PATHS:
           - "@executable_path/../Frameworks"
       configs:
+        # Debug builds (tests, the VM harness) have their own identity, so a build
+        # on a Mac where pFlow is installed never shares its preferences, login
+        # item or app ID with the real app.
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.pesh.Yap.debug
+          PFLOW_IM_PRODUCT_NAME: pFlow Dictation Debug
         # Release drops the debug map, which records each object file by its
         # build-machine path (the builder's home folder) inside the app binary.
         Release:
@@ -79,17 +96,25 @@ targets:
           - Info.plist
       - path: Sources/Services/InputMethodWire.swift
       - path: Sources/Services/InputMethodCore.swift
+      - path: Sources/Services/TroubleshootingLog.swift
     settings:
       base:
         INFOPLIST_FILE: InputMethod/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: com.pesh.inputmethod.pFlow
         PRODUCT_NAME: pFlow Dictation
+        PFLOW_IM_DISPLAY_NAME: pFlow Dictation
         PRODUCT_MODULE_NAME: pFlowInput
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "-"
         ENABLE_HARDENED_RUNTIME: NO
         SKIP_INSTALL: YES
       configs:
+        # A Debug build's input method is a different input source: building or
+        # testing on a Mac where pFlow Dictation is in use never shadows it.
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.pesh.inputmethod.pFlow.debug
+          PRODUCT_NAME: pFlow Dictation Debug
+          PFLOW_IM_DISPLAY_NAME: pFlow Dictation (Debug)
         Release:
           DEPLOYMENT_POSTPROCESSING: YES
           STRIP_INSTALLED_PRODUCT: YES

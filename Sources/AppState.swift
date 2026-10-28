@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import SwiftData
+import UniformTypeIdentifiers
 
 @MainActor
 @Observable
@@ -43,19 +44,30 @@ final class AppState {
 
     var mainPage: MainPage = .settings
 
-    var modifierTrigger: ModifierTrigger {
+    /// Settings → Troubleshooting log, off until turned on. Off deletes what was kept.
+    var troubleshootingLog: Bool {
         didSet {
-            UserDefaults.standard.set(modifierTrigger.rawValue, forKey: "modifierTrigger")
-            modifierHotkeys.trigger = modifierTrigger
+            UserDefaults.standard.set(troubleshootingLog, forKey: TroubleshootingLog.defaultsKey)
+            TroubleshootingLog.settingChanged()
+            guard !troubleshootingLog else { return }
+            TroubleshootingLog.clear()
+            // pFlow Dictation reads the setting every few seconds: a line it wrote meanwhile goes too.
+            DispatchQueue.main.asyncAfter(deadline: .now() + TroubleshootingLog.refreshSeconds + 1) { [weak self] in
+                if self?.troubleshootingLog == false { TroubleshootingLog.clear() }
+            }
         }
     }
 
-    var functionKeyTrigger: FunctionKeyTrigger {
+    /// Hold it to dictate (Settings → Shortcut). Takes effect at once.
+    var activationKey: ActivationKey {
         didSet {
-            UserDefaults.standard.set(functionKeyTrigger.rawValue, forKey: "functionKeyTrigger")
-            functionKeys.trigger = functionKeyTrigger
+            activationKey.save()
+            activationKeys.key = activationKey
         }
     }
+
+    /// Settings → Shortcut → Press a key, while it listens.
+    let keyLearning = KeyLearning()
 
     var showInDock: Bool {
         didSet {
@@ -90,8 +102,7 @@ final class AppState {
     private(set) var coordinator: RecordingCoordinator!
 
     private let hotkeys = HotkeyManager()
-    private let modifierHotkeys = ModifierHotkeyMonitor()
-    private let functionKeys = FunctionKeyMonitor()
+    private let activationKeys = ActivationKeyMonitor()
     private let escapeMonitor = EscapeMonitor()
     private let injector = TextInjector()
     private let hud = HUDController()
@@ -117,12 +128,10 @@ final class AppState {
         showInDock = (UserDefaults.standard.object(forKey: "showInDock") as? Bool) ?? false
         showInMenuBar = (UserDefaults.standard.object(forKey: "showInMenuBar") as? Bool) ?? true
         cleanupEnabled = (UserDefaults.standard.object(forKey: "cleanupEnabled") as? Bool) ?? true
-        modifierTrigger = ModifierTrigger(
-            rawValue: UserDefaults.standard.string(forKey: "modifierTrigger") ?? ""
-        ) ?? .none
-        functionKeyTrigger = FunctionKeyTrigger(
-            rawValue: UserDefaults.standard.string(forKey: "functionKeyTrigger") ?? ""
-        ) ?? .none
+        activationKey = ActivationKey.saved()
+        let keepLog = UserDefaults.standard.bool(forKey: TroubleshootingLog.defaultsKey)
+        troubleshootingLog = keepLog
+        if !keepLog { TroubleshootingLog.clear() }
         currentInputName = AudioDevices.defaultInputName()
 
         let language = UserDefaults.standard.string(forKey: "dictationLanguage") ?? Self.systemLanguage
@@ -194,22 +203,16 @@ final class AppState {
         InputMethodLink.shared.start()
 
         hotkeys.disable()
-        modifierHotkeys.recordingIsBusy = { [weak self] in self?.coordinator.state != .idle }
-        modifierHotkeys.onRightCommand = { [weak self] effect in
+        activationKeys.recordingIsBusy = { [weak self] in self?.coordinator.state != .idle }
+        activationKeys.onActivation = { [weak self] effect in
             guard let self else { return }
             if effect == .start {
                 NSLog("pFlow: recording requested; microphone=\(self.permissions.microphone), speech=\(self.permissions.speech), accessibility=\(self.permissions.accessibility)")
             }
             self.coordinator.handle(effect)
         }
-        modifierHotkeys.trigger = .rightCommand
-        modifierHotkeys.start()
-
-        functionKeys.onTap = { [weak self] in
-            guard let self else { return }
-            Task { await self.coordinator.toggle() }
-        }
-        functionKeys.trigger = .none
+        activationKeys.key = activationKey
+        activationKeys.start()
 
         escapeMonitor.onEscape = { [weak self] in
             self?.coordinator.handleEscape()
@@ -273,7 +276,44 @@ final class AppState {
             ?? locale.identifier(.bcp47)
     }
 
+    /// Settings → Shortcut → Press a key: the activation key starts nothing
+    /// until the new one is pressed, or listening stops.
+    func learnActivationKey() {
+        guard coordinator.state == .idle else { return }
+        activationKeys.paused = true
+        keyLearning.start(onLearned: { [weak self] key in self?.activationKey = key },
+                          onEnd: { [weak self] in self?.activationKeys.paused = false })
+    }
+
+    /// Settings → Troubleshooting log → Save log…: every kept line in one file,
+    /// in Downloads unless the person picks another place, then shown in Finder.
+    func saveTroubleshootingLog() {
+        let panel = NSSavePanel()
+        let day = DateFormatter()
+        day.locale = Locale(identifier: "en_US_POSIX")
+        day.dateFormat = "yyyy-MM-dd HHmm"
+        panel.nameFieldStringValue = "pFlow log \(day.string(from: Date())).txt"
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        panel.allowedContentTypes = [.plainText]
+        panel.canCreateDirectories = true
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        let version = "\(MacUpdates.current) (\(build))"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            let os = ProcessInfo.processInfo.operatingSystemVersion
+            let text = TroubleshootingLog.report(lines: TroubleshootingLog.lines(), version: version,
+                                                 system: "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)")
+            do {
+                try text.write(to: url, atomically: true, encoding: .utf8)
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            } catch {
+                NSSound.beep()
+            }
+        }
+    }
+
     func toggleRecording() {
+        keyLearning.stop()
         Task { await coordinator.toggle() }
     }
 

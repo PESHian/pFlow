@@ -6,7 +6,7 @@ final class RightCommandActivationTests: XCTestCase {
         var a = RightCommandActivation()
         XCTAssertEqual(a.press(at: 0), [.start])
         for time in [0.08, 0.3, 1.0, 3.0] {
-            XCTAssertEqual(a.recoverRelease(commandIsDown: true, at: time), [])
+            XCTAssertEqual(a.recoverRelease(keyIsDown: true, at: time), [])
             XCTAssertEqual(a.state, .recording)
             XCTAssertTrue(a.isDown)
         }
@@ -15,15 +15,15 @@ final class RightCommandActivationTests: XCTestCase {
     func testReleaseRecoveryFinishesWhenAllCommandsAreReleased() {
         var a = RightCommandActivation()
         _ = a.press(at: 0)
-        XCTAssertEqual(a.recoverRelease(commandIsDown: false, at: 2), [.finish])
+        XCTAssertEqual(a.recoverRelease(keyIsDown: false, at: 2), [.finish])
         XCTAssertFalse(a.isDown)
-        XCTAssertEqual(a.recoverRelease(commandIsDown: false, at: 2.1), [])
+        XCTAssertEqual(a.recoverRelease(keyIsDown: false, at: 2.1), [])
         XCTAssertEqual(a.release(at: 2.2), [])
     }
     func testRightReleaseFinishesWhenLeftCommandRemainsDown() {
         var a = RightCommandActivation()
         _ = a.press(at: 0)
-        XCTAssertEqual(a.recoverRelease(commandIsDown: true, at: 2), [])
+        XCTAssertEqual(a.recoverRelease(keyIsDown: true, at: 2), [])
         XCTAssertEqual(a.release(at: 2.1), [.finish])
     }
     func testExternalContinuousStopAllowsNextHold() {
@@ -45,17 +45,17 @@ final class RightCommandActivationTests: XCTestCase {
         XCTAssertEqual(a.press(at: 1), [.start])
     }
     func testRightCommandPress() {
-        XCTAssertEqual(CommandKey.rightCommandTransition(keyCode: 54, flags: 0x100010), true)
+        XCTAssertEqual(ActivationKey.rightCommand.transition(keyCode: 54, flags: 0x100010), true)
     }
     func testRightReleaseWhileLeftRemainsHeld() {
-        XCTAssertEqual(CommandKey.rightCommandTransition(keyCode: 54, flags: 0x100008), false)
+        XCTAssertEqual(ActivationKey.rightCommand.transition(keyCode: 54, flags: 0x100008), false)
     }
     func testLeftCommandNeverActivates() {
-        XCTAssertNil(CommandKey.rightCommandTransition(keyCode: 55, flags: 0x100008))
-        XCTAssertNil(CommandKey.rightCommandTransition(keyCode: 55, flags: 0x100018))
+        XCTAssertNil(ActivationKey.rightCommand.transition(keyCode: 55, flags: 0x100008))
+        XCTAssertNil(ActivationKey.rightCommand.transition(keyCode: 55, flags: 0x100018))
     }
     func testRightWithBothCommandsHeld() {
-        XCTAssertEqual(CommandKey.rightCommandTransition(keyCode: 54, flags: 0x100018), true)
+        XCTAssertEqual(ActivationKey.rightCommand.transition(keyCode: 54, flags: 0x100018), true)
     }
     func testHoldRelease() {
         var a = RightCommandActivation()

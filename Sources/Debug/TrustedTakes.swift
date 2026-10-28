@@ -375,6 +375,35 @@ final class TakeHarness {
             await pause(3)
             made = TakeTarget(name: name, app: app, windowTitle: title(app.processIdentifier) ?? "T3 Code")
             made?.emptyBeforeTake = name == "t3empty"
+        case "t3two":
+            // A second T3 Code window of the same app (the owner's two-window case), opened from its menus.
+            guard let first = await openTarget("t3") else { return nil }
+            let pid = first.app.processIdentifier
+            let windows = { (self.attribute(AXUIElementCreateApplication(pid), kAXWindowsAttribute) as? [AXUIElement])?.count ?? 0 }
+            let before = windows()
+            if let bar = element(AXUIElementCreateApplication(pid), kAXMenuBarAttribute) {
+                note("t3 menus: " + children(bar).compactMap { string($0, kAXTitleAttribute) }.joined(separator: ", "))
+            }
+            _ = await activate(first.app)
+            for (menu, item) in [("File", "New Window"), ("Window", "New Window"), ("File", "New window"), ("Window", "New window")] where windows() == before {
+                if pressMenu(pid, menu, item) { note("t3two: pressed \(menu) > \(item)"); _ = await waitFor(8) { windows() > before } }
+            }
+            if windows() == before {
+                // No menu item: the shortcuts Electron apps use for a new window.
+                for shift in [true, false] where windows() == before {
+                    let source = CGEventSource(stateID: .hidSystemState)
+                    for down in [true, false] {
+                        let key = CGEvent(keyboardEventSource: source, virtualKey: 45, keyDown: down)
+                        key?.flags = shift ? [.maskCommand, .maskShift] : [.maskCommand]
+                        key?.post(tap: .cghidEventTap)
+                    }
+                    _ = await waitFor(6) { windows() > before }
+                    if windows() > before { note("t3two: opened with Command\(shift ? "-Shift" : "")-N") }
+                }
+            }
+            guard windows() > before else { note("t3two: T3 Code opened no second window (\(before) windows)"); return nil }
+            await pause(3)
+            made = TakeTarget(name: name, app: first.app, windowTitle: title(pid) ?? "T3 Code 2")
         case "chrome2-textarea":
             // A second Chrome window (File > New Window) with its own textarea page.
             guard let chrome = await openTarget("chrome-textarea") else { return nil }
@@ -596,7 +625,7 @@ final class TakeHarness {
             return ["spec": spec, "takes": takes, "exactlyOnce": once, "withLiveWords": live, "count": count]
         }
         if parts.count == 2, parts[0] == "probe" { return await probe(parts[1]) }
-        if ["real", "realframes", "realguard", "thumbs", "setup", "twowin"].contains(parts[0]) { return await realRun(parts) }
+        if ["real", "realframes", "realguard", "keyprobe", "learnkey", "thumbs", "setup", "twowin", "updaterenders"].contains(parts[0]) { return await realRun(parts) }
         if parts.count == 2, parts[0] == "im" { return await imSpike(parts[1]) }
         if parts.count == 2, parts[0] == "imside" { return await imSide(parts[1]) }
         if parts.first == "capsules" { return await capsules(hold: Double(parts.count > 1 ? parts[1] : "4") ?? 4) }

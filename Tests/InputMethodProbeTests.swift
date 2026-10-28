@@ -222,6 +222,7 @@ struct InputMethodProbeTests {
         var current = "com.apple.keylayout.ABC"
         var sent: [InputMethodWire.Message] = []
         var now: TimeInterval = 100
+        let scratch = ScratchDefaults("pflow.im.probe")
     }
 
     private func link(_ world: World) -> InputMethodLink {
@@ -231,7 +232,7 @@ struct InputMethodProbeTests {
         link.selectSource = { world.current = $0; return true }
         link.clock = { world.now }
         link.transmit = { world.sent.append($0); return true }
-        link.defaults = UserDefaults(suiteName: "pflow.im.probe.\(UUID().uuidString)")!
+        link.defaults = world.scratch.defaults
         link.connectedForTesting = true
         return link
     }

@@ -13,9 +13,10 @@ struct BoldTemplateTests {
     }
 
     @Test func boldChoicePersistsAndOldTemplatesDecodeUnchanged() throws {
-        let name = "pflow.bold.tests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
+        let scratch = ScratchDefaults("pflow.bold.tests")
+        defer { withExtendedLifetime(scratch) {} }
+        let name = scratch.name
+        let defaults = scratch.defaults
         let old = DictationTemplate.policeReport
         #expect(try JSONDecoder().decode(DictationTemplate.self, from: JSONEncoder().encode(old)) == old)
         #expect(old.boldHeadings == nil)

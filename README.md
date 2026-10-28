@@ -4,7 +4,7 @@ pFlow is a free, open-source dictation app for macOS. Hold Right Command and tal
 
 It runs on your Mac. No account, no subscription, no word limit.
 
-**[Download pFlow for Mac 0.3.17](https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.25.1/pFlow-Mac-0.3.17.dmg)** · Apple Silicon · macOS 27 or later · [All releases](https://github.com/PESHian/pFlow/releases)
+**[Download pFlow for Mac 0.3.20](https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.27.1/pFlow-Mac-0.3.20.dmg)** · Apple Silicon · macOS 27 or later · [All releases](https://github.com/PESHian/pFlow/releases)
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/PESHian/pFlow/main/docs/images/demo-dark.gif"><img src="docs/images/demo.gif" alt="pFlow shows words in a Chrome message box while you talk, then puts in the finished text when you let go"></picture>
 
@@ -27,7 +27,7 @@ Paid dictation apps charge for this. Wispr Flow Pro is $15 a month, or $12 a mon
 
 ## Install on a Mac
 
-1. Download [pFlow-Mac-0.3.17.dmg](https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.25.1/pFlow-Mac-0.3.17.dmg). You can check it against the `.sha256` file on the release page.
+1. Download [pFlow-Mac-0.3.20.dmg](https://github.com/PESHian/pFlow/releases/download/pflow-desktop-2026.10.27.1/pFlow-Mac-0.3.20.dmg). You can check it against the `.sha256` file on the release page.
 2. Open the disk image and drag **pFlow by Pesh** into Applications.
 3. Open pFlow. This build isn't notarized by Apple yet, so macOS may block it the first time. Go to **System Settings › Privacy & Security** and choose **Open Anyway** ([Apple's steps](https://support.apple.com/en-us/102445)).
 4. pFlow's setup page opens. Allow **Microphone** and **Speech Recognition**, and press **Grant** next to **Accessibility**.
@@ -40,8 +40,9 @@ Paid dictation apps charge for this. Wispr Flow Pro is $15 a month, or $12 a mon
 - **Hold Right Command** and talk. Let go to finish.
 - **Double-tap Right Command** to keep talking hands-free. Tap it once to stop.
 - Left Command still works for your shortcuts.
+- Want another key? In Settings → Shortcut, pick Right Control, or choose **Press a key…** and press the one you want, like an F key (on a laptop, hold fn as you press it). Keys that type (Option and Shift among them) and Escape, which stops a dictation, can't be chosen.
 - At the start and end of each dictation, macOS shows a small keyboard label at the cursor. That's pFlow switching to pFlow Dictation and back to your keyboard.
-- If double-tapping opens Siri, change Siri's keyboard shortcut in System Settings so it doesn't use Command twice.
+- If double-tapping opens Siri or Apple's Dictation, change its keyboard shortcut in System Settings so it doesn't use your key twice.
 - Speech engine: Apple's on-device engine is the default. You can pick Whisper (whisper.cpp, also on your Mac) in Settings; it downloads a checksum-checked model the first time.
 
 
@@ -58,11 +59,11 @@ Paid dictation apps charge for this. Wispr Flow Pro is $15 a month, or $12 a mon
 
 ## Update
 
-Download the newest version from [Releases](https://github.com/PESHian/pFlow/releases), quit pFlow, and drag the new one into Applications (choose **Replace**). Your settings, history, dictionary and templates stay.
+In pFlow, choose **Check for updates…** (in Settings or the menu bar). When a newer version is on GitHub, press **Download**: pFlow downloads it, checks it against GitHub's checksum and opens it. Quit pFlow, drag the new one into Applications (choose **Replace**) and open it. Your settings, history, dictionary and templates stay. On 0.3.17 or older, download the newest version from [Releases](https://github.com/PESHian/pFlow/releases) once.
 
 Until pFlow is signed with an Apple Developer ID:
 - macOS treats each new version as a new app, so press **Grant** for Accessibility again after you update.
-- The in-app update button can't install new Mac versions. Get them from Releases.
+- pFlow can't replace itself; you drag the new version in.
 
 Coming from Mac 0.3.6 or older, when the app was called Yap? Replace it the same way. If **System Settings › Privacy & Security › Accessibility** still lists Yap, select it, click **−**, then open pFlow and allow it again.
 
@@ -73,13 +74,13 @@ Coming from Mac 0.3.6 or older, when the app was called Yap? Replace it the same
 - pFlow has no account, no analytics and no servers. It checks for updates only when you ask.
 - History and settings stay in your Mac user account. Delete History entries you don't need.
 - Speech models come from their hosts: Apple for its speech engine, and the Whisper model download if you choose Whisper.
-- When pFlow can't put words in, it writes a short reason to the Mac's log, never your words. To read it: `log show --last 1d --info --style compact --predicate 'subsystem == "com.pesh.pflow"'`
+- pFlow keeps no log unless you turn on **Settings → Troubleshooting → Troubleshooting log**. Then it notes each step it takes (for example, why words couldn't go in), never your words, and **Save log…** puts it in a file you can send. Turning it off deletes the log.
 
 This public repository holds the app's source, artwork, licenses and fictional test fixtures. It contains no user settings, saved dictations, personal recordings or credentials.
 
 ## How it was tested
 
-pFlow 0.3.17 was tested with recorded speech in TextEdit, Notes, Safari, Chrome (plain boxes and rich editors), Reminders, T3 Code, VS Code and LibreOffice, both holding and double-tapping Right Command: in 230 dictations the finished text went in exactly once every time. It was then used with live speech on a real Mac across everyday apps.
+pFlow 0.3.17 was tested with recorded speech in TextEdit, Notes, Safari, Chrome (plain boxes and rich editors), Reminders, T3 Code, VS Code and LibreOffice, both holding and double-tapping Right Command: in 230 dictations the finished text went in exactly once every time. It was then used with live speech on a real Mac across everyday apps. 0.3.18 to 0.3.20 (the update button, choosing the key, the Troubleshooting log) were tested the same way in a test Mac with recorded speech, then on a real Mac.
 
 Known: now and then, mostly on a quick second dictation, the words show in pFlow's small preview instead of in the app. The finished text still goes in once.
 

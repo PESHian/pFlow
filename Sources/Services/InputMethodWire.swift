@@ -8,14 +8,35 @@ import Security
 /// token before a single message is read. No distributed notifications, no
 /// pasteboard, no files with words in them. Words are never logged.
 enum InputMethodWire {
+    #if DEBUG
+    /// Debug builds are their own input source and app, so a build or test run on a Mac
+    /// where pFlow is installed never touches the real pFlow Dictation or pFlow.
+    static let sourceID = "com.pesh.inputmethod.pFlow.debug"
+    #else
     static let sourceID = "com.pesh.inputmethod.pFlow"
+    #endif
+    #if DEBUG
+    static let bundleName = "pFlow Dictation Debug.app"
+    #else
     static let bundleName = "pFlow Dictation.app"
+    #endif
+    #if DEBUG
+    static let appIdentifier = "com.pesh.Yap.debug"
+    #else
     static let appIdentifier = "com.pesh.Yap"
+    #endif
     /// Longest message, in bytes; a take's words are far shorter.
     static let maxMessage = 1 << 20
 
+    /// Where the socket lives. A Debug build has its own, so it never replaces the real pFlow's.
     static var folder: URL {
-        URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support/pFlow/Input", isDirectory: true)
+        #if DEBUG
+        let name = "Input Debug"
+        #else
+        let name = "Input"
+        #endif
+        return URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support/pFlow", isDirectory: true)
+            .appendingPathComponent(name, isDirectory: true)
     }
 
     static var socketPath: String { folder.appendingPathComponent("link.sock").path }

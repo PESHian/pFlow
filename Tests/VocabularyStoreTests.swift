@@ -3,7 +3,10 @@ import Testing
 @testable import Yap
 
 @MainActor
-struct VocabularyStoreTests {
+final class VocabularyStoreTests {
+    /// Each test's throwaway domains, removed with the test.
+    private var scratch: [ScratchDefaults] = []
+
     @Test func replacementsEditPersistAndKeepOldLearnedWords() throws {
         let defaults = isolatedDefaults()
         let store = VocabularyStore(defaults: defaults)
@@ -33,7 +36,9 @@ struct VocabularyStoreTests {
     }
 
     private func isolatedDefaults() -> UserDefaults {
-        UserDefaults(suiteName: "yap.vocab.test.\(UUID().uuidString)")!
+        let made = ScratchDefaults("yap.vocab.test")
+        scratch.append(made)
+        return made.defaults
     }
 
     @Test func addsNewestFirstTrimsAndDedupes() {

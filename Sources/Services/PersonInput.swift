@@ -238,15 +238,32 @@ final class PersonInput: @unchecked Sendable {
 
     /// A key (other than a modifier or Caps Lock) or a mouse button is down right now.
     static func somethingHeld() -> Bool {
-        for button in [CGMouseButton.left, .right, .center] where CGEventSource.buttonState(.hidSystemState, button: button) {
+        somethingHeld(ignoring: ignoredHeldKey,
+                      button: { CGEventSource.buttonState(.hidSystemState, button: $0) },
+                      key: { CGEventSource.keyState(.hidSystemState, key: $0) })
+    }
+
+    /// The rule, over a given key and button state. `ignoring` is the
+    /// activation key while it is not a modifier: the tap takes it, so the app
+    /// never sees it, and holding it is the person dictating, not acting.
+    static func somethingHeld(ignoring: CGKeyCode?, button: (CGMouseButton) -> Bool, key: (CGKeyCode) -> Bool) -> Bool {
+        for which in [CGMouseButton.left, .right, .center] where button(which) {
             return true
         }
         let modifiers: ClosedRange<CGKeyCode> = 54...63
-        for key in CGKeyCode(0)..<CGKeyCode(128) where !modifiers.contains(key) && key != 0x3F {
-            if CGEventSource.keyState(.hidSystemState, key: key) { return true }
+        for code in CGKeyCode(0)..<CGKeyCode(128) where !modifiers.contains(code) && code != 0x3F && code != ignoring {
+            if key(code) { return true }
         }
         return false
     }
+
+    private static let ignoredLock = NSLock()
+    private static var ignored: CGKeyCode?
+
+    static var ignoredHeldKey: CGKeyCode? { ignoredLock.withLock { ignored } }
+
+    /// Set by the activation key's monitor while its tap takes that key.
+    static func setIgnoredHeldKey(_ key: CGKeyCode?) { ignoredLock.withLock { ignored = key } }
 
     /// Command, Shift, Option, Control or Fn is down.
     static func modifiersHeld() -> Bool {

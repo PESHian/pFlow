@@ -51,6 +51,8 @@ struct InputMethodTests {
         var sent: [InputMethodWire.Message] = []
         var now: TimeInterval = 100
         var enabled = true
+        var layout: String? = "com.apple.keylayout.US"
+        let scratch = ScratchDefaults("pflow.im.tests")
     }
 
     private func link(_ world: World) -> InputMethodLink {
@@ -58,9 +60,10 @@ struct InputMethodTests {
         link.enabled = { world.enabled }
         link.currentSource = { world.current }
         link.selectSource = { world.selects.append($0); world.current = $0; return true }
+        link.keyboardLayout = { world.layout }
         link.clock = { world.now }
         link.transmit = { world.sent.append($0); return true }
-        link.defaults = UserDefaults(suiteName: "pflow.im.tests.\(UUID().uuidString)")!
+        link.defaults = world.scratch.defaults
         link.connectedForTesting = true
         return link
     }
@@ -189,6 +192,74 @@ struct InputMethodTests {
         #expect(world.current == "com.apple.keylayout.ABC")
     }
 
+    /// pFlow's source chosen between takes (nothing saved): the take puts the
+    /// keyboard layout back first, then selects pFlow's, and restores that layout.
+    /// Before, every take gave up and showed the preview (owner, T3 Code, 0.3.19).
+    @Test func aSourceLeftOnPFlowsWithNothingSavedGoesBackToTheKeyboardLayout() {
+        let world = World()
+        world.current = InputMethodWire.sourceID
+        let link = link(world)
+        #expect(link.begin(id: "t", bundle: "com.t3tools.t3code"))
+        #expect(world.selects == ["com.apple.keylayout.US"])
+        // pFlow's own comes once the switch back settled; nothing activated before then binds.
+        #expect(world.sent.first?.at == 100 + InputMethodLink.reselectGap)
+        world.now += 0.1
+        #expect(link.attachState() == .pending)
+        #expect(world.selects == ["com.apple.keylayout.US"])
+        world.now = 100.25
+        #expect(link.attachState() == .pending)
+        #expect(world.selects == ["com.apple.keylayout.US", InputMethodWire.sourceID])
+        #expect(world.sent.last == .init(.rebind, take: "t", at: 100.25))
+        link.receive(.init(.client, take: "t", bundle: "com.t3tools.t3code", uid: "c1"))
+        #expect(link.attachState() == .attached)
+        link.end()
+        #expect(world.current == "com.apple.keylayout.US")
+        #expect(link.defaults.string(forKey: InputMethodLink.restoreKey) == nil)
+    }
+
+    /// The person changed the source while pFlow waited for the switch back to settle: respected.
+    @Test func aSourceChangedWhileTheSwitchBackSettlesIsRespected() {
+        let world = World()
+        world.current = InputMethodWire.sourceID
+        let link = link(world)
+        #expect(link.begin(id: "t", bundle: "com.apple.Notes"))
+        world.current = "com.apple.keylayout.Dvorak"
+        world.now += 0.3
+        #expect(link.attachState() == .failed("source changed"))
+        #expect(world.selects == ["com.apple.keylayout.US"], "pFlow's source is not selected over the person's choice")
+    }
+
+    /// pFlow quit mid-take: the source saved then comes back before the layout.
+    @Test func aSavedSourceComesBackBeforeTheKeyboardLayout() {
+        let world = World()
+        world.current = InputMethodWire.sourceID
+        let link = link(world)
+        link.defaults.set("com.apple.keylayout.Dvorak", forKey: InputMethodLink.restoreKey)
+        #expect(link.begin(id: "t", bundle: "com.apple.TextEdit"))
+        #expect(world.selects.first == "com.apple.keylayout.Dvorak")
+        link.end()
+        #expect(world.current == "com.apple.keylayout.Dvorak")
+    }
+
+    /// No other keyboard to go back to: the take uses the other live paths, nothing selected.
+    @Test func withNoOtherKeyboardALeftSelectionIsNotUsed() {
+        let world = World()
+        world.current = InputMethodWire.sourceID
+        world.layout = InputMethodWire.sourceID
+        let link = link(world)
+        #expect(!link.begin(id: "t", bundle: "com.apple.TextEdit"))
+        #expect(world.selects.isEmpty)
+    }
+
+    /// At launch with nothing saved: the keyboard layout comes back too.
+    @Test func aLeftoverSelectionWithNothingSavedIsRestoredAtLaunch() {
+        let world = World()
+        world.current = InputMethodWire.sourceID
+        let link = link(world)
+        link.restoreLeftover()
+        #expect(world.current == "com.apple.keylayout.US")
+    }
+
     /// Not running yet: selecting the source starts it; the begin goes out once it connects.
     @Test func theBeginWaitsForTheInputMethodToConnect() {
         let world = World()
@@ -204,8 +275,8 @@ struct InputMethodTests {
     }
 
     /// No activation after the select: the person's source, a pause, then pFlow's again; the
-    /// activation that brings binds the take.
-    @Test func noActivationMeansOneSpacedReselection() {
+    /// activation that brings binds the take, and no more bounces follow.
+    @Test func noActivationMeansASpacedReselection() {
         let world = World()
         let link = link(world)
         #expect(link.begin(id: "t", bundle: "com.apple.Notes"))
@@ -214,17 +285,17 @@ struct InputMethodTests {
         world.now += 0.4
         #expect(link.attachState() == .pending)
         #expect(world.selects.last == "com.apple.keylayout.ABC", "the person's source first")
-        world.now += 0.1
+        world.now += 0.05
         _ = link.attachState()
         #expect(world.selects.count == 2, "a pause before pFlow's again")
-        world.now += 0.2
+        world.now += 0.1
         _ = link.attachState()
         #expect(world.selects.last == InputMethodWire.sourceID && world.selects.count == 3)
         link.receive(.init(.client, take: "t", bundle: "com.apple.Notes"))
         #expect(link.attachState() == .attached)
         world.now += 1
         _ = link.attachState()
-        #expect(world.selects.count == 3, "once")
+        #expect(world.selects.count == 3, "no bounce once attached")
     }
 
     /// pFlow just started and the input method connects late: the re-selection waits for the begin to reach it.
@@ -503,7 +574,7 @@ struct InputMethodTargetTests {
         link.selectSource = { world.current = $0; return true }
         link.clock = { world.now }
         link.transmit = { world.sent.append($0); return true }
-        link.defaults = UserDefaults(suiteName: "pflow.im.tests.\(UUID().uuidString)")!
+        link.defaults = world.scratch.defaults
         link.connectedForTesting = true
         #expect(link.begin(id: "t", bundle: "com.apple.TextEdit", readable: true))
         link.receive(.init(.client, take: "t", bundle: "com.apple.TextEdit"))
@@ -524,6 +595,7 @@ struct InputMethodTargetTests {
         var current = "com.apple.keylayout.ABC"
         var sent: [InputMethodWire.Message] = []
         var now: TimeInterval = 100
+        let scratch = ScratchDefaults("pflow.im.tests")
     }
 
     /// The commit counts only when the target shows it; the input method's own read-back only for an unreadable target.

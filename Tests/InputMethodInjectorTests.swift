@@ -12,6 +12,7 @@ struct InputMethodInjectorTests {
         var current = "com.apple.keylayout.ABC"
         var sent: [InputMethodWire.Message] = []
         var read = "Dear Sam,"
+        let scratch = ScratchDefaults("pflow.im.injector")
     }
 
     private func setUp(_ world: World) -> (TextInjector, InputMethodLink) {
@@ -20,7 +21,7 @@ struct InputMethodInjectorTests {
         link.currentSource = { world.current }
         link.selectSource = { world.current = $0; return true }
         link.transmit = { world.sent.append($0); return true }
-        link.defaults = UserDefaults(suiteName: "pflow.im.injector.\(UUID().uuidString)")!
+        link.defaults = world.scratch.defaults
         link.connectedForTesting = true
         let injector = TextInjector()
         injector.inputMethod = link
@@ -117,4 +118,80 @@ struct InputMethodInjectorTests {
         #expect(world.sent.filter { $0.kind == .commit }.map(\.text) == [" The harbor."])
         #expect(final == .applied)
     }
+
+    // MARK: No activation: trying harder before the other paths
+
+    /// A take in an app that sends no activation (no probation: the target cannot be read), its
+    /// attach state asked through TextInjector every 0.1 s on pFlow's clock, as the coordinator does.
+    private final class Bounces {
+        let world = World()
+        var now: TimeInterval = 50
+        var selects: [String] = []
+        let injector: TextInjector
+        let link: InputMethodLink
+        let begun: TimeInterval
+
+        @MainActor init(_ test: InputMethodInjectorTests) {
+            (injector, link) = test.setUp(world)
+            begun = now
+            link.clock = { [unowned self] in now }
+            link.selectSource = { [unowned self] in selects.append($0); world.current = $0; return true }
+            _ = link.begin(id: "t", bundle: "com.t3tools.t3code")
+            injector.adoptInputMethodTakeForTesting(session: "t", field: AXUIElementCreateApplication(getpid()), value: "", caret: 0)
+        }
+
+        /// Asks once more, 0.1 s later.
+        @MainActor func tick() -> LiveInlineStart {
+            now += 0.1
+            return injector.retryLive(session: "t")
+        }
+
+        var pflowSelects: Int { selects.filter { $0 == InputMethodWire.sourceID }.count }
+        var rebinds: [InputMethodWire.Message] { world.sent.filter { $0.kind == .rebind } }
+    }
+
+    /// Three bounces (the person's source, then pFlow's again), all inside the same wait as before:
+    /// the other paths take over no later than they did with one.
+    @Test func noActivationGetsThreeBouncesWithinTheSameWait() {
+        let take = Bounces(self)
+        var result = LiveInlineStart.waiting
+        while result == .waiting, take.now - take.begun < 5 { result = take.tick() }
+        let pflow = InputMethodWire.sourceID, person = "com.apple.keylayout.ABC"
+        #expect(take.selects == [pflow, person, pflow, person, pflow, person, pflow, person],
+                "three bounces, then the person's source back for the other paths")
+        #expect(result != .waiting && result != .typing)
+        // The wait the person had before this change: 1.8 s, asked every 0.1 s.
+        #expect(take.now - take.begun <= 1.9 + 1e-9, "no later than the 1.8 s wait")
+        #expect(take.rebinds.count == 3, "each re-selection binds only activations after it")
+        let times = take.rebinds.compactMap(\.at)
+        #expect(times.count == 3 && times == times.sorted() && Set(times).count == 3)
+    }
+
+    /// An activation while the person's source is selected is a late one and never binds; the one
+    /// after pFlow's source is selected again (here the second bounce) does, and live words start.
+    @Test func anActivationAfterALaterBounceIsUsed() {
+        let take = Bounces(self)
+        while take.selects.count < 4, take.now - take.begun < 5 { #expect(take.tick() == .waiting) }
+        #expect(take.world.current == "com.apple.keylayout.ABC", "second bounce: the person's source is selected")
+        take.link.receive(.init(.client, take: "t", bundle: "com.t3tools.t3code", uid: "late"))
+        #expect(take.tick() == .waiting, "not bound while the person's source is selected")
+        while take.pflowSelects < 3, take.now - take.begun < 5 { #expect(take.tick() == .waiting) }
+        take.link.receive(.init(.client, take: "t", bundle: "com.t3tools.t3code", uid: "fresh"))
+        #expect(take.tick() == .typing)
+        #expect(take.now - take.begun < 1.8, "in the field before the old fallback time")
+    }
+
+    /// The person changes the source between two bounces: no more bounces, the other paths.
+    @Test func aSourceThePersonChangesBetweenBouncesIsRespected() {
+        let take = Bounces(self)
+        while take.pflowSelects < 2, take.now - take.begun < 5 { #expect(take.tick() == .waiting) }
+        let before = take.selects
+        take.world.current = "com.apple.keylayout.Dvorak"
+        var result = LiveInlineStart.waiting
+        while result == .waiting, take.now - take.begun < 5 { result = take.tick() }
+        #expect(take.selects == before, "nothing selected over the person's choice")
+        #expect(take.world.current == "com.apple.keylayout.Dvorak")
+        #expect(take.now - take.begun < 1.5, "the next bounce sees the change and stops the wait early")
+    }
 }
+

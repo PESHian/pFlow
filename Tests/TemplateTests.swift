@@ -21,9 +21,10 @@ struct TemplateTests {
         legacy.sections[0].instructions = "The reporting officer's name and role, only if stated."
         let encoded = try JSONEncoder().encode(legacy)
         #expect(try JSONDecoder().decode(DictationTemplate.self, from: encoded).sections[3].includeFullDictation == nil)
-        let suite = "pflow.fullsource.test.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let scratch = ScratchDefaults("pflow.fullsource.test")
+        defer { withExtendedLifetime(scratch) {} }
+        let suite = scratch.name
+        let defaults = scratch.defaults
         var custom = DictationTemplate.supplement
         custom.sections[3].includeFullDictation = false
         var summarized = DictationTemplate.followUp
@@ -43,9 +44,10 @@ struct TemplateTests {
         #expect(store.templates.first { $0.id == bulleted.id }?.sections[3].includeFullDictation == nil)
     }
     @Test func voiceCatalogMigrationPreservesCustomTemplateAndActiveSelection() throws {
-        let name = "pflow.template.migration.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
+        let scratch = ScratchDefaults("pflow.template.migration")
+        defer { withExtendedLifetime(scratch) {} }
+        let name = scratch.name
+        let defaults = scratch.defaults
         let custom = DictationTemplate(name: "My report", sections: [ReportSection(title: "My facts")])
         defaults.set(try JSONEncoder().encode([custom]), forKey: "pflow.templates")
         defaults.set(custom.id.uuidString, forKey: "pflow.template.active")
@@ -57,9 +59,10 @@ struct TemplateTests {
         #expect(TemplateStore(defaults: defaults).templates.map(\.id) == ids)
     }
     @Test func seededTemplateSelectionAndEditsSurviveRestart() throws {
-        let name = "pflow.template.tests.\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
+        let scratch = ScratchDefaults("pflow.template.tests")
+        defer { withExtendedLifetime(scratch) {} }
+        let name = scratch.name
+        let defaults = scratch.defaults
         let store = TemplateStore(defaults: defaults)
         var template = try #require(store.templates.first)
         store.activeID = template.id

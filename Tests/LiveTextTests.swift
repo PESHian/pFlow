@@ -64,9 +64,10 @@ struct LiveTextTests {
     // MARK: Setting
 
     @Test func liveTextDefaultsToOffAndKeepsOtherSettings() throws {
-        let name = "pflow.livetext.tests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let scratch = ScratchDefaults("pflow.livetext.tests")
+        defer { withExtendedLifetime(scratch) {} }
+        let name = scratch.name
+        let defaults = scratch.defaults
         // An existing install: other choices saved, no Live text key yet.
         defaults.set("whisper", forKey: TranscriptionEngine.defaultsKey)
         defaults.set(false, forKey: "soundsEnabled")
@@ -91,7 +92,9 @@ struct LiveTextTests {
         // card appears only when typing could not start or has stopped.
         #expect(LiveTextMode.allCases.map { $0.showsCard(typingLive: true) } == [false, false])
         #expect(LiveTextMode.allCases.map { $0.showsCard(typingLive: false) } == [false, false], "the capsule stays for the whole take")
-        let retired = UserDefaults(suiteName: "pflow-live-text-retired-preview-" + UUID().uuidString)!
+        let retiredScratch = ScratchDefaults("pflow-live-text-retired-preview")
+        defer { withExtendedLifetime(retiredScratch) {} }
+        let retired = retiredScratch.defaults
         retired.set("preview", forKey: LiveTextMode.defaultsKey)
         #expect(LiveTextMode.saved(in: retired) == .typeInApp, "the retired Preview choice loads as Type")
         retired.set("sideways", forKey: LiveTextMode.defaultsKey)

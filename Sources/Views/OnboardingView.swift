@@ -70,7 +70,7 @@ struct OnboardingView: View {
 
     private var footnote: String {
         app.permissions.allGranted
-            ? "You're ready. Hold Right Command to dictate; release to insert."
+            ? "You're ready. Hold \(app.activationKey.name) to dictate; release to insert."
             : "Grant all four to start dictating. No restart needed."
     }
 }

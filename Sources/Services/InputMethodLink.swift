@@ -76,6 +76,19 @@ enum InputMethodInstall {
         guard let source = source(id: id, enabledOnly: true) else { return false }
         return TISSelectInputSource(source) == noErr
     }
+
+    /// The keyboard layout the current source types with (with pFlow's source
+    /// selected, the person's layout under it), else the first other keyboard.
+    static func keyboardLayoutID() -> String? {
+        let layout = TISCopyCurrentKeyboardLayoutInputSource().takeRetainedValue()
+        let list = [layout] + ((TISCreateASCIICapableInputSourceList()?.takeRetainedValue() as? [TISInputSource]) ?? [])
+        for source in list {
+            guard let raw = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else { continue }
+            let id = Unmanaged<CFString>.fromOpaque(raw).takeUnretainedValue() as String
+            if id != InputMethodWire.sourceID { return id }
+        }
+        return nil
+    }
 }
 
 /// After the input method committed the finished text: whether "Copy
@@ -183,12 +196,14 @@ final class InputMethodLink {
         var restored = false
         /// The begin message reached the input method (sent once it is connected).
         var beginSent = false
-        /// Re-selection when no activation came: 0 none, 1 the person's source selected, 2 pFlow's again.
+        /// Bounces when no activation came: odd while the person's source is selected, `reselect / 2` done.
         var reselect = 0
         /// When the begin reached the input method (the re-selection counts from then).
         var beganAt: TimeInterval?
         /// When pFlow last selected its source for this take; only later activations bind.
         var selectedAt: TimeInterval = 0
+        /// pFlow's source was left on at the start: the person's was put back, and pFlow's is selected at this time.
+        var selectDue: TimeInterval?
         /// Texts marked, by sequence number, and the newest one the input method confirmed.
         var sent: [Int: String] = [:]
         var lastAcked: (seq: Int, at: TimeInterval)?
@@ -208,7 +223,10 @@ final class InputMethodLink {
     /// How long the input method has to become active in the app before pFlow uses its other paths.
     static let attachTimeout: TimeInterval = 1.8
     static let reselectAfter: TimeInterval = 0.5
-    static let reselectGap: TimeInterval = 0.3
+    static let reselectGap: TimeInterval = 0.2
+    /// How many bounces, and how far apart they start: all three end before `attachTimeout`.
+    static let bounces = 3
+    static let bounceEvery: TimeInterval = 0.4
     /// How long pFlow waits for a fresh activation before it puts the client still active on probation.
     static let probeAfter: TimeInterval = 0.12
     static let restoreKey = "inputMethodRestoreSource"
@@ -217,6 +235,7 @@ final class InputMethodLink {
     var enabled: () -> Bool = { InputMethodInstall.enabled }
     var currentSource: () -> String? = { InputMethodInstall.currentSourceID() }
     var selectSource: (String) -> Bool = { InputMethodInstall.select($0) }
+    var keyboardLayout: () -> String? = { InputMethodInstall.keyboardLayoutID() }
     var clock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     var transmit: (InputMethodWire.Message) -> Bool = { _ in false }
     var defaults: UserDefaults = .standard
@@ -252,11 +271,15 @@ final class InputMethodLink {
         end()
         guard usable else { return false }
         var previous = currentSource()
+        var leftOn = false
         if previous == InputMethodWire.sourceID {
-            // Left selected (pFlow went away mid-take): the person's source first, so this take's
-            // selection brings a fresh activation; a take never binds to a leftover client.
-            guard let saved = defaults.string(forKey: Self.restoreKey), selectSource(saved) else { return false }
-            previous = saved
+            // Left selected (pFlow went away mid-take, or the source was chosen between takes): the
+            // person's source first, so this take's selection brings a fresh activation; a take never
+            // binds to a leftover client.
+            ReasonLog.note("input source was left on pFlow's at the take's start")
+            guard let back = selectPersonsSource() else { return false }
+            previous = back
+            leftOn = true
         }
         // Remembered durably before the switch: if pFlow dies in between, the
         // input method (and pFlow's next launch) can still put it back.
@@ -265,6 +288,15 @@ final class InputMethodLink {
         take = Take(id: id, bundle: bundle, previous: previous, started: clock())
         take?.readable = readable
         take?.window = window.map { [$0.origin.x, $0.origin.y, $0.width, $0.height] }
+        if leftOn {
+            // pFlow's source selected right after the switch back bound the take to a client macOS
+            // deactivated a moment later (VM: 5 of 6 takes lost their words). `attachState` selects
+            // it once that switch has settled; nothing activated before then binds.
+            take?.selectDue = clock() + Self.reselectGap
+            take?.selectedAt = clock() + Self.reselectGap
+            sendBegin()
+            return true
+        }
         // The input method binds only to a client activated from this moment on.
         take?.selectedAt = clock()
         sendBegin()
@@ -296,6 +328,25 @@ final class InputMethodLink {
         if take.attach == .pending, waited > Self.attachTimeout {
             take.attach = .failed("timeout")
             self.take = take
+        } else if take.attach == .pending, let due = take.selectDue {
+            // pFlow's source was left on: the person's is back; pFlow's comes once that switch settled.
+            guard clock() >= due else { return take.attach }
+            guard currentSource() == take.previous else {
+                take.attach = .failed("source changed")
+                self.take = take
+                return take.attach
+            }
+            take.selectDue = nil
+            take.selectedAt = clock()
+            if take.beginSent { take.beganAt = clock() }
+            self.take = take
+            _ = transmit(.init(.rebind, take: take.id, at: take.selectedAt))
+            guard selectSource(InputMethodWire.sourceID) else {
+                ReasonLog.note("input source could not be selected")
+                self.take?.attach = .failed("not selected")
+                return .failed("not selected")
+            }
+            ReasonLog.note("input source switched for the take")
         } else if take.attach == .pending, let previous = take.previous, let beganAt = take.beganAt {
             let waited = clock() - beganAt
             // No fresh activation yet (macOS can leave the last take's client active and send none):
@@ -308,26 +359,30 @@ final class InputMethodLink {
                 return take.attach
             }
             // macOS sometimes leaves this source selected-but-inactive in the app (VM logs: no
-            // activation at all after the select). Select the person's source, give the
-            // deactivation a moment to arrive, then select pFlow's again: that brings a fresh one.
-            if take.reselect == 0, waited > Self.reselectAfter {
+            // activation at all after the select; the app holds it back until the next switch).
+            // A bounce: select the person's source (the held-back activation arrives then, and is
+            // not bound), then pFlow's again, which brings a fresh one. One bounce rescued none
+            // of 6 such takes in the VM; up to three, inside the same 1.8 s wait, rescued 5 of 6.
+            // Odd `reselect`: the person's source is selected; `reselect / 2` bounces are done.
+            let done = take.reselect / 2, start = Self.reselectAfter + Double(done) * Self.bounceEvery
+            if take.reselect.isMultiple(of: 2), done < Self.bounces, waited > start {
                 // Only while the source is still the one pFlow set: a person who changed it (Ctrl-Space) is respected.
                 guard currentSource() == InputMethodWire.sourceID else {
                     take.attach = .failed("source changed")
                     self.take = take
                     return take.attach
                 }
-                take.reselect = 1
+                take.reselect += 1
                 self.take = take
                 _ = selectSource(previous)
                 ReasonLog.note("no activation yet: selecting the source again")
-            } else if take.reselect == 1, waited > Self.reselectAfter + Self.reselectGap {
+            } else if !take.reselect.isMultiple(of: 2), waited > start + Self.reselectGap {
                 guard currentSource() == previous else {
                     take.attach = .failed("source changed")
                     self.take = take
                     return take.attach
                 }
-                take.reselect = 2
+                take.reselect += 1
                 take.selectedAt = clock()
                 self.take = take
                 _ = transmit(.init(.rebind, take: take.id, at: take.selectedAt))
@@ -464,10 +519,22 @@ final class InputMethodLink {
 
     /// At launch: a source left on pFlow's (pFlow quit mid-take) goes back to the person's.
     func restoreLeftover() {
-        guard currentSource() == InputMethodWire.sourceID, let previous = defaults.string(forKey: Self.restoreKey) else { return }
-        let restored = selectSource(previous)
+        guard currentSource() == InputMethodWire.sourceID else { return }
+        let restored = selectPersonsSource() != nil
         ReasonLog.note(restored ? "input source restored at launch" : "input source could not be restored at launch")
         if restored { defaults.removeObject(forKey: Self.restoreKey) }
+    }
+
+    /// While pFlow's source is selected outside a take: the one saved before the
+    /// last switch, else the keyboard layout pFlow Dictation types with (nothing
+    /// is saved when something other than a take chose pFlow's source). The
+    /// source put back, or nil when neither could be selected.
+    private func selectPersonsSource() -> String? {
+        for id in [defaults.string(forKey: Self.restoreKey), keyboardLayout()].compactMap({ $0 })
+        where id != InputMethodWire.sourceID && selectSource(id) {
+            return id
+        }
+        return nil
     }
 
     // MARK: Messages from the input method
@@ -483,7 +550,7 @@ final class InputMethodLink {
                 if take.provisional, message.provisional != true { self.take?.provisional = false }
                 return
             }
-            guard take.attach == .pending, take.reselect != 1 else { return }
+            guard take.attach == .pending, take.reselect.isMultiple(of: 2) else { return }
             take.attach = message.bundle == take.bundle ? .attached : .failed("other app")
             take.provisional = message.provisional == true
             self.take = take
