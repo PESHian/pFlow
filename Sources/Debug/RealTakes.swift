@@ -221,6 +221,14 @@ extension TakeHarness {
             })
         case "key":
             result["take"] = await realTake(target, way: parts[3], label: spec, during: { [self] in personKey(CGKeyCode(kVK_ANSI_X)) })
+        case "leftsource":
+            // pFlow's source left on between takes with nothing saved (the owner's Mac, 0.3.19).
+            result["take"] = await realTake(target, way: parts[3], label: spec, beforeStart: { [self] in
+                UserDefaults.standard.removeObject(forKey: InputMethodLink.restoreKey)
+                _ = InputMethodInstall.select(InputMethodWire.sourceID)
+                await pause(0.4)
+                result["leftAtStart"] = InputMethodInstall.currentSourceID() ?? "?"
+            })
         case "kotoeri", "pinyin":
             let id = parts[1] == "kotoeri" ? "com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese" : "com.apple.inputmethod.SCIM.ITABC"
             result["take"] = await realTake(target, way: parts[3], label: spec, beforeStart: { [self] in

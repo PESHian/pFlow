@@ -51,6 +51,7 @@ struct InputMethodTests {
         var sent: [InputMethodWire.Message] = []
         var now: TimeInterval = 100
         var enabled = true
+        var layout: String? = "com.apple.keylayout.US"
         let scratch = ScratchDefaults("pflow.im.tests")
     }
 
@@ -59,6 +60,7 @@ struct InputMethodTests {
         link.enabled = { world.enabled }
         link.currentSource = { world.current }
         link.selectSource = { world.selects.append($0); world.current = $0; return true }
+        link.keyboardLayout = { world.layout }
         link.clock = { world.now }
         link.transmit = { world.sent.append($0); return true }
         link.defaults = world.scratch.defaults
@@ -188,6 +190,74 @@ struct InputMethodTests {
         fresh.defaults = link.defaults
         fresh.restoreLeftover()
         #expect(world.current == "com.apple.keylayout.ABC")
+    }
+
+    /// pFlow's source chosen between takes (nothing saved): the take puts the
+    /// keyboard layout back first, then selects pFlow's, and restores that layout.
+    /// Before, every take gave up and showed the preview (owner, T3 Code, 0.3.19).
+    @Test func aSourceLeftOnPFlowsWithNothingSavedGoesBackToTheKeyboardLayout() {
+        let world = World()
+        world.current = InputMethodWire.sourceID
+        let link = link(world)
+        #expect(link.begin(id: "t", bundle: "com.t3tools.t3code"))
+        #expect(world.selects == ["com.apple.keylayout.US"])
+        // pFlow's own comes once the switch back settled; nothing activated before then binds.
+        #expect(world.sent.first?.at == 100 + InputMethodLink.reselectGap)
+        world.now += 0.1
+        #expect(link.attachState() == .pending)
+        #expect(world.selects == ["com.apple.keylayout.US"])
+        world.now = 100.25
+        #expect(link.attachState() == .pending)
+        #expect(world.selects == ["com.apple.keylayout.US", InputMethodWire.sourceID])
+        #expect(world.sent.last == .init(.rebind, take: "t", at: 100.25))
+        link.receive(.init(.client, take: "t", bundle: "com.t3tools.t3code", uid: "c1"))
+        #expect(link.attachState() == .attached)
+        link.end()
+        #expect(world.current == "com.apple.keylayout.US")
+        #expect(link.defaults.string(forKey: InputMethodLink.restoreKey) == nil)
+    }
+
+    /// The person changed the source while pFlow waited for the switch back to settle: respected.
+    @Test func aSourceChangedWhileTheSwitchBackSettlesIsRespected() {
+        let world = World()
+        world.current = InputMethodWire.sourceID
+        let link = link(world)
+        #expect(link.begin(id: "t", bundle: "com.apple.Notes"))
+        world.current = "com.apple.keylayout.Dvorak"
+        world.now += 0.3
+        #expect(link.attachState() == .failed("source changed"))
+        #expect(world.selects == ["com.apple.keylayout.US"], "pFlow's source is not selected over the person's choice")
+    }
+
+    /// pFlow quit mid-take: the source saved then comes back before the layout.
+    @Test func aSavedSourceComesBackBeforeTheKeyboardLayout() {
+        let world = World()
+        world.current = InputMethodWire.sourceID
+        let link = link(world)
+        link.defaults.set("com.apple.keylayout.Dvorak", forKey: InputMethodLink.restoreKey)
+        #expect(link.begin(id: "t", bundle: "com.apple.TextEdit"))
+        #expect(world.selects.first == "com.apple.keylayout.Dvorak")
+        link.end()
+        #expect(world.current == "com.apple.keylayout.Dvorak")
+    }
+
+    /// No other keyboard to go back to: the take uses the other live paths, nothing selected.
+    @Test func withNoOtherKeyboardALeftSelectionIsNotUsed() {
+        let world = World()
+        world.current = InputMethodWire.sourceID
+        world.layout = InputMethodWire.sourceID
+        let link = link(world)
+        #expect(!link.begin(id: "t", bundle: "com.apple.TextEdit"))
+        #expect(world.selects.isEmpty)
+    }
+
+    /// At launch with nothing saved: the keyboard layout comes back too.
+    @Test func aLeftoverSelectionWithNothingSavedIsRestoredAtLaunch() {
+        let world = World()
+        world.current = InputMethodWire.sourceID
+        let link = link(world)
+        link.restoreLeftover()
+        #expect(world.current == "com.apple.keylayout.US")
     }
 
     /// Not running yet: selecting the source starts it; the begin goes out once it connects.
