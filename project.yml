@@ -96,6 +96,7 @@ targets:
           - Info.plist
       - path: Sources/Services/InputMethodWire.swift
       - path: Sources/Services/InputMethodCore.swift
+      - path: Sources/Services/TroubleshootingLog.swift
     settings:
       base:
         INFOPLIST_FILE: InputMethod/Info.plist

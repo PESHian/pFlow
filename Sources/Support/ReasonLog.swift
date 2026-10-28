@@ -2,8 +2,9 @@ import Foundation
 import os
 import ApplicationServices
 
-/// Why a take's words went in, or did not, kept in the system log so a miss
-/// on a person's Mac can be read afterwards:
+/// Why a take's words went in, or did not, kept only while Settings →
+/// Troubleshooting log is on (`TroubleshootingLog`): in the system log and in
+/// the file Save log… collects, so a miss on a person's Mac can be read afterwards:
 ///
 ///     log show --last 1d --info --style compact --predicate 'subsystem == "com.pesh.pflow"'
 ///
@@ -27,11 +28,16 @@ enum ReasonLog {
     }
 
     private static func write(_ text: String) {
-        logger.notice("\(text, privacy: .public)")
+        let on = TroubleshootingLog.isOn
         #if DEBUG
+        // Test Macs always keep the system log; the harness reads `recent`.
+        logger.notice("\(text, privacy: .public)")
         recent.append(text)
         if recent.count > 200 { recent.removeFirst(recent.count - 200) }
+        #else
+        if on { logger.notice("\(text, privacy: .public)") }
         #endif
+        if on { TroubleshootingLog.append(text, by: .app) }
     }
 }
 
@@ -49,6 +55,10 @@ extension InsertionBlock: LogReason {
 
 extension LiveInlineOwnership.Stop: LogReason {
     var logName: String { rawValue }
+}
+
+extension GitHubReleases.Problem: LogReason {
+    var logName: String { "\(self)" }
 }
 
 extension InjectionOutcome: LogReason {

@@ -74,7 +74,7 @@ Coming from Mac 0.3.6 or older, when the app was called Yap? Replace it the same
 - pFlow has no account, no analytics and no servers. It checks for updates only when you ask.
 - History and settings stay in your Mac user account. Delete History entries you don't need.
 - Speech models come from their hosts: Apple for its speech engine, and the Whisper model download if you choose Whisper.
-- When pFlow can't put words in, it writes a short reason to the Mac's log, never your words. To read it: `log show --last 1d --info --style compact --predicate 'subsystem == "com.pesh.pflow"'`
+- pFlow keeps no log unless you turn on **Settings → Troubleshooting → Troubleshooting log**. Then it notes each step it takes (for example, why words couldn't go in), never your words, and **Save log…** puts it in a file you can send. Turning it off deletes the log.
 
 This public repository holds the app's source, artwork, licenses and fictional test fixtures. It contains no user settings, saved dictations, personal recordings or credentials.
 

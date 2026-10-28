@@ -139,6 +139,23 @@ struct SettingsLayoutTests {
         }
     }
 
+    @Test func bothTroubleshootingStatesFitTheWindow() throws {
+        var on = Self.fixture()
+        on.troubleshootingLog = .constant(true)
+        for (state, model) in [("off", Self.fixture()), ("on", on)] {
+            let section = try #require(SettingsContent(model: model).sections.first { $0.name == "Troubleshooting" })
+            for width in Self.widths {
+                for (look, name) in Self.looks {
+                    for (size, text) in Self.textSizes {
+                        let shot = size == "normal" ? "troubleshooting-\(state)-\(Int(width))-\(look)" : nil
+                        let fit = try fit(ScrollView { section.view.padding(Theme.s5) }, width: width, look: name, text: text, shot: shot)
+                        #expect(!fit.clipped, "Troubleshooting (\(state)) at \(Int(width)) \(look) \(size): \(fit.detail)")
+                    }
+                }
+            }
+        }
+    }
+
     @Test func theWholeSettingsPageFitsTheWindow() throws {
         for (mode, engine) in [(LiveTextMode.typeInApp, TranscriptionEngine.apple), (.typeInApp, .whisper)] {
             for width in Self.widths {

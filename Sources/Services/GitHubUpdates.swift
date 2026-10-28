@@ -301,7 +301,6 @@ final class GitHubClient: NSObject, URLSessionDownloadDelegate, @unchecked Senda
 final class GitHubUpdates: ObservableObject {
     @Published private(set) var state: GitHubUpdateState = .idle
     private var task: Task<Void, Never>?
-    private static let log = Logger(subsystem: ReasonLog.subsystem, category: "updates")
 
     var network: GitHubUpdateNetwork
     var downloads: () -> URL? = { FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first }
@@ -321,7 +320,7 @@ final class GitHubUpdates: ObservableObject {
     func check() {
         task?.cancel()
         state = .checking
-        Self.log.notice("update check: asking GitHub for the latest release")
+        ReasonLog.note("update check: asking GitHub for the latest release")
         task = Task { [weak self] in
             guard let self else { return }
             do {
@@ -330,10 +329,10 @@ final class GitHubUpdates: ObservableObject {
                 if let problem = GitHubReleases.problem(status: status) { throw problem }
                 switch try GitHubReleases.read(data, current: current()) {
                 case .newer(let release):
-                    Self.log.notice("update check: a newer release is on GitHub")
+                    ReasonLog.note("update check: a newer release is on GitHub")
                     state = .newer(release)
                 case .upToDate:
-                    Self.log.notice("update check: this is the newest release")
+                    ReasonLog.note("update check: this is the newest release")
                     state = .upToDate(current())
                 }
             } catch is CancellationError {
@@ -347,7 +346,7 @@ final class GitHubUpdates: ObservableObject {
     func download(_ release: GitHubRelease) {
         task?.cancel()
         state = .downloading(release, received: 0, total: release.bytes)
-        Self.log.notice("update download: started")
+        ReasonLog.note("update download: started")
         task = Task { [weak self] in
             guard let self else { return }
             var temporary: URL?
@@ -368,12 +367,12 @@ final class GitHubUpdates: ObservableObject {
                 try Task.checkCancellation()
                 let kept = try await GitHubReleases.keep(file, in: folder, release: release)
                 temporary = nil
-                Self.log.notice("update download: checked against GitHub's checksum and kept")
+                ReasonLog.note("update download: checked against GitHub's checksum and kept")
                 state = .ready(release, file: kept)
                 open(kept)
             } catch is CancellationError {
                 if let temporary { await Self.remove(temporary) }
-                Self.log.notice("update download: cancelled")
+                ReasonLog.note("update download: cancelled")
                 state = .newer(release)
             } catch {
                 if let temporary { await Self.remove(temporary) }
@@ -418,7 +417,7 @@ final class GitHubUpdates: ObservableObject {
     #endif
 
     private func fail(_ problem: GitHubReleases.Problem, retry: GitHubRelease?) {
-        Self.log.notice("update: stopped (\(String(describing: problem), privacy: .public))")
+        ReasonLog.note("update: stopped:", problem)
         state = .failed(problem, retry: retry)
     }
 

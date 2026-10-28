@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import Observation
 import SwiftData
+import UniformTypeIdentifiers
 
 @MainActor
 @Observable
@@ -42,6 +43,20 @@ final class AppState {
     }
 
     var mainPage: MainPage = .settings
+
+    /// Settings → Troubleshooting log, off until turned on. Off deletes what was kept.
+    var troubleshootingLog: Bool {
+        didSet {
+            UserDefaults.standard.set(troubleshootingLog, forKey: TroubleshootingLog.defaultsKey)
+            TroubleshootingLog.settingChanged()
+            guard !troubleshootingLog else { return }
+            TroubleshootingLog.clear()
+            // pFlow Dictation reads the setting every few seconds: a line it wrote meanwhile goes too.
+            DispatchQueue.main.asyncAfter(deadline: .now() + TroubleshootingLog.refreshSeconds + 1) { [weak self] in
+                if self?.troubleshootingLog == false { TroubleshootingLog.clear() }
+            }
+        }
+    }
 
     /// Hold it to dictate (Settings → Shortcut). Takes effect at once.
     var activationKey: ActivationKey {
@@ -114,6 +129,9 @@ final class AppState {
         showInMenuBar = (UserDefaults.standard.object(forKey: "showInMenuBar") as? Bool) ?? true
         cleanupEnabled = (UserDefaults.standard.object(forKey: "cleanupEnabled") as? Bool) ?? true
         activationKey = ActivationKey.saved()
+        let keepLog = UserDefaults.standard.bool(forKey: TroubleshootingLog.defaultsKey)
+        troubleshootingLog = keepLog
+        if !keepLog { TroubleshootingLog.clear() }
         currentInputName = AudioDevices.defaultInputName()
 
         let language = UserDefaults.standard.string(forKey: "dictationLanguage") ?? Self.systemLanguage
@@ -265,6 +283,33 @@ final class AppState {
         activationKeys.paused = true
         keyLearning.start(onLearned: { [weak self] key in self?.activationKey = key },
                           onEnd: { [weak self] in self?.activationKeys.paused = false })
+    }
+
+    /// Settings → Troubleshooting log → Save log…: every kept line in one file,
+    /// in Downloads unless the person picks another place, then shown in Finder.
+    func saveTroubleshootingLog() {
+        let panel = NSSavePanel()
+        let day = DateFormatter()
+        day.locale = Locale(identifier: "en_US_POSIX")
+        day.dateFormat = "yyyy-MM-dd HHmm"
+        panel.nameFieldStringValue = "pFlow log \(day.string(from: Date())).txt"
+        panel.directoryURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        panel.allowedContentTypes = [.plainText]
+        panel.canCreateDirectories = true
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
+        let version = "\(MacUpdates.current) (\(build))"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            let os = ProcessInfo.processInfo.operatingSystemVersion
+            let text = TroubleshootingLog.report(lines: TroubleshootingLog.lines(), version: version,
+                                                 system: "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion)")
+            do {
+                try text.write(to: url, atomically: true, encoding: .utf8)
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            } catch {
+                NSSound.beep()
+            }
+        }
     }
 
     func toggleRecording() {

@@ -61,6 +61,8 @@ struct SettingsView: View {
             inputName: app.currentInputName,
             permissionsMissing: !app.permissions.allGranted,
             reviewPermissions: { app.openOnboarding() },
+            troubleshootingLog: $app.troubleshootingLog,
+            saveLog: { app.saveTroubleshootingLog() },
             checkForUpdates: { MacUpdates.shared.show() }
         )
     }
@@ -105,6 +107,8 @@ struct SettingsPageModel {
     var inputName: String?
     var permissionsMissing = false
     var reviewPermissions: () -> Void = {}
+    var troubleshootingLog: Binding<Bool> = .constant(false)
+    var saveLog: () -> Void = {}
     var checkForUpdates: () -> Void = {}
 }
 
@@ -194,6 +198,7 @@ struct SettingsContent: View {
             ("Language", AnyView(languageSection)),
             ("General", AnyView(generalSection)),
             ("Microphone", AnyView(inputSection)),
+            ("Troubleshooting", AnyView(troubleshootingSection)),
         ]
         if model.permissionsMissing {
             sections.append(("Permissions", AnyView(permissionsBanner)))
@@ -428,6 +433,37 @@ struct SettingsContent: View {
                             .peshText(12).foregroundStyle(.secondary)
                     }
                     Spacer()
+                }
+            }
+        }
+    }
+
+    private var troubleshootingSection: some View {
+        VStack(alignment: .leading, spacing: Theme.s3) {
+            SectionLabel("Troubleshooting")
+            Card(padding: Theme.s2) {
+                VStack(spacing: 0) {
+                    SettingsToggleRow(
+                        title: "Troubleshooting log",
+                        subtitle: model.troubleshootingLog.wrappedValue
+                            ? "pFlow notes each step it takes, never your words. Turning it off deletes the log."
+                            : "Off. If pFlow misbehaves, turn it on: it notes each step it takes, never your words.",
+                        isOn: model.troubleshootingLog
+                    )
+                    if model.troubleshootingLog.wrappedValue {
+                        Divider().overlay(Theme.hairline).padding(.horizontal, Theme.s3)
+                        HStack(spacing: Theme.s3) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Save the log").peshText(13, .medium)
+                                Text("Saves it as a file you can send to whoever is helping you.")
+                                    .peshText(12).foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: Theme.s3)
+                            Button("Save log…", action: model.saveLog)
+                        }
+                        .padding(.horizontal, Theme.s3)
+                        .padding(.vertical, Theme.s2 + 2)
+                    }
                 }
             }
         }
