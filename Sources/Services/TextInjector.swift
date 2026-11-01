@@ -678,9 +678,7 @@ final class TextInjector: TextInjecting {
     private func overLeftWords() -> LiveInlineFinal? {
         let candidates = inputMethodLeftWords
         inputMethodLeftWords = []
-        guard !candidates.isEmpty, targetReadable, !placeholderStart, let targetApp, let targetField, let context = caretContext else { return nil }
-        let field = KeyLiveTextField(pid: targetApp.processIdentifier, element: targetField, bundleID: targetApp.bundleIdentifier,
-                                     composition: composition, placeholder: nil)
+        guard !candidates.isEmpty, targetReadable, !placeholderStart, let context = caretContext, let field = leftWordsField() else { return nil }
         // The newest words, or every mark typed in one after another (an app with no marked text).
         let value = field.state().value
         guard let words = candidates.first(where: { value == context.before + $0 + context.after }) else {
@@ -699,6 +697,13 @@ final class TextInjector: TextInjecting {
         ReasonLog.note("input method words the app committed are at the caret: the finished text goes over them")
         return .replace(OwnedWords(range: range, text: trimmed, personActed: { field.personActedSinceSelect() },
                                    collapse: { field.collapse() }))
+    }
+
+    /// The target field for the select-and-paste over app-committed words (a test passes its own).
+    lazy var leftWordsField: () -> LiveTextField? = { [unowned self] in
+        guard let targetApp, let targetField else { return nil }
+        return KeyLiveTextField(pid: targetApp.processIdentifier, element: targetField, bundleID: targetApp.bundleIdentifier,
+                                composition: composition, placeholder: nil)
     }
 
     /// The target field can be read, so what it shows decides (never the input method's own client).
@@ -1082,17 +1087,23 @@ final class TextInjector: TextInjecting {
 enum PasteboardSnapshot {
     static let sessionType = NSPasteboard.PasteboardType("com.frigade.yap.session")
 
+    /// The clipboard's items with every type that gives its data. A type that gives none (a promise
+    /// its app no longer keeps, an Excel range's lazy formats) is left out rather than blocking every
+    /// paste; the rest comes back. Nil when nothing at all could be read from a clipboard that holds
+    /// something (restoring would empty it), or when it changed while being read.
     static func capture(_ pasteboard: NSPasteboard = .general) -> [[NSPasteboard.PasteboardType: Data]]? {
         let before = pasteboard.changeCount
         var saved: [[NSPasteboard.PasteboardType: Data]] = []
-        for item in pasteboard.pasteboardItems ?? [] {
+        let items = pasteboard.pasteboardItems ?? []
+        for item in items {
             var representation: [NSPasteboard.PasteboardType: Data] = [:]
             for type in item.types {
-                guard let data = item.data(forType: type) else { return nil }
+                guard let data = item.data(forType: type) else { continue }
                 representation[type] = data
             }
-            saved.append(representation)
+            if !representation.isEmpty { saved.append(representation) }
         }
+        if !items.isEmpty, saved.isEmpty { return nil }
         return pasteboard.changeCount == before ? saved : nil
     }
 

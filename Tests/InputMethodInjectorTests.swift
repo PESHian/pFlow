@@ -131,6 +131,29 @@ struct InputMethodInjectorTests {
         #expect(injector.finalizeLive(session: "t", text: "The harbor lights.") == .notTyped)
     }
 
+    /// Words the app typed in and that could not come back out, shown exactly at the caret: they are
+    /// selected there and the finished text goes over them (the whole text once). Not exactly there
+    /// (the person's text changed): the card.
+    @Test func typedWordsLeftAtTheCaretGetTheFinishedTextOverThem() async {
+        for exact in [true, false] {
+            let world = World()
+            let (injector, link) = freshTake(world)
+            let field = SimulatedTextField(exact ? "Dear Sam, the harbor" : "Dear Sam, the harbor!")
+            injector.leftWordsField = { field }
+            link.receive(.init(.marked, take: "t", seq: 1, ok: false, reason: InputMethodWire.typedLeft))
+            _ = injector.reconcileLive(session: "t", transcript: "the harbor lights")
+            let final = await injector.finishInputMethod(session: "t", text: "The harbor lights.")
+            if exact {
+                guard case .replace(let own)? = final else { Issue.record("expected the finished text over the words: \(String(describing: final))"); continue }
+                #expect(own.range == NSRange(location: 10, length: 10) && own.text == "the harbor", "the words, not the space before them")
+                #expect(field.current.selection == own.range, "selected for the checked paste")
+            } else {
+                #expect(final == .kept(.otherWindow))
+                #expect(field.current.selection != NSRange(location: 10, length: 10))
+            }
+        }
+    }
+
     /// The same, but they could not come back out: nothing more is written and the card says why.
     @Test func typedMarksThatCouldNotComeBackOutKeepTheCard() async {
         let world = World()

@@ -6,6 +6,8 @@ struct HistoryView: View {
     @Query(sort: \Transcript.createdAt, order: .reverse) private var transcripts: [Transcript]
     @State private var search = ""
     var onBack: (() -> Void)?
+    /// The History file could not be opened this launch: said at the top, in plain words.
+    var unavailableNote: String?
 
     private var filtered: [Transcript] {
         guard !search.isEmpty else { return transcripts }
@@ -16,6 +18,17 @@ struct HistoryView: View {
         VStack(spacing: 0) {
             if let onBack {
                 PageHeader(title: "History", onBack: onBack)
+                Divider().overlay(Theme.hairline)
+            }
+            if let unavailableNote {
+                Label(unavailableNote, systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, Theme.s4)
+                    .padding(.vertical, Theme.s3)
+                    .accessibilityIdentifier("historyUnavailable")
                 Divider().overlay(Theme.hairline)
             }
             toolbar

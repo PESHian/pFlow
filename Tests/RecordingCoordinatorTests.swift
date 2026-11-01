@@ -231,6 +231,66 @@ struct RecordingCoordinatorTests {
         await coordinator.finish()
         #expect(injector.delivered == ["hello world"])
     }
+    /// The start fails after the key is already up (a short tap, a damaged Whisper model): the card
+    /// says why and stays its few seconds, and a press while that stop runs starts no take that the
+    /// key could no longer stop (hunt H2).
+    @Test func aStartThatFailsAfterTheKeyIsUpKeepsItsCardAndStartsNothing() async {
+        let session = FakeSession()
+        session.suspendStart = true
+        session.startError = FakeSession.Failure.start
+        let injector = FakeInjector()
+        let hud = FakeHUD()
+        let coordinator = makeCoordinator(session: session, injector: injector, hud: hud)
+        coordinator.begin()
+        while session.startGate == nil { await Task.yield() }
+        let finish = Task { await coordinator.finish() }
+        while coordinator.state == .recording { await Task.yield() }
+        session.onStop = { coordinator.begin() }
+        session.startGate?.resume()
+        await finish.value
+        #expect(hud.phases.last == .failed)
+        #expect(hud.reasons.last == RecordingCoordinator.startFailedNote)
+        #expect(hud.hideDelays == [RecordingCoordinator.noteSeconds], "not hidden at once: \(hud.hideDelays)")
+        #expect(session.startCalled == 1, "no second take")
+        #expect(coordinator.state == .idle)
+        #expect(injector.delivered.isEmpty)
+        session.onStop = nil
+        session.startError = nil
+        session.suspendStart = false
+        await coordinator.toggle()
+        #expect(coordinator.state == .recording, "the next press works")
+        await coordinator.finish()
+        #expect(injector.delivered == ["hello world"])
+    }
+
+    /// Audio missed while recognition got ready, a microphone that stopped partway, a speech model
+    /// not on this Mac: each says so in plain words, and what was heard is kept in History with
+    /// Copy, never put in as if whole (hunt H5, H6).
+    @Test func missedAudioAndAMissingModelAreSaidPlainly() async {
+        for (error, note, saved) in [(TranscriptionError.audioDropped(kept: "harbor lights glow"), RecordingCoordinator.droppedNote, true),
+                                     (.microphoneLost(kept: "harbor lights"), RecordingCoordinator.microphoneLostNote, true),
+                                     (.microphoneLost(kept: ""), RecordingCoordinator.microphoneLostNote, false),
+                                     (.audioDropped(kept: ""), RecordingCoordinator.droppedNote, false)] {
+            let session = FakeSession()
+            session.stopError = error
+            let injector = FakeInjector(), hud = FakeHUD(), history = FakeHistory()
+            let coordinator = makeCoordinator(session: session, injector: injector, history: history, hud: hud)
+            await coordinator.toggle()
+            await coordinator.finish()
+            #expect(hud.reasons.last == note, "\(error)")
+            #expect(injector.delivered.isEmpty)
+            #expect(history.saved.count == (saved ? 1 : 0))
+            #expect(hud.livePreview, "the card says it")
+        }
+        let session = FakeSession()
+        session.startError = TranscriptionError.modelNotReady
+        let hud = FakeHUD()
+        let coordinator = makeCoordinator(session: session, injector: FakeInjector(), hud: hud)
+        await coordinator.toggle()
+        #expect(hud.reasons.last == RecordingCoordinator.modelNotReadyNote)
+        #expect(hud.phases.last == .failed)
+    }
+
     @Test func releaseWaitsForStartupAndStopsOnlyOnce() async {
         let session = FakeSession()
         session.suspendStart = true

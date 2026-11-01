@@ -68,4 +68,24 @@ struct PasteboardSnapshotTests {
         board.writeObjects([item])
         withExtendedLifetime(provider) { #expect(PasteboardSnapshot.capture(board) == nil) }
     }
+
+    /// An Excel range or a promised attachment: one type gives no data. It no longer blocks every
+    /// paste; everything that can be read comes back afterwards (hunt H10).
+    @Test func aTypeThatGivesNoDataDoesNotBlockThePaste() throws {
+        final class EmptyProvider: NSObject, NSPasteboardItemDataProvider {
+            func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem,
+                            provideDataForType type: NSPasteboard.PasteboardType) {}
+        }
+        let board = NSPasteboard(name: .init("pflow.snapshot.tests.\(UUID())"))
+        defer { board.releaseGlobally() }
+        let provider = EmptyProvider(), item = NSPasteboardItem()
+        item.setString("Fictional cell A1", forType: .string)
+        item.setDataProvider(provider, forTypes: [NSPasteboard.PasteboardType("com.example.lazy-format")])
+        board.writeObjects([item])
+        let snapshot = try withExtendedLifetime(provider) { try #require(PasteboardSnapshot.capture(board)) }
+        board.clearContents()
+        board.setString("pFlow's words", forType: .string)
+        PasteboardSnapshot.restore(snapshot, to: board)
+        #expect(board.string(forType: .string) == "Fictional cell A1", "the person's clipboard comes back")
+    }
 }

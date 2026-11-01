@@ -395,6 +395,18 @@ struct LiveTextTests {
         #expect(hud.model.reason == nil && hud.model.copyOffer == nil)
     }
 
+    /// The clipboard refused the words: the button never says "Copied" (hunt H9).
+    @Test func copySaysCopiedOnlyWhenTheClipboardTookTheWords() {
+        let hud = HUDController(pasteboard: NSPasteboard(name: .init("pflow.copyfail.tests.\(UUID().uuidString)")))
+        hud.writeClipboard = { _ in false }
+        hud.offerCopy("The harbor opens at dawn.")
+        hud.model.onCopy?()
+        #expect(!hud.model.copied, "still Copy, to press again")
+        hud.writeClipboard = { _ in true }
+        hud.model.onCopy?()
+        #expect(hud.model.copied)
+    }
+
     /// The capsule is one low pill (70x22 pt) in every phase;
     /// a status after the take is an icon, its words on the card.
     @Test func capsuleIsThePillSizeWhileRecordingAndFinishing() throws {

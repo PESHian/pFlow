@@ -64,7 +64,8 @@ final class TranscriptionService: StreamingTranscriber {
             try? await analyzer.setContext(context)
         }
 
-        try await Self.ensureModel(for: transcriber, locale: locale)
+        do { try await Self.ensureModel(for: transcriber, locale: locale) }
+        catch { throw TranscriptionError.modelNotReady }
 
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
             throw TranscriptionError.invalidFormat
@@ -74,31 +75,7 @@ final class TranscriptionService: StreamingTranscriber {
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
         inputBuilder = continuation
 
-        recognizerTask = Task { [weak self] in
-            guard let self, let transcriber = self.transcriber else { return }
-            do {
-                for try await result in transcriber.results {
-                    // A volatile result replaces the previous volatile one; it is
-                    // a revision of the unfinished words, not more words.
-                    let text = String(result.text.characters)
-                    let snapshot = self.textLock.withLock {
-                        if result.isFinal {
-                            self.finalized += text
-                            self.volatile = ""
-                        } else {
-                            self.volatile = text
-                        }
-                        return self.finalized + self.volatile
-                    }
-                    self.onTranscript?(snapshot)
-                }
-            } catch {
-                if !Task.isCancelled {
-                    NSLog("pFlow: live recognition stopped: \(error.localizedDescription)")
-                    self.textLock.withLock { self.recognitionFailed = true }
-                }
-            }
-        }
+        readResults(transcriber.results.map { (text: String($0.text.characters), isFinal: $0.isFinal) })
 
         try await analyzer.start(inputSequence: stream)
     }
@@ -113,13 +90,47 @@ final class TranscriptionService: StreamingTranscriber {
         }
     }
 
+    /// Reads the recognizer's results until the stream ends: a final result is added for good, a
+    /// volatile one replaces the last volatile one (a revision of the unfinished words, not more words).
+    func readResults<S: AsyncSequence>(_ results: S) where S.Element == (text: String, isFinal: Bool) {
+        recognizerTask = Task { [weak self] in
+            do {
+                for try await result in results {
+                    guard let self else { return }
+                    let snapshot = self.textLock.withLock {
+                        if result.isFinal {
+                            self.finalized += result.text
+                            self.volatile = ""
+                        } else {
+                            self.volatile = result.text
+                        }
+                        return self.finalized + self.volatile
+                    }
+                    self.onTranscript?(snapshot)
+                }
+            } catch {
+                if !Task.isCancelled {
+                    NSLog("pFlow: live recognition stopped: \(error.localizedDescription)")
+                    self?.textLock.withLock { self?.recognitionFailed = true }
+                }
+            }
+        }
+    }
+
+    /// How long the end of a take waits for the results stream to end once the analyzer finished.
+    static let resultsDrain: Duration = .milliseconds(1500)
+
     func finish() async throws -> String {
         inputBuilder?.finish()
         try? await analyzer?.finalizeAndFinishThroughEndOfInput()
-        recognizerTask?.cancel()
+        // The analyzer is done, but its last final result may still be on its way to the reader:
+        // the stream is let end (bounded), not cancelled under it, so the last words are kept.
+        if let reader = recognizerTask { _ = await Self.drain(reader, within: Self.resultsDrain) }
         recognizerTask = nil
 
-        let (text, kept, failed) = textLock.withLock { (finalized, finalized + volatile, recognitionFailed) }
+        // Words seen live but never finalized (the stream did not finish them in time) still count:
+        // they are the last words the person saw.
+        let (text, kept, failed) = textLock.withLock { (finalized + volatile, finalized + volatile, recognitionFailed) }
         transcriber = nil
         analyzer = nil
         inputBuilder = nil
@@ -128,6 +139,19 @@ final class TranscriptionService: StreamingTranscriber {
             throw TranscriptionError.interrupted(kept: kept.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Lets `task` end by itself within `limit`, else cancels it (and waits for that). True when it
+    /// ended by itself.
+    static func drain(_ task: Task<Void, Never>, within limit: Duration) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await task.value; return true }
+            group.addTask { try? await Task.sleep(for: limit); return false }
+            let first = await group.next() ?? false
+            if !first { task.cancel() }
+            group.cancelAll()
+            return first
+        }
     }
 
     /// Reserve the model ahead of time at launch so the first dictation isn't held up by it.

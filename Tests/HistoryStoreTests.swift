@@ -27,6 +27,23 @@ struct HistoryStoreTests {
         return store
     }
 
+    /// The History file cannot be opened (damaged, or another app's schema in the shared default
+    /// file): pFlow still starts, History works in memory for this launch, and it says so plainly.
+    /// The file is never opened again, moved or changed (hunt H7).
+    @Test func aHistoryFileThatCannotOpenNeverStopsPFlow() throws {
+        struct Damaged: Error {}
+        var opened = 0
+        let (container, unavailable) = HistoryContainer.make(open: { opened += 1; throw Damaged() })
+        #expect(unavailable)
+        #expect(opened == 1, "tried once, never again")
+        let store = HistoryStore(context: container.mainContext)
+        store.save(text: "kept until pFlow quits", duration: 1, device: "Mic")
+        #expect(store.recent().map(\.text).contains("kept until pFlow quits"))
+        #expect(HistoryContainer.unavailableNote.contains("left as it was"))
+        let (_, fine) = HistoryContainer.make(open: { Self.container })
+        #expect(!fine)
+    }
+
     @Test func savesAndFetchesNewestFirst() {
         let store = makeStore()
         store.save(text: "first", duration: 1, device: "Mic")

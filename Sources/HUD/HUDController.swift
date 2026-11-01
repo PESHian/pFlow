@@ -12,6 +12,11 @@ final class HUDController: HUDControlling {
     /// Whether the panel is on the desktop the person is looking at (a test fakes "not").
     var isOnActiveSpace: (NSWindow) -> Bool = { $0.isOnActiveSpace }
     private var watchers: [(NotificationCenter, NSObjectProtocol)] = []
+    /// Puts the card's words on the clipboard; true when it took them (a test fakes a refusal).
+    lazy var writeClipboard: (String) -> Bool = { [unowned self] words in
+        pasteboard.clearContents()
+        return pasteboard.setString(words, forType: .string)
+    }
 
     init(pasteboard: NSPasteboard = .general, defaults: UserDefaults = .standard) {
         self.pasteboard = pasteboard
@@ -50,9 +55,9 @@ final class HUDController: HUDControlling {
         model.copied = false
         model.onCopy = { [weak self] in
             guard let self, let words = model.copyOffer else { return }
-            pasteboard.clearContents()
-            pasteboard.setString(words, forType: .string)
-            model.copied = true
+            // "Copied" only when the clipboard took the words; otherwise Copy stays, to press again.
+            model.copied = writeClipboard(words)
+            if !model.copied { ReasonLog.note("the card's Copy could not write the clipboard") }
         }
         model.onClose = { [weak self] in self?.hide(after: 0) }
         remeasure()

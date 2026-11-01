@@ -14,9 +14,10 @@ enum FillerRemoval {
             .map { NSRegularExpression.escapedPattern(for: $0) }
             .joined(separator: "|")
 
-        // Remove each filler token as a whole word, taking a trailing comma with it.
+        // Remove each filler token as a whole word, taking a trailing comma with it. Never right
+        // after a number: there it is a unit ("10 mm", "5 um"), and dropping it changes the number.
         var out = text.replacingOccurrences(
-            of: "\\b(?:\(alternation))\\b,?",
+            of: "(?<![0-9][ \\t])(?<![0-9])\\b(?:\(alternation))\\b,?",
             with: "",
             options: [.regularExpression, .caseInsensitive]
         )
@@ -36,9 +37,11 @@ enum FillerRemoval {
         return capitalizeSentences(out)
     }
 
-    /// Uppercase the first letter, and the first letter after each sentence end,
-    /// so removing a leading "Um" doesn't leave the sentence starting lowercase.
-    /// Never lowercases anything that was already capital.
+    /// Uppercase the first letter, and the first letter after each real sentence
+    /// end, so removing a leading "Um" doesn't leave the sentence starting
+    /// lowercase. A sentence ends at ".", "!" or "?" followed by a space, never
+    /// inside a word ("pesh.tech", "3.5") or after an abbreviation ("i.e.",
+    /// "Dr."). Never lowercases anything that was already capital.
     private static func capitalizeSentences(_ text: String) -> String {
         var chars = Array(text)
         var capitalizeNext = true
@@ -48,11 +51,24 @@ enum FillerRemoval {
                 chars[i] = Character(c.uppercased())
                 capitalizeNext = false
             } else if ".!?".contains(c) {
-                capitalizeNext = true
+                let spaced = i + 1 < chars.count && chars[i + 1].isWhitespace
+                capitalizeNext = spaced && !(c == "." && abbreviation(endingAt: i, in: chars))
             } else if !c.isWhitespace {
                 capitalizeNext = false
             }
         }
         return String(chars)
+    }
+
+    /// Short words a period ends without ending the sentence.
+    static let abbreviations: Set<String> = ["mr", "mrs", "ms", "dr", "prof", "st", "jr", "sr", "vs", "approx", "no", "fig"]
+
+    /// The word whose period is at `end` is an abbreviation: it has a period inside ("i.e.", "e.g.")
+    /// or is a short title or term ("Dr.", "vs.").
+    private static func abbreviation(endingAt end: Int, in chars: [Character]) -> Bool {
+        var start = end
+        while start > 0, !chars[start - 1].isWhitespace { start -= 1 }
+        let word = String(chars[start..<end])
+        return word.contains(".") || abbreviations.contains(word.lowercased())
     }
 }

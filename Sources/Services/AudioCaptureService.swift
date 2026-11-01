@@ -7,8 +7,16 @@ final class AudioCaptureService {
     var onBuffer: ((AVAudioPCMBuffer) -> Void)?
     /// Called on the audio thread with a normalized 0...1 level.
     var onLevel: ((Float) -> Void)?
+    /// Called on the main queue when a device change mid-take left nothing recording (the new
+    /// device would not start, or gave no audio): the take must say so, never record nothing.
+    var onLost: (() -> Void)?
 
     private var engine = AVAudioEngine()
+    /// Buffers delivered so far (audio thread writes, main reads).
+    private let bufferLock = NSLock()
+    private var buffersSeen = 0
+    /// How long after a device change audio must flow again.
+    static let silenceAfterChange: TimeInterval = 2
     private(set) var isRunning = false
     private var isPaused = false
     private var configObserver: NSObjectProtocol?
@@ -99,6 +107,7 @@ final class AudioCaptureService {
         // to look alive.
         input.installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buffer, _ in
             guard let self else { return }
+            self.bufferLock.withLock { self.buffersSeen += 1 }
             self.onBuffer?(buffer)
             self.onLevel?(AudioLevel.normalized(from: buffer))
         }
@@ -135,6 +144,7 @@ final class AudioCaptureService {
         do {
             try restart()
             if isPaused { engine.pause() }
+            watchForAudio()
         } catch {
             // The new device would not start. Tear down rather than leave a
             // half-running graph that looks alive but records nothing.
@@ -142,6 +152,20 @@ final class AudioCaptureService {
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
             isRunning = false
+            onLost?()
+        }
+    }
+
+    /// After a device change the new device may give no tap at all (its format read 0 Hz while it
+    /// settled, and no further change came): no buffer within a couple of seconds while not paused
+    /// means nothing is being recorded.
+    private func watchForAudio() {
+        let before = bufferLock.withLock { buffersSeen }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.silenceAfterChange) { [weak self] in
+            guard let self, self.isRunning, !self.isPaused, !self.handlingConfigChange,
+                  self.bufferLock.withLock({ self.buffersSeen }) == before else { return }
+            NSLog("pFlow: no audio after a device change")
+            self.onLost?()
         }
     }
 }
