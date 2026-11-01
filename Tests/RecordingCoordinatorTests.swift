@@ -245,9 +245,11 @@ struct RecordingCoordinatorTests {
         while session.startGate == nil { await Task.yield() }
         let finish = Task { await coordinator.finish() }
         while coordinator.state == .recording { await Task.yield() }
-        session.onStop = { coordinator.begin() }
+        // A press queued while the failed start winds down runs before the stop resumes.
+        session.onStop = { session.suspendStart = false; Task { @MainActor in coordinator.begin() } }
         session.startGate?.resume()
         await finish.value
+        for _ in 0..<10 { await Task.yield() }
         #expect(hud.phases.last == .failed)
         #expect(hud.reasons.last == RecordingCoordinator.startFailedNote)
         #expect(hud.hideDelays == [RecordingCoordinator.noteSeconds], "not hidden at once: \(hud.hideDelays)")
