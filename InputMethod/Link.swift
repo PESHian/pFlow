@@ -176,6 +176,15 @@ final class Link {
                 reasons.notice("trace: the app committed the marked words itself (simulated)")
             }
             #endif
+            // An app with no marked text took the words as typed text: they come back out of exactly
+            // where they are, and pFlow goes on another way (or, not proven, keeps the text on its card).
+            if ok, let typed = core.takeBackTyped() {
+                reasons.notice(typed.proven ? "the app has no marked text: the words came back out"
+                                            : "the app has no marked text: the words could not come back out (\(typed.rawValue))")
+                send(.init(.marked, take: message.take, seq: message.seq, ok: false,
+                           reason: typed.proven ? InputMethodWire.typedTakenBack : InputMethodWire.typedLeft))
+                return
+            }
             send(.init(.marked, take: message.take, seq: message.seq, ok: ok))
         case .commit:
             guard let text = message.text else { return }
@@ -195,8 +204,7 @@ final class Link {
                 reasons.notice("trace take-back after: caret \(client.caretLocation ?? -1) result \(result.rawValue)")
             }
             #endif
-            if result != .gone { reasons.notice("take-back not proven: \(result.rawValue)") }
-            send(.init(.cleared, take: message.take, ok: result == .gone, reason: result.rawValue))
+            settleTakeBack(result, take: message.take, looks: Self.takeBackLooks)
         case .keep:
             core.keepAsIs()
         case .end:
@@ -209,6 +217,28 @@ final class Link {
             core.end()
         default:
             break
+        }
+    }
+
+    /// How often, 0.1 s apart, a take-back that is not proven at once is looked at again (pFlow waits
+    /// for the answer longer than this).
+    static let takeBackLooks = 8
+
+    /// A take-back not proven at once is looked at again: an app can answer reads a moment late
+    /// (Chromium answers from a cache of the page's text), and words read as still there are often gone
+    /// a moment later. Words still in the app's text at the end, committed by the app itself, come back
+    /// out of exactly where they are. Then pFlow hears the answer.
+    private func settleTakeBack(_ result: InputMethodTakeBack, take id: String?, looks: Int) {
+        guard !result.proven, looks > 0, take?.id == id else {
+            var result = result
+            if result == .committed, take?.id == id { result = core.removeCommitted() }
+            if result == .removed { reasons.notice("take-back: the words the app had committed came back out") }
+            if !result.proven { reasons.notice("take-back not proven: \(result.rawValue)") }
+            send(.init(.cleared, take: id, ok: result.proven, reason: result.rawValue))
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [self] in
+            settleTakeBack(take?.id == id ? core.recheck() : .unread, take: id, looks: looks - 1)
         }
     }
 
@@ -285,12 +315,13 @@ final class Link {
         #endif
     }
 
-    /// Selected with no take and no pFlow to talk to (pFlow died between the
-    /// switch and its begin, or quit): after a few seconds the person's own
-    /// source comes back, the one pFlow saved before switching.
+    /// Selected with no take (pFlow died between the switch and its begin, or
+    /// quit; or the person landed on it between takes): after a few seconds
+    /// the person's own source comes back, the one pFlow saved before
+    /// switching, else their keyboard layout.
     private func checkOrphanedSoon() {
         DispatchQueue.main.asyncAfter(deadline: .now() + InputMethodBinding.orphanDelay) { [self] in
-            guard InputMethodBinding.orphanRestoreDue(hasTake: take != nil, connected: fd >= 0,
+            guard InputMethodBinding.orphanRestoreDue(hasTake: take != nil,
                                                      selectedIsOurs: Self.selectedSourceID() == InputMethodWire.sourceID,
                                                      sinceActivation: ProcessInfo.processInfo.systemUptime - activatedAt) else { return }
             let saved = CFPreferencesCopyAppValue("inputMethodRestoreSource" as CFString, InputMethodWire.appIdentifier as CFString) as? String
@@ -400,5 +431,9 @@ final class IMKClient: MarkedTextClient {
     func text(in range: NSRange) -> String? {
         var actual = NSRange()
         return client.attributedSubstring(from: range)?.string ?? client.string(from: range, actualRange: &actual)
+    }
+
+    func replace(_ range: NSRange, with text: String) {
+        client.insertText(text, replacementRange: range)
     }
 }

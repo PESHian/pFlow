@@ -527,13 +527,14 @@ struct InputMethodBindingTests {
         #expect(binding.activated(activation(window2, "com.apple.Notes", at: 21.2)) == .bound)
     }
 
-    @Test func theOrphanRestoreWaitsThreeSecondsWithNoTakeAndNoPFlow() {
+    /// Selected with no take, pFlow's source never stays on: whether pFlow is gone or still running
+    /// (the owner's Mac showed it selected between takes, 2026-11-01).
+    @Test func theOrphanRestoreWaitsThreeSecondsWithNoTake() {
         #expect(InputMethodBinding.orphanDelay == 3)
-        #expect(InputMethodBinding.orphanRestoreDue(hasTake: false, connected: false, selectedIsOurs: true, sinceActivation: 3))
-        #expect(!InputMethodBinding.orphanRestoreDue(hasTake: false, connected: false, selectedIsOurs: true, sinceActivation: 2.9))
-        #expect(!InputMethodBinding.orphanRestoreDue(hasTake: true, connected: false, selectedIsOurs: true, sinceActivation: 5))
-        #expect(!InputMethodBinding.orphanRestoreDue(hasTake: false, connected: true, selectedIsOurs: true, sinceActivation: 5))
-        #expect(!InputMethodBinding.orphanRestoreDue(hasTake: false, connected: false, selectedIsOurs: false, sinceActivation: 5))
+        #expect(InputMethodBinding.orphanRestoreDue(hasTake: false, selectedIsOurs: true, sinceActivation: 3))
+        #expect(!InputMethodBinding.orphanRestoreDue(hasTake: false, selectedIsOurs: true, sinceActivation: 2.9))
+        #expect(!InputMethodBinding.orphanRestoreDue(hasTake: true, selectedIsOurs: true, sinceActivation: 5))
+        #expect(!InputMethodBinding.orphanRestoreDue(hasTake: false, selectedIsOurs: false, sinceActivation: 5))
     }
 }
 

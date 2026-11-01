@@ -532,7 +532,10 @@ final class RecordingCoordinator {
     /// words in History instead of dropping them, and say so. Nothing is
     /// typed: the text never finished, so it is not treated as a success.
     private func keepRecoverableText(after error: Error, duration: Double?) {
-        // Words already typed stay where they are; nothing more is typed.
+        // Words already typed stay where they are; nothing more is typed. pFlow Dictation lets go now,
+        // so the person's own input source is back between takes.
+        let typed = take.map { injector.typedLive(session: $0) } ?? false
+        if typingLive, let take { injector.endLive(session: take) }
         typingLive = false
         var kept = transcript.text
         if case TranscriptionError.interrupted(let recovered) = error, !recovered.isEmpty { kept = recovered }
@@ -545,7 +548,6 @@ final class RecordingCoordinator {
         history.save(text: kept, duration: duration, device: recordingDevice,
                      spokenWordCount: kept.split(whereSeparator: \.isWhitespace).count,
                      applicationName: applicationName, applicationBundleID: applicationBundleID)
-        let typed = take.map { injector.typedLive(session: $0) } ?? false
         explain(typed ? .liveTextKeptTyped : .liveTextKept, typed ? Self.keptTypedNote : Self.keptNote, text: kept)
     }
 

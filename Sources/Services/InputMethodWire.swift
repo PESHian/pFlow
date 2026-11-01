@@ -27,6 +27,11 @@ enum InputMethodWire {
     #endif
     /// Longest message, in bytes; a take's words are far shorter.
     static let maxMessage = 1 << 20
+    /// A refused mark's reasons: the app has no marked text and took the words as typed text; they
+    /// came back out (proven), or they could not.
+    static let typedTakenBack = "noMarkedText"
+    static let typedLeft = "noMarkedTextLeft"
+    static let typedReasons: Set<String> = [typedTakenBack, typedLeft]
 
     /// Where the socket lives. A Debug build has its own, so it never replaces the real pFlow's.
     static var folder: URL {
@@ -315,10 +320,12 @@ struct InputMethodBinding {
         return .bound
     }
 
-    /// The input method selected with no take and no pFlow to talk to puts the person's source back after this long.
+    /// The input method selected with no take puts the person's source back after this long: pFlow
+    /// went away, a take let go without it, or the person landed on it (Control-Space or the Globe key
+    /// go through every keyboard source). Between takes it is never left on.
     static let orphanDelay: TimeInterval = 3
 
-    static func orphanRestoreDue(hasTake: Bool, connected: Bool, selectedIsOurs: Bool, sinceActivation: TimeInterval) -> Bool {
-        !hasTake && !connected && selectedIsOurs && sinceActivation >= orphanDelay
+    static func orphanRestoreDue(hasTake: Bool, selectedIsOurs: Bool, sinceActivation: TimeInterval) -> Bool {
+        !hasTake && selectedIsOurs && sinceActivation >= orphanDelay
     }
 }

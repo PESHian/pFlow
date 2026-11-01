@@ -111,12 +111,16 @@ protocol TextInjecting {
     func liveHeldBack(session: String) -> Bool
     /// The take ends before live words started (still waiting): anything begun is undone.
     func abandonLive(session: String)
+    /// The take ended without a finished text (recognition failed): the live words shown stay as they
+    /// are, and pFlow Dictation lets go, so the person's input source comes back now, not at the next take.
+    func endLive(session: String)
 }
 
 extension TextInjecting {
     func finishInputMethod(session: String, text: String) async -> LiveInlineFinal? { nil }
     func liveHeldBack(session: String) -> Bool { false }
     func abandonLive(session: String) {}
+    func endLive(session: String) {}
     func deliver(_ text: String, formatted: NSAttributedString?) async -> InjectionOutcome { await deliver(text) }
     var targetIsSecure: Bool { false }
     var accessibilityGranted: Bool { true }
@@ -180,6 +184,8 @@ final class TextInjector: TextInjecting {
     private var inputMethodPending: String?
     /// How long the first marks have to show in the target field before they are taken back out.
     static let confirmWithin: TimeInterval = 0.7
+    /// Extra reads, 50 ms apart, of a field that still reads as before a paste (a slow app).
+    static let lateReads = 30
     var inputMethod = InputMethodLink.shared
     /// The target field's text as Accessibility reads it (replaceable in tests).
     var readTarget: (AXUIElement) -> String? = { field in
@@ -193,6 +199,11 @@ final class TextInjector: TextInjecting {
     }
     /// A stop decided away from an update (the first marks never showed): shown with the next one.
     private var inputMethodStopNotice: LiveInlineOwnership.Stop?
+    /// The take left pFlow Dictation for pFlow's card: said with the next update, once.
+    private var previewNotice: (session: String, stop: LiveInlineOwnership.Stop)?
+    /// pFlow's words the app committed itself that could not come back out: at the end, the finished
+    /// text goes over them where they are, if the target field shows them at the caret.
+    private var inputMethodLeftWords: [String] = []
 
     private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
         var value: CFTypeRef?
@@ -239,6 +250,8 @@ final class TextInjector: TextInjecting {
         inputMethodCheck = nil
         inputMethodPending = nil
         inputMethodStopNotice = nil
+        previewNotice = nil
+        inputMethodLeftWords = []
         targetApp = NSWorkspace.shared.frontmostApplication
         PersonInput.shared.start()
         capturedAt = PersonInput.now()
@@ -421,6 +434,10 @@ final class TextInjector: TextInjecting {
 
     func reconcileLive(session: String, transcript: String) -> LiveInlineOwnership.Stop? {
         if inputMethodTake == session { return reconcileInputMethod(transcript) }
+        if let notice = previewNotice, notice.session == session {
+            previewNotice = nil
+            return notice.stop
+        }
         return live.reconcile(session: session, transcript: transcript)
     }
 
@@ -438,6 +455,13 @@ final class TextInjector: TextInjecting {
         inputMethodTake = nil
     }
 
+    func endLive(session: String) {
+        guard inputMethodTake == session else { return }
+        if inputMethodStopped == nil { _ = stopInputMethod(.uncertain) }
+        inputMethod.end()
+        inputMethodTake = nil
+    }
+
     /// Spacing against the text around the caret, as the paste would put it.
     private func prepared(_ text: String, formatted: NSAttributedString? = nil) -> (text: String, formatted: NSAttributedString?) {
         placeholderStart
@@ -451,6 +475,14 @@ final class TextInjector: TextInjecting {
         guard inputMethodStopped == nil else {
             defer { inputMethodStopNotice = nil }
             return inputMethodStopNotice
+        }
+        if let reason = inputMethod.interrupted, InputMethodWire.typedReasons.contains(reason), let session = inputMethodTake {
+            leaveTyped(reason, session: session)
+            if inputMethodTake == session {
+                defer { inputMethodStopNotice = nil }
+                return inputMethodStopNotice
+            }
+            return reconcileLive(session: session, transcript: transcript)
         }
         if let reason = inputMethod.interrupted { return stopInputMethod(InputMethodLink.stop(for: reason)) }
         if let stop = markedTextCheck() { return stopInputMethod(stop) }
@@ -500,6 +532,10 @@ final class TextInjector: TextInjecting {
         let started = Date()
         inputMethodCheck = Task { [weak self] in
             while let self, self.inputMethodTake == session, self.inputMethodStopped == nil, !Task.isCancelled {
+                if let reason = self.inputMethod.interrupted, InputMethodWire.typedReasons.contains(reason) {
+                    self.leaveTyped(reason, session: session)
+                    return
+                }
                 if let seq = self.marksAtCaret(settled: 0.05) {
                     let probation = self.inputMethod.provisional
                     self.inputMethod.confirm(seq: seq)
@@ -525,10 +561,36 @@ final class TextInjector: TextInjecting {
     /// more is written, and the finished text is kept for the Copy card, never pasted beside them.
     private func withdrawToOtherPaths(session: String) async {
         ReasonLog.note("input method words not seen in the target field: taken back out")
+        let provisional = inputMethod.provisional, words = inputMethod.newestMarked
         let cleared = await inputMethod.clear()
+        let committed = inputMethod.lastClearReason == InputMethodTakeBack.committed.rawValue
         inputMethod.end()
         guard inputMethodTake == session else { return }
-        guard cleared else {
+        if !cleared, committed { inputMethodLeftWords = words.map { [$0] } ?? [] }
+        leaveInputMethod(session: session, proven: cleared, provisional: provisional)
+    }
+
+    /// The app has no marked text and took the first words as typed text: pFlow Dictation took them
+    /// back out of exactly where they were (proven), or could not.
+    private func leaveTyped(_ reason: String, session: String) {
+        guard inputMethodTake == session, inputMethodStopped == nil else { return }
+        let proven = reason == InputMethodWire.typedTakenBack
+        ReasonLog.note(proven ? "input method: the app took the words as typed text; they came back out"
+                              : "input method: the app took the words as typed text; they could not come back out")
+        let provisional = inputMethod.provisional
+        if !proven { inputMethodLeftWords = [inputMethod.newestMarked, inputMethod.everyMarkTyped].compactMap { $0 } }
+        inputMethod.end()
+        leaveInputMethod(session: session, proven: proven, provisional: provisional)
+    }
+
+    /// The take's words are out of the input method's client (`proven`), or may still be there.
+    /// Proven: a client still active from before (on probation) may simply have been another window's,
+    /// so the take goes on by pFlow's other live paths. A client activated for this take in the target
+    /// app means the app does not show the words where pFlow can check them (or not in time); keys
+    /// would be checked the same way, so the words show on pFlow's card and the finished text goes in
+    /// once at the end. Not proven: nothing more is written and the finished text stays on the card.
+    private func leaveInputMethod(session: String, proven: Bool, provisional: Bool) {
+        guard proven else {
             ReasonLog.note("input method words not proven gone: the finished text stays on the card")
             inputMethodStopped = .otherWindow
             inputMethodStopNotice = .otherWindow
@@ -537,6 +599,12 @@ final class TextInjector: TextInjecting {
         inputMethodTake = nil
         inputMethodAllowed = false
         inputMethodPending = nil
+        guard provisional else {
+            ReasonLog.note("live words on pFlow's card: the app does not show them where pFlow can check")
+            _ = live.begin(id: session, field: nil)
+            previewNotice = (session, .unsupported)
+            return
+        }
         let start = beginLiveOverCapturedField(session: session)
         ReasonLog.note("live typing after the input method:", start)
     }
@@ -554,6 +622,7 @@ final class TextInjector: TextInjecting {
     func finishInputMethod(session: String, text: String) async -> LiveInlineFinal? {
         // The first marks may still be looked for, or marks taken back out: that decides first.
         await inputMethodCheck?.value
+        if let reason = inputMethod.interrupted, InputMethodWire.typedReasons.contains(reason) { leaveTyped(reason, session: session) }
         guard inputMethodTake == session else { return nil }
         inputMethodTake = nil
         // Nothing was ever marked (pFlow's source was not the selected one): the text goes in the usual way.
@@ -561,7 +630,7 @@ final class TextInjector: TextInjecting {
             inputMethod.end()
             return .notTyped
         }
-        if let stop = inputMethodStopped { return .kept(stop) }
+        if let stop = inputMethodStopped { return overLeftWords() ?? .kept(stop) }
         if let reason = inputMethod.interrupted {
             return .kept(stopInputMethod(InputMethodLink.stop(for: reason)))
         }
@@ -579,10 +648,12 @@ final class TextInjector: TextInjecting {
         if InputMethodFinish.takesBackFirst(targetReadable: targetReadable, confirmed: inputMethod.confirmed, marksAtCaret: atCaret) {
             ReasonLog.note(inputMethod.confirmed ? "input method words no longer at the caret: taken back out"
                                                  : "input method words never seen in the target: taken back out")
+            let words = [inputMethod.newestMarked, inputMethod.everyMarkTyped].compactMap { $0 }
             let cleared = await inputMethod.clear()
+            if !cleared { inputMethodLeftWords = words }
             inputMethod.end()
             if !cleared { ReasonLog.note("input method words not proven gone: the finished text stays on the card") }
-            return InputMethodFinish.afterTakeBack(cleared: cleared)
+            return cleared ? InputMethodFinish.afterTakeBack(cleared: true) : overLeftWords() ?? InputMethodFinish.afterTakeBack(cleared: false)
         }
         let result = await inputMethod.commit(final)
         inputMethod.end()
@@ -598,6 +669,36 @@ final class TextInjector: TextInjecting {
         ReasonLog.note(finished == .applied ? "finished text committed and seen in the target"
                        : finished == .unconfirmed ? "finished text committed but not seen in the target" : "finished text not committed")
         return finished
+    }
+
+    /// pFlow's words that the app committed itself and that could not come back out: when the target
+    /// field shows exactly them at the captured caret (its text before the caret, the words, its text
+    /// after), they are selected there and the finished text goes over them by the usual checked paste,
+    /// the same end as typed keys: the whole text once. Anything else: nil, and the card says why.
+    private func overLeftWords() -> LiveInlineFinal? {
+        let candidates = inputMethodLeftWords
+        inputMethodLeftWords = []
+        guard !candidates.isEmpty, targetReadable, !placeholderStart, let targetApp, let targetField, let context = caretContext else { return nil }
+        let field = KeyLiveTextField(pid: targetApp.processIdentifier, element: targetField, bundleID: targetApp.bundleIdentifier,
+                                     composition: composition, placeholder: nil)
+        // The newest words, or every mark typed in one after another (an app with no marked text).
+        let value = field.state().value
+        guard let words = candidates.first(where: { value == context.before + $0 + context.after }) else {
+            ReasonLog.note("input method words the app committed: not found at the caret")
+            return nil
+        }
+        // The spacing pFlow put before the words stays; only the words themselves are replaced.
+        let trimmed = words.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lead = (words as NSString).range(of: trimmed).location
+        guard !trimmed.isEmpty, lead != NSNotFound else { return nil }
+        let range = NSRange(location: (context.before as NSString).length + lead, length: (trimmed as NSString).length)
+        guard field.select(range) else {
+            ReasonLog.note("input method words the app committed: could not be selected")
+            return nil
+        }
+        ReasonLog.note("input method words the app committed are at the caret: the finished text goes over them")
+        return .replace(OwnedWords(range: range, text: trimmed, personActed: { field.personActedSinceSelect() },
+                                   collapse: { field.collapse() }))
     }
 
     /// The target field can be read, so what it shows decides (never the input method's own client).
@@ -623,12 +724,14 @@ final class TextInjector: TextInjecting {
         inputMethodCheck = Task { [weak self] in
             await previous?.value
             guard let self else { return }
+            let words = [self.inputMethod.newestMarked, self.inputMethod.everyMarkTyped].compactMap { $0 }
             let cleared = await self.inputMethod.clear()
             self.inputMethod.end()
             if cleared { self.inputMethodNothingShown = true }
             else {
                 ReasonLog.note("input method words not proven gone: the finished text stays on the card")
                 self.inputMethodStopped = .otherWindow
+                self.inputMethodLeftWords = words
             }
         }
         return .uncertain
@@ -848,22 +951,49 @@ final class TextInjector: TextInjecting {
         // Unreadable fields (some Electron views) have no paste-completion
         // acknowledgment: they get a bounded grace period before the clipboard
         // goes back. Once a paste is queued, cancellation must not shorten it.
-        let reads = keepCopy ? 30 : 20
-        for _ in 0..<reads {
-            if EditorPlaceholder.landed(read(), expected: expected, start: before, startedAsPlaceholder: placeholderStart) { return .pasted }
-            if !PasteboardSnapshot.isOwned(pasteboard, change: change, session: sessionID) { return .unconfirmed }
-            await withCheckedContinuation { continuation in
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { continuation.resume() }
-            }
-        }
-        let now = read()
-        if EditorPlaceholder.landed(now, expected: expected, start: before, startedAsPlaceholder: placeholderStart) { return .pasted }
-        // A field that held text (or a placeholder) and still reads exactly as before took nothing.
-        if let before, !before.isEmpty, EditorPlaceholder.same(now, before, startedAsPlaceholder: false) {
+        let placeholderStart = self.placeholderStart
+        let seen = await Self.pasteSeen(reads: keepCopy ? 30 : 20, late: Self.lateReads, read: read,
+                                         landed: { EditorPlaceholder.landed($0, expected: expected, start: before, startedAsPlaceholder: placeholderStart) },
+                                         asBefore: { now in before.map { !$0.isEmpty && EditorPlaceholder.same(now, $0, startedAsPlaceholder: false) } ?? false },
+                                         owned: { PasteboardSnapshot.isOwned(self.pasteboard, change: change, session: sessionID) },
+                                         wait: { await withCheckedContinuation { continuation in
+                                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { continuation.resume() } } })
+        switch seen {
+        case .landed: return .pasted
+        case .landedLate:
+            ReasonLog.note("the paste showed late in the field")
+            return .pasted
+        case .notTaken:
             ReasonLog.note("the paste went out and the field still reads as before")
             return .savedToHistory(.notTaken)
+        case .unconfirmed: return .unconfirmed
         }
-        return .unconfirmed
+    }
+
+    enum PasteSeen: Equatable { case landed, landedLate, notTaken, unconfirmed }
+
+    /// What a paste did, read back every `wait` (50 ms): landed; the clipboard changed meanwhile
+    /// (unconfirmed); or, after `reads`, a field that still reads exactly as before is read `late`
+    /// more times (a slow app shows a paste late: a long document on an older Mac) before it counts
+    /// as not taken, so a paste that did land never gets a card saying it did not.
+    static func pasteSeen(reads: Int, late: Int, read: () -> String?, landed: (String?) -> Bool, asBefore: (String?) -> Bool,
+                          owned: () -> Bool, wait: () async -> Void) async -> PasteSeen {
+        for _ in 0..<reads {
+            if landed(read()) { return .landed }
+            if !owned() { return .unconfirmed }
+            await wait()
+        }
+        var now = read()
+        if landed(now) { return .landed }
+        var extra = 0
+        while extra < late, asBefore(now), owned() {
+            extra += 1
+            await wait()
+            now = read()
+            if landed(now) { return .landedLate }
+        }
+        // A field that held text (or a placeholder) and still reads exactly as before took nothing.
+        return asBefore(now) ? .notTaken : .unconfirmed
     }
 
     /// The end of a take with typed live words: pFlow's own words are selected

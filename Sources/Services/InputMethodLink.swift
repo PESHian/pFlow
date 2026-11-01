@@ -230,6 +230,8 @@ final class InputMethodLink {
     /// How long pFlow waits for a fresh activation before it puts the client still active on probation.
     static let probeAfter: TimeInterval = 0.12
     static let restoreKey = "inputMethodRestoreSource"
+    /// How long a take-back may take before it counts as not proven.
+    static let clearWait: TimeInterval = 1.6
 
     // The outside world, replaceable in tests.
     var enabled: () -> Bool = { InputMethodInstall.enabled }
@@ -246,6 +248,8 @@ final class InputMethodLink {
     private var commitTake: String?
     private var clearWaiter: CheckedContinuation<Bool, Never>?
     private var clearTake: String?
+    /// How the last take-back went, by the input method's word ("gone", "removed", "committed", …).
+    private(set) var lastClearReason: String?
 
     #if DEBUG
     var connectedForTesting: Bool {
@@ -454,6 +458,12 @@ final class InputMethodLink {
         return result
     }
 
+    /// The newest words marked for the take (what the app shows, or committed itself).
+    var newestMarked: String? { take.flatMap { $0.sent[$0.seq] } }
+    /// Every mark of the take one after another: what an app with no marked text holds once it typed
+    /// each of them in where the last one ended.
+    var everyMarkTyped: String? { take.map { $0.sent.sorted { $0.key < $1.key }.map(\.value).joined() } }
+
     /// The words shown so far stay as they are (typing stopped for the take).
     func freeze() {
         guard let take, take.marked, take.interrupted == nil else { return }
@@ -472,6 +482,7 @@ final class InputMethodLink {
     /// Takes the marked words back out and waits for the input method to report them gone.
     /// False when it does not (refused, no answer, channel lost): the words may still be showing.
     func clear() async -> Bool {
+        lastClearReason = nil
         guard let take else { return true }
         guard take.marked || take.seq > 0 else { return true }
         guard transmit(.init(.cancel, take: take.id)) else { return false }
@@ -480,7 +491,8 @@ final class InputMethodLink {
         let id = take.id
         return await withCheckedContinuation { continuation in
             clearWaiter = continuation
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            // The input method looks again for up to 0.8 s when an app answers late.
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.clearWait) { [weak self] in
                 guard self?.clearTake == id else { return }
                 self?.answerClear(false)
             }
@@ -558,7 +570,8 @@ final class InputMethodLink {
             if take.attach == .attached, !take.readable, !take.provisional { confirm(seq: 0) }
         case .marked:
             guard message.take == take?.id else { return }
-            guard message.ok == true else { interrupt("clientChanged"); return }
+            // Refused: the client changed, or the app took the words as typed text (reason given).
+            guard message.ok == true else { interrupt(message.reason ?? "clientChanged"); return }
             take?.acked += 1
             if let seq = message.seq, seq > (take?.lastAcked?.seq ?? 0) { take?.lastAcked = (seq, clock()) }
             #if DEBUG
@@ -574,6 +587,7 @@ final class InputMethodLink {
             answerCommit(ok: message.ok == true, seen: message.seen == true)
         case .cleared:
             guard message.take == clearTake else { return }
+            lastClearReason = message.reason
             answerClear(message.ok == true)
         default:
             break

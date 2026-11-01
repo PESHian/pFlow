@@ -438,6 +438,18 @@ final class TakeHarness {
             await pause(2)
             made = TakeTarget(name: name, app: app, windowTitle: title(app.processIdentifier) ?? "Writer")
             _ = file
+        case let fixture where fixture.hasPrefix("fixture-"):
+            // F4: the IME fixture (~/pflow-fixtures/IMEFixture.app, built for the VM) in one of its
+            // modes; what the person sees is written to the document file, read back from there.
+            let mode = String(fixture.dropFirst("fixture-".count))
+            let file = folder.appendingPathComponent("pflow-fictional-\(fixture)-\(tag).txt")
+            try? "Dear Sam,\n".write(to: file, atomically: true, encoding: .utf8)
+            guard let app = await open([], bundle: "com.pesh.pflow.imefixture", arguments: ["--mode", mode, "--doc", file.path],
+                                       newInstance: true) else { return nil }
+            _ = await waitFor(10) { title(app.processIdentifier)?.contains("IME fixture") == true }
+            let t = TakeTarget(name: name, app: app, windowTitle: "IME fixture \(mode)")
+            t.readBack = { try? String(contentsOf: file, encoding: .utf8) }
+            made = t
         case "vscode":
             let data = folder.appendingPathComponent("vscode-data")
             let file = folder.appendingPathComponent("pflow-fictional-vscode-\(tag).txt")
@@ -470,7 +482,7 @@ final class TakeHarness {
             // LibreOffice reports no focused element; its document is the window's text area.
             made.field = find(window) { string($0, kAXRoleAttribute) == "AXTextArea" }
         }
-        if name != "vscode" {
+        if name != "vscode", !name.hasPrefix("fixture-") {
             made.readBack = { [weak self, weak made] in
                 guard let self, let field = made?.field else { return nil }
                 return self.string(field, kAXValueAttribute)?.replacingOccurrences(of: "\u{00A0}", with: " ")
