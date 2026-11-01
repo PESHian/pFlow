@@ -60,36 +60,48 @@ struct RecordingHUDView: View {
         Group {
             if isRecordingPhase {
                 Self.capsuleWaveformView(model)
-            } else if model.phase == .pasteUnconfirmed {
-                capsuleLabel("Check paste", "info.circle")
-                    .help("The app could not verify the paste. Check your text before pasting again.")
-            } else if model.phase == .copied {
-                capsuleLabel("Press ⌘V", "doc.on.clipboard")
-            } else if model.phase == .savedToHistory {
-                capsuleLabel("In History", "clock.arrow.circlepath")
-                    .help(title)
-            } else if model.phase == .failed {
-                capsuleLabel("Failed", "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                    .help(title)
-            } else if model.phase == .liveTextKept || model.phase == .liveTextKeptTyped {
-                capsuleLabel(model.phase == .liveTextKeptTyped ? "Words stay" : "In History",
-                             "clock.arrow.circlepath")
-                    .help(title)
-            } else if model.phase == .passwordField {
-                capsuleLabel("Password", "lock")
-                    .help(title)
-            } else if model.phase == .typingStopped {
-                capsuleLabel("Not put in", "exclamationmark.circle")
-                    .help(title)
-            } else if model.phase == .typedTextLeft {
-                capsuleLabel("Words stay", "info.circle")
-                    .help(title)
+            } else if let shown = Self.afterTake(model.phase) {
+                if model.phase == .failed {
+                    capsuleLabel(shown.words, shown.icon).foregroundStyle(.orange).help(title)
+                } else {
+                    capsuleLabel(shown.words, shown.icon).help(title)
+                }
             } else {
                 // The system spinner draws for the window's light or dark
                 // look, which is dark on the capsule's dark glass.
                 ProcessingSweep(palette: model.palette)
                     .frame(width: Self.capsuleWaveform.width, height: Self.capsuleWaveform.height)
+            }
+        }
+    }
+
+    /// A status after the take, in a few plain words, and its icon. The card's
+    /// header shows both; the capsule shows the icon, with the words as its
+    /// tooltip and VoiceOver label. Nil while pFlow listens or works.
+    static func afterTake(_ phase: HUDPhase) -> (words: String, icon: String)? {
+        switch phase {
+        case .listening, .confirmCancel, .transcribing, .cleaning, .restarting: return nil
+        case .pasteUnconfirmed: return ("Check your text", "info.circle")
+        case .copied: return ("On the clipboard", "doc.on.clipboard")
+        case .savedToHistory, .typingStopped: return ("Not put in", "exclamationmark.circle")
+        case .failed: return ("Dictation stopped", "exclamationmark.triangle")
+        case .liveTextKept, .liveTextKeptTyped: return ("Stopped early", "clock.arrow.circlepath")
+        case .passwordField: return ("Password field", "lock")
+        case .typedTextLeft: return ("Cancelled", "info.circle")
+        }
+    }
+
+    /// The card's header after the take: its icon and its words, never an icon alone.
+    static func afterTakeHeader(_ phase: HUDPhase) -> some View {
+        HStack(alignment: .center, spacing: Theme.s2) {
+            if let shown = afterTake(phase) {
+                Image(systemName: shown.icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(phase == .failed || phase == .typingStopped || phase == .savedToHistory
+                                     ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+                Text(shown.words)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
             }
         }
     }
@@ -142,8 +154,9 @@ struct RecordingHUDView: View {
 
 /// Live text: the newest words in a calm floating card. It never takes focus
 /// (the panel cannot become key) and keeps the same size for the whole take.
-/// Header: Pesh mark, recording dot and a short caption leading, the live
-/// waveform trailing. Below a hairline, the transcript fills from the bottom
+/// Header: recording dot and a short caption leading, the live waveform
+/// trailing; after the take, what happened in words with its icon (no logo:
+/// at this size it reads as a broken glyph). Below a hairline, the transcript fills from the bottom
 /// of a fixed box; the top of the box fades so older lines dissolve instead
 /// of being cut.
 private struct LivePreviewCard<Status: View>: View {
@@ -170,7 +183,6 @@ private struct LivePreviewCard<Status: View>: View {
     @ViewBuilder private var content: some View {
         if messageOnly, let reason = model.reason {
             HStack(alignment: .center, spacing: Theme.s2) {
-                PeshMark(size: 16)
                 status()
                 Text(reason)
                     .font(.system(size: 12))
@@ -248,7 +260,6 @@ private struct LivePreviewCard<Status: View>: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: Theme.s2) {
-            PeshMark(size: 16)
             if isRecordingPhase {
                 RecordingDot(pulsing: model.phase == .listening && !reduceMotion)
                 Text(caption)
@@ -259,12 +270,12 @@ private struct LivePreviewCard<Status: View>: View {
                 Spacer(minLength: Theme.s2)
                 RecordingWaveform(levels: Array(model.levels.suffix(25)),
                                   style: model.waveformStyle, compact: true, palette: model.palette)
-            } else if isProcessingPhase {
-                ProgressView().controlSize(.small).tint(Theme.accent)
-                Text(title).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+            } else if RecordingHUDView.afterTake(model.phase) != nil {
+                RecordingHUDView.afterTakeHeader(model.phase)
                 Spacer(minLength: 0)
             } else {
-                status()
+                ProgressView().controlSize(.small).tint(Theme.accent)
+                Text(title).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: 0)
             }
         }

@@ -7,9 +7,27 @@ final class HUDController: HUDControlling {
     private var hideTask: Task<Void, Never>?
     /// Where Copy writes; tests pass a private pasteboard.
     private let pasteboard: NSPasteboard
+    /// Where the capsule's saved spot lives; tests pass a scratch domain.
+    private let defaults: UserDefaults
+    /// Whether the panel is on the desktop the person is looking at (a test fakes "not").
+    var isOnActiveSpace: (NSWindow) -> Bool = { $0.isOnActiveSpace }
+    private var watchers: [(NotificationCenter, NSObjectProtocol)] = []
 
-    init(pasteboard: NSPasteboard = .general) {
+    init(pasteboard: NSPasteboard = .general, defaults: UserDefaults = .standard) {
         self.pasteboard = pasteboard
+        self.defaults = defaults
+        // While a take shows, a desktop switch or a display change checks the panel is still where the person is.
+        for (center, name) in [(NSWorkspace.shared.notificationCenter, NSWorkspace.activeSpaceDidChangeNotification),
+                               (NotificationCenter.default, NSApplication.didChangeScreenParametersNotification)] {
+            let token = center.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
+                MainActor.assumeIsolated { self?.keepOnActiveSpace() }
+            }
+            watchers.append((center, token))
+        }
+    }
+
+    deinit {
+        for (center, token) in watchers { center.removeObserver(token) }
     }
 
     /// The one-press Accessibility Grant, run from the card's button.
@@ -50,7 +68,7 @@ final class HUDController: HUDControlling {
     // Built ahead of time: creating it on first use rendered an unlaid-out window for a frame — a flicker before "Listening" appeared.
     func prepare() {
         guard panel == nil else { return }
-        let panel = HUDPanel(model: model)
+        let panel = HUDPanel(model: model, defaults: defaults)
         panel.alphaValue = 0
         panel.reposition()
         self.panel = panel
@@ -85,12 +103,34 @@ final class HUDController: HUDControlling {
         panel.showsCardShadow(livePreview)
         panel.reposition(avoidingCaret: livePreview)
         panel.orderFrontRegardless()
+        keepOnActiveSpace()
+        guard let shown = self.panel else { return }
 
         // Short fade covers any residual first-frame layout settling.
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.12
-            panel.animator().alphaValue = 1
+            shown.animator().alphaValue = 1
         }
+    }
+
+    /// The panel is built once and reused for days. macOS can stop keeping it on
+    /// every desktop (seen on a Mac with a second display: the panel stayed on one
+    /// Space while the person worked on another, so no capsule showed). A shown
+    /// panel that is not on the active desktop is dropped, and a fresh one is shown
+    /// in its place.
+    private func keepOnActiveSpace() {
+        guard let stuck = panel, stuck.isVisible, !isOnActiveSpace(stuck) else { return }
+        ReasonLog.note("capsule not on the active desktop: shown in a fresh panel")
+        let alpha = stuck.alphaValue
+        stuck.orderOut(nil)
+        stuck.close()
+        panel = nil
+        prepare()
+        guard let fresh = panel else { return }
+        fresh.showsCardShadow(model.livePreview)
+        fresh.reposition(avoidingCaret: model.livePreview)
+        fresh.alphaValue = alpha
+        fresh.orderFrontRegardless()
     }
 
     func setPhase(_ phase: HUDPhase) {

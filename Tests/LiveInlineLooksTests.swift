@@ -94,6 +94,65 @@ struct LiveInlineLooksTests {
         }
     }
 
+    /// Every card and capsule state with the owner's settings (Custom AAAAAA
+    /// on AAAAAA, Lines, System appearance), light and dark: the after-take
+    /// header in words with its icon, the reason line, the Grant row and Copy.
+    @Test(.enabled(if: folder != nil))
+    func renderEveryStateWithTheOwnersSettings() throws {
+        let gray = ThemePalette(primary: ThemeColor(hex: "AAAAAA")!, secondary: ThemeColor(hex: "AAAAAA")!)
+        let levels = (0..<HUDModel.waveformSampleCount).map { Float(0.2 + 0.6 * abs(sin(Double($0) * 0.7))) }
+        let words = "The harbor opens at dawn and the boats go out past the lighthouse before the fog lifts."
+        func owners(_ phase: HUDPhase, card: Bool) -> HUDModel {
+            let model = HUDModel()
+            model.phase = phase
+            model.palette = gray
+            model.waveformStyle = .lines
+            model.levels = levels
+            model.colorScheme = nil
+            model.livePreview = card
+            return model
+        }
+        let after: [(String, HUDPhase, String?, Bool, Bool)] = [
+            ("other-window", .typingStopped, LiveInlineOwnership.Stop.otherWindow.cardReason, true, false),
+            ("permission", .typingStopped, LiveInlineOwnership.Stop.permission.cardReason, true, true),
+            ("saved-app-changed", .savedToHistory, InsertionBlock.appChanged.reason, true, false),
+            ("saved-accessibility-off", .savedToHistory, InsertionBlock.accessibilityOff.reason, true, true),
+            ("on-clipboard", .copied, RecordingCoordinator.onClipboardNote, true, false),
+            ("kept", .liveTextKept, RecordingCoordinator.keptNote, true, false),
+            ("kept-typed", .liveTextKeptTyped, RecordingCoordinator.keptTypedNote, true, false),
+            ("paste-unconfirmed", .pasteUnconfirmed, nil, false, false),
+            ("password", .passwordField, RecordingCoordinator.passwordNote, false, false),
+            ("start-failed", .failed, RecordingCoordinator.startFailedNote, false, false),
+            ("typed-left", .typedTextLeft, RecordingCoordinator.typedLeftNote, false, false),
+        ]
+        for scheme in [ColorScheme.light, .dark] {
+            for (name, phase, reason, copy, grant) in after {
+                let model = owners(phase, card: true)
+                model.reason = reason
+                model.needsAccessibility = grant
+                model.partial = words
+                if copy { model.copyOffer = words }
+                try save(RecordingHUDView(model: model), "owner-card-\(name)", scheme: scheme, hosted: true)
+            }
+            let listening = owners(.listening, card: true)
+            listening.partial = words
+            try save(RecordingHUDView(model: listening), "owner-card-listening", scheme: scheme, hosted: true)
+            let noted = owners(.listening, card: true)
+            noted.partial = words
+            noted.liveNote = LiveInlineOwnership.Stop.otherWindow.stoppedNote
+            try save(RecordingHUDView(model: noted), "owner-card-listening-stopped", scheme: scheme, hosted: true)
+            for phase in [HUDPhase.transcribing, .cleaning, .restarting] {
+                let working = owners(phase, card: true)
+                working.partial = words
+                try save(RecordingHUDView(model: working), "owner-card-\(phase)", scheme: scheme, hosted: true)
+            }
+            for phase: HUDPhase in [.listening, .confirmCancel, .transcribing, .cleaning, .restarting, .copied, .pasteUnconfirmed,
+                                    .savedToHistory, .failed, .liveTextKept, .liveTextKeptTyped, .passwordField, .typingStopped, .typedTextLeft] {
+                try save(RecordingHUDView(model: owners(phase, card: false)), "owner-capsule-\(phase)", scheme: scheme, hosted: true)
+            }
+        }
+    }
+
     /// The recording capsule in every phase, both waveform styles, every
     /// built-in palette and a custom one, light and dark: one solid black
     /// control with a hairline outline in the palette, one size. Reduce

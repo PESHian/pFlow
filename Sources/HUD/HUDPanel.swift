@@ -4,8 +4,22 @@ import SwiftUI
 final class HUDPanel: NSPanel, NSWindowDelegate {
     private var positioning = false
     private let model: HUDModel
-    init(model: HUDModel) {
+    /// Where the saved spot lives (tests pass a scratch domain).
+    private let defaults: UserDefaults
+    /// The spot the person dragged the capsule to. Only their own drag writes it.
+    static let spotX = "pflow.hud.spot.x"
+    static let spotY = "pflow.hud.spot.y"
+    /// Before 0.3.21 every move was saved, AppKit's own on a resize too, so a spot
+    /// saved under these names may be one nobody chose; it is not used.
+    static let oldSpotKeys = ["pflow.hud.x", "pflow.hud.y"]
+    /// The window's size when the person pressed on it to drag. A move counts as
+    /// theirs only while it is set and the size is unchanged: AppKit's moves on a
+    /// resize change the size, pFlow's own go through `reposition`, which clears it.
+    private var dragSize: NSSize?
+
+    init(model: HUDModel, defaults: UserDefaults = .standard) {
         self.model = model
+        self.defaults = defaults
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 120, height: 32),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -19,6 +33,8 @@ final class HUDPanel: NSPanel, NSWindowDelegate {
         isMovableByWindowBackground = true
         hidesOnDeactivate = false
         isOpaque = false
+        // Closed when replaced by a fresh panel; ARC owns it, not AppKit.
+        isReleasedWhenClosed = false
         backgroundColor = .clear
         hasShadow = false // the capsule draws its own look; the card turns the window shadow on
 
@@ -44,6 +60,7 @@ final class HUDPanel: NSPanel, NSWindowDelegate {
     // Layout is forced before measuring: reading `fittingSize` while SwiftUI still has a stale layout returns the wrong size, so the panel would appear at one size and visibly snap to another.
     func reposition(avoidingCaret: Bool = false) {
         positioning = true
+        dragSize = nil
         defer { positioning = false }
         // Anchor to the screen holding the app being dictated into. Fall back to
         // the mouse's screen, then the main one, so the widget still lands
@@ -63,22 +80,18 @@ final class HUDPanel: NSPanel, NSWindowDelegate {
         setContentSize(size)
         invalidateShadow()
 
+        for key in Self.oldSpotKeys where defaults.object(forKey: key) != nil { defaults.removeObject(forKey: key) }
         // The window includes a transparent shadow margin, so offset by it to
         // keep the visible card where it looks right.
-        let defaults = UserDefaults.standard
         var origin = NSPoint(x: visible.midX - size.width / 2, y: visible.minY + 40)
-        if defaults.object(forKey: "pflow.hud.x") != nil {
-            origin = NSPoint(x: defaults.double(forKey: "pflow.hud.x"), y: defaults.double(forKey: "pflow.hud.y"))
-        }
-        let candidate = NSRect(origin: origin, size: size)
-        let display = NSScreen.screens.max {
-            let a = $0.visibleFrame.intersection(candidate)
-            let b = $1.visibleFrame.intersection(candidate)
-            return (a.isNull ? 0 : a.width * a.height) < (b.isNull ? 0 : b.width * b.height)
-        } ?? screen
-        let bounds = display.visibleFrame
-        if !origin.x.isFinite || !origin.y.isFinite {
-            origin = NSPoint(x: bounds.midX - size.width / 2, y: bounds.minY + 40)
+        var bounds = visible
+        if defaults.object(forKey: Self.spotX) != nil {
+            let spot = NSPoint(x: defaults.double(forKey: Self.spotX), y: defaults.double(forKey: Self.spotY))
+            // The saved spot counts only on a screen that is there now; off every screen, bottom center.
+            if let display = Self.display(showing: NSRect(origin: spot, size: size), among: NSScreen.screens.map(\.visibleFrame)) {
+                origin = spot
+                bounds = display
+            }
         }
         origin.x = max(bounds.minX, min(origin.x, bounds.maxX - size.width))
         origin.y = max(bounds.minY, min(origin.y, bounds.maxY - size.height))
@@ -89,11 +102,34 @@ final class HUDPanel: NSPanel, NSWindowDelegate {
         setFrameOrigin(origin)
     }
 
+    /// The screen area that shows most of `frame`; nil when none shows any of it
+    /// (or the spot is not a number).
+    static func display(showing frame: NSRect, among screens: [NSRect]) -> NSRect? {
+        guard frame.origin.x.isFinite, frame.origin.y.isFinite else { return nil }
+        func area(_ screen: NSRect) -> CGFloat {
+            let shared = screen.intersection(frame)
+            return shared.isNull ? 0 : shared.width * shared.height
+        }
+        guard let best = screens.max(by: { area($0) < area($1) }), area(best) > 0 else { return nil }
+        return best
+    }
+
     @objc private func displaysChanged() { reposition() }
+
+    /// The person pressed on the panel to drag it.
+    func personBeganDrag() { dragSize = frame.size }
+
+    /// Hidden: a drag that was going on is over.
+    override func orderOut(_ sender: Any?) {
+        dragSize = nil
+        super.orderOut(sender)
+    }
+
+    /// Saves the spot only for the person's own drag: never pFlow's moves, never AppKit's on a resize.
     func windowDidMove(_ notification: Notification) {
-        guard !positioning else { return }
-        UserDefaults.standard.set(frame.origin.x, forKey: "pflow.hud.x")
-        UserDefaults.standard.set(frame.origin.y, forKey: "pflow.hud.y")
+        guard !positioning, let dragSize, frame.size == dragSize else { return }
+        defaults.set(frame.origin.x, forKey: Self.spotX)
+        defaults.set(frame.origin.y, forKey: Self.spotY)
     }
 }
 
@@ -113,5 +149,8 @@ enum HUDPlacement {
 
 private final class DraggableHUDView: NSHostingView<RecordingHUDView> {
     override var mouseDownCanMoveWindow: Bool { true }
-    override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
+    override func mouseDown(with event: NSEvent) {
+        (window as? HUDPanel)?.personBeganDrag()
+        window?.performDrag(with: event)
+    }
 }
