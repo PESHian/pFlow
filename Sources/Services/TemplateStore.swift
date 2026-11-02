@@ -45,8 +45,9 @@ struct DictationTemplate: Codable, Equatable, Identifiable {
                 ReportSection(title: "Details", instructions: "Everything the speaker said, in order.", includeFullDictation: true),
                 ReportSection(title: "Next steps", instructions: "Only actions or to-dos the speaker stated, with who and when if they said it.", bullets: true)
             ],
-            // Never a bare "notes": "Use the notes from Tuesday..." must stay plain dictation.
-            voiceTriggers: ["quick notes", "notes template"])
+            // Phrases nobody starts an ordinary sentence with: "Write quick notes
+            // for the meeting..." or "Use the notes from Tuesday..." stay plain dictation.
+            voiceTriggers: ["notes layout", "general notes template"])
     }
 
     /// The report examples pFlow 0.3.20 and older put in for everyone. Never

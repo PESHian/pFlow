@@ -5,14 +5,17 @@ struct SpokenTemplateCommandTests {
     @Test func theGeneralTemplateIsPickedByItsNameAndPhrasesButNotByOrdinaryWords() throws {
         let general = DictationTemplate.general
         for opening in ["Use the general notes template.", "Write this as general notes.", "This is general notes.",
-                        "Use the notes template.", "Write this as quick notes."] {
+                        "Use the notes layout.", "Write this as the notes layout."] {
             let route = try #require(SpokenTemplateCommand.parse(opening + " Call Sam about the roof.", templates: [general]))
             #expect(route.template.id == general.id)
             #expect(route.text == "Call Sam about the roof.")
         }
         #expect(SpokenTemplateCommand.parse("These notes are for Sam. Use the general notes template.", templates: [general]) == nil)
         for ordinary in ["Use the notes from Tuesday's meeting to draft the reply.", "Write the notes up before Friday.",
-                         "Write this as notes for Sam.", "This is notes from the call."] {
+                         "Write this as notes for Sam.", "This is notes from the call.",
+                         "Write quick notes for the meeting and send them to Sam.", "Use quick notes when you call the client.",
+                         "Format the notes template so it has three columns.", "Use notes to plan the trip.",
+                         "This is a general note about parking."] {
             #expect(SpokenTemplateCommand.parse(ordinary, templates: [general]) == nil, "\(ordinary)")
         }
     }

@@ -12,13 +12,14 @@ struct PermissionGrantTests {
         var trusted: [Bool] = []
         var showing: [Bool] = []
         var watches = 0, promptsAtWatch = -1
-        var firstPress = true
+        var mayClear = true, clearWorks = true, recorded = 0
         var suspend: (() async -> Void)?
         func steps(trusted: Bool) -> PermissionsManager.AccessibilityGrantSteps {
             .init(
                 isTrusted: { [self] in self.trusted.isEmpty ? trusted : self.trusted.removeFirst() },
-                resetOwnRow: { [self] in resets += 1 },
-                firstPressForThisCopy: { [self] in firstPress },
+                resetOwnRow: { [self] in resets += 1; return clearWorks },
+                mayClearOldRow: { [self] in mayClear },
+                clearedOldRow: { [self] in recorded += 1 },
                 watchForPrompt: { [self] in
                     watches += 1; promptsAtWatch = prompts
                     return { [self] in showing.isEmpty ? false : showing.removeFirst() }
@@ -30,28 +31,44 @@ struct PermissionGrantTests {
         }
     }
 
-    /// Owner 2026-11-01: he turned pFlow on, it still said Grant, he pressed
-    /// Grant again, and every press wiped the switch he had just turned on.
-    @Test func anotherPressNeverClearsTheSwitch() async {
+    /// Owner 2026-11-01: he turned pFlow on, it still said Grant, and he
+    /// pressed Grant again; a press right after must not wipe the switch.
+    @Test func aPressSoonAfterTheLastClearLeavesTheSwitchAlone() async {
         let log = Log()
-        log.firstPress = false
+        log.mayClear = false
         log.showing = [true]
         let outcome = await PermissionsManager.grantAccessibility(log.steps(trusted: false))
         #expect(outcome == .promptShown)
-        #expect((log.resets, log.prompts) == (0, 1), "no clearing after the first press for this copy")
+        #expect((log.resets, log.prompts, log.recorded) == (0, 1, 0))
     }
 
-    @Test func theOldSwitchIsClearedOncePerCopyOfPFlow() {
+    @Test func aClearThatFailedIsTriedAgainOnTheNextPress() async {
+        let log = Log()
+        log.clearWorks = false
+        log.showing = [true]
+        _ = await PermissionsManager.grantAccessibility(log.steps(trusted: false))
+        #expect((log.resets, log.recorded) == (1, 0), "not remembered, so the next press clears again")
+        log.clearWorks = true
+        log.showing = [true]
+        _ = await PermissionsManager.grantAccessibility(log.steps(trusted: false))
+        #expect((log.resets, log.recorded) == (2, 1))
+    }
+
+    @Test func theOldRowIsClearedOnceThenOnlyAfterTwoMinutes() {
         let scratch = ScratchDefaults("pflow.grant.once")
         defer { withExtendedLifetime(scratch) {} }
         let defaults = scratch.defaults
-        #expect(PermissionsManager.firstPress(forCopy: "copy-a", defaults: defaults))
-        #expect(!PermissionsManager.firstPress(forCopy: "copy-a", defaults: defaults))
-        #expect(!PermissionsManager.firstPress(forCopy: "copy-a", defaults: defaults))
-        #expect(PermissionsManager.firstPress(forCopy: "copy-b", defaults: defaults), "an update is a new copy: its old row is cleared once")
-        #expect(!PermissionsManager.firstPress(forCopy: "copy-b", defaults: defaults))
-        #expect(!PermissionsManager.thisCopy().isEmpty)
-        #expect(PermissionsManager.thisCopy() == PermissionsManager.thisCopy())
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(PermissionsManager.mayClear(copy: "copy-a", now: start, defaults: defaults), "first press for this copy")
+        PermissionsManager.recordCleared(copy: "copy-a", now: start, defaults: defaults)
+        #expect(!PermissionsManager.mayClear(copy: "copy-a", now: start.addingTimeInterval(5), defaults: defaults))
+        #expect(!PermissionsManager.mayClear(copy: "copy-a", now: start.addingTimeInterval(119), defaults: defaults))
+        #expect(PermissionsManager.mayClear(copy: "copy-a", now: start.addingTimeInterval(120), defaults: defaults),
+                "a row an older copy wrote again can still be cleared")
+        #expect(PermissionsManager.mayClear(copy: "copy-b", now: start.addingTimeInterval(5), defaults: defaults),
+                "an update is a new copy: its old row is cleared on its first press")
+        #expect(PermissionsManager.mayClear(copy: "copy-a", now: start.addingTimeInterval(-60), defaults: defaults),
+                "a clock set back never blocks clearing")
     }
 
     @Test func trustedAlreadyDoesNothing() async {
