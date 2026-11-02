@@ -56,6 +56,8 @@ final class TakeTarget {
     var returnBeforeTake = false
     /// The take always speaks this sentence (an index into `sentences`).
     var fixedSentence: Int?
+    /// The take speaks this and finishes with this instead (a finished text in paragraphs).
+    var fixedPair: (String, String)?
     /// Another window of the same app holds another target: raise this one's window before each take.
     var raiseWindow = false
 
@@ -367,14 +369,15 @@ final class TakeHarness {
             WebAppAccessibility.enable(app)
             await pause(1.5)
             made = TakeTarget(name: name, app: app, windowTitle: pageTitle)
-        case "t3", "t3empty":
+        case "t3", "t3empty", "t3para", "t3paraempty":
             // T3 Code (Electron): its composer, a new thread without a project.
             guard let app = await open([], bundle: "com.t3tools.t3code") else { return nil }
             _ = await waitFor(20) { title(app.processIdentifier) != nil }
             WebAppAccessibility.enable(app)
             await pause(3)
             made = TakeTarget(name: name, app: app, windowTitle: title(app.processIdentifier) ?? "T3 Code")
-            made?.emptyBeforeTake = name == "t3empty"
+            made?.emptyBeforeTake = name.hasSuffix("empty")
+            if name.hasPrefix("t3para") { made?.fixedPair = Self.paragraphPair }
         case "t3two":
             // A second T3 Code window of the same app (the owner's two-window case), opened from its menus.
             guard let first = await openTarget("t3") else { return nil }
@@ -524,6 +527,11 @@ final class TakeHarness {
         ("we don't need the old map today", "We don't need the old map today."),
     ]
 
+    /// A finished text in two paragraphs, as cleanup makes of a long take (owner 2026-11-01: in T3 Code
+    /// the caret ended inside the last word after such a take).
+    static let paragraphPair = ("the harbor lights glow softly tonight and seven blue kites drift over the dunes",
+                                "The harbor lights glow softly tonight.\n\nSeven blue kites drift over the dunes.")
+
     static func updates(_ spoken: String) -> [String] {
         let words = spoken.split(separator: " ").map(String.init)
         return (2...words.count).map { words.prefix($0).joined(separator: " ") } + [spoken]
@@ -545,7 +553,7 @@ final class TakeHarness {
     func take(_ target: TakeTarget, mode: LiveTextMode, label: String,
               keepCopy: Bool = false, beforeBegin: (() async -> Void)? = nil, during: (() async -> Void)? = nil, beforeFinish: (() async -> Void)? = nil,
               afterFinish: (() async -> Void)? = nil) async -> [String: Any] {
-        let (spoken, final) = Self.sentences[target.fixedSentence ?? (takeIndex % Self.sentences.count)]
+        let (spoken, final) = target.fixedPair ?? Self.sentences[target.fixedSentence ?? (takeIndex % Self.sentences.count)]
         takeIndex += 1
         var record: [String: Any] = ["target": target.name, "mode": mode.rawValue, "label": label]
         guard await activate(target.app) else { record["error"] = "could not bring the app forward"; return record }
@@ -613,12 +621,25 @@ final class TakeHarness {
             record["wordsOnLine2"] = after.hasPrefix("\n") && after.dropFirst().trimmingCharacters(in: .whitespaces).hasPrefix(final)
         }
         record["unchanged"] = after == before
+        // Where the caret is once the take is done, against the end of the finished text in the field.
+        if let field = focused(target.app.processIdentifier), let raw = attribute(field, kAXSelectedTextRangeAttribute),
+           CFGetTypeID(raw) == AXValueGetTypeID() {
+            var range = CFRange()
+            if AXValueGetValue(raw as! AXValue, .cfRange, &range) {
+                let value = (string(field, kAXValueAttribute) ?? "") as NSString
+                let end = value.range(of: final, options: .backwards)
+                record["caretAfter"] = range.location
+                record["valueLength"] = value.length
+                record["finalEndInValue"] = end.location == NSNotFound ? -1 : NSMaxRange(end)
+                record["caretAtFinalEnd"] = end.location != NSNotFound && range.location == NSMaxRange(end) && range.length == 0
+            }
+        }
         record["beforeTail"] = String(before.suffix(60))
         record["afterTail"] = String(after.suffix(90))
         record["final"] = final
         record["before"] = before
         record["after"] = after
-        note("\(label) \(target.name) \(mode.rawValue): live \(liveSeen) first \(firstLiveMs) ms, once \(record["landedOnce"]!), outcome \(record["outcome"]!), card \(hud.model.livePreview) \(hud.model.reason ?? "")")
+        note("\(label) \(target.name) \(mode.rawValue): live \(liveSeen) first \(firstLiveMs) ms, once \(record["landedOnce"]!), outcome \(record["outcome"]!), card \(hud.model.livePreview) \(hud.model.reason ?? ""), caret \(record["caretAfter"] ?? "?") end \(record["finalEndInValue"] ?? "?") len \(record["valueLength"] ?? "?")")
         hud.hide(after: 0)
         await pause(0.4)
         return record

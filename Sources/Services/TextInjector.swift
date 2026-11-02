@@ -188,6 +188,9 @@ final class TextInjector: TextInjecting {
     private var inputMethodPending: String?
     /// How long the first marks have to show in the target field before they are taken back out.
     static let confirmWithin: TimeInterval = 0.7
+    /// The same in web content (Chromium, Electron): its text reaches Accessibility later, more so
+    /// right after a click from one web view into another in the same window (owner 2026-11-01, T3 Code).
+    static let confirmWithinWeb: TimeInterval = 1.6
     /// Extra reads, 50 ms apart, of a field that still reads as before a paste (a slow app).
     static let lateReads = 30
     var inputMethod = InputMethodLink.shared
@@ -532,8 +535,12 @@ final class TextInjector: TextInjecting {
     private func lookForFirstMarks() {
         guard let session = inputMethodTake else { return }
         let started = Date()
+        let within = targetField.map(isWebContent) == true ? Self.confirmWithinWeb : Self.confirmWithin
         inputMethodCheck = Task { [weak self] in
+            var looks = 0
             while let self, self.inputMethodTake == session, self.inputMethodStopped == nil, !Task.isCancelled {
+                looks += 1
+                if looks % 5 == 0, self.marksAtCaret(settled: 0.05) == nil, self.adoptFocusedFieldShowingMarks() { continue }
                 if let seq = self.marksAtCaret(settled: 0.05) {
                     let probation = self.inputMethod.provisional
                     var again: String?
@@ -552,7 +559,8 @@ final class TextInjector: TextInjecting {
                     }
                     return
                 }
-                if Date().timeIntervalSince(started) > Self.confirmWithin {
+                if Date().timeIntervalSince(started) > within {
+                    self.noteFocusAtWithdraw()
                     await self.withdrawToOtherPaths(session: session)
                     return
                 }
@@ -612,6 +620,55 @@ final class TextInjector: TextInjecting {
         guard let targetField, let context = caretContext, let read = readTarget(targetField) else { return false }
         return InputMethodFinish.clean(read).trimmingCharacters(in: .newlines)
             == InputMethodFinish.clean(context.before + context.after).trimmingCharacters(in: .newlines)
+    }
+
+    /// The app's focused field now, when it is not the one captured at the start and it shows pFlow's
+    /// newest marked words right before its caret: that field becomes the take's target, its text without
+    /// the words as the text before the take. Chromium can report the old element as focused for a while
+    /// after a click from one web view into another. Never after a key or click of the person's.
+    private func adoptFocusedFieldShowingMarks() -> Bool {
+        guard let app = targetApp, let now = focusedField(app), targetField.map({ !CFEqual(now, $0) }) ?? true,
+              PersonInput.shared.acted(since: capturedAt) != true,
+              let words = inputMethod.newestMarked, !words.isEmpty,
+              let value = attribute(now, kAXValueAttribute) as? String,
+              attribute(now, kAXSubroleAttribute) as? String != kAXSecureTextFieldSubrole,
+              let at = Self.marksPlace(value: value, caret: selection(now), words: words) else { return false }
+        targetField = now
+        fieldUnreadable = false
+        originalValue = (value as NSString).replacingCharacters(in: NSRange(location: at, length: (words as NSString).length), with: "")
+        originalSelection = CFRange(location: at, length: 0)
+        placeholder = EditorPlaceholder.start(value: originalValue, placeholderText: attribute(now, "AXPlaceholderValue") as? String,
+                                              markedEmpty: false, webContent: isWebContent(now))
+        targetIsSecure = false
+        ReasonLog.note("input method words seen in the field focused now: it is the take's target")
+        return true
+    }
+
+    /// Where `words` sit in a field's `value`: right before its caret, else their only place in it.
+    /// Nil when they are not there, or twice with neither before the caret.
+    nonisolated static func marksPlace(value: String, caret: CFRange?, words: String) -> Int? {
+        let text = value as NSString, length = (words as NSString).length
+        guard length > 0 else { return nil }
+        if let caret, caret.length == 0, caret.location >= length, caret.location <= text.length,
+           text.substring(with: NSRange(location: caret.location - length, length: length)) == words {
+            return caret.location - length
+        }
+        let first = text.range(of: words), last = text.range(of: words, options: .backwards)
+        guard first.location != NSNotFound, first.location == last.location else { return nil }
+        return first.location
+    }
+
+    /// Steps only, for the troubleshooting log: whether the app's focus moved since the take began.
+    private func noteFocusAtWithdraw() {
+        guard let app = targetApp else { return }
+        guard let now = focusedField(app) else { ReasonLog.note("first marks not seen: the app reports no focused field"); return }
+        let readable = attribute(now, kAXValueAttribute) is String
+        switch (targetField.map({ CFEqual(now, $0) }) == true, readable) {
+        case (true, true): ReasonLog.note("first marks not seen: same focused field, readable")
+        case (true, false): ReasonLog.note("first marks not seen: same focused field, unreadable")
+        case (false, true): ReasonLog.note("first marks not seen: the app's focus moved to another field, readable")
+        case (false, false): ReasonLog.note("first marks not seen: the app's focus moved to another field, unreadable")
+        }
     }
 
     /// The first marks never showed in the target: out of that client they come, and only once the
@@ -808,12 +865,69 @@ final class TextInjector: TextInjecting {
     private func landedAfterCommit(_ final: String) async -> Bool {
         guard let targetField, originalValue != nil else { return false }
         let expected = placeholderStart ? final : expectedValue(inserting: final)
+        let committedAt = PersonInput.now()
         for _ in 0..<10 {
             let read = readTarget(targetField)
             if EditorPlaceholder.landed(read, expected: expected, start: originalValue, startedAsPlaceholder: placeholderStart) { return true }
+            // An app that keeps one line break where the text has a blank line between paragraphs
+            // (T3 Code): the same text, but its caret ends that many characters early, inside the
+            // last word (owner 2026-11-01). The caret goes after the finished text.
+            if let read, let expected, Self.sameButParagraphBreaks(read, expected) {
+                ReasonLog.note("finished text seen with single line breaks between paragraphs")
+                keepCaretAfterFinished(committedAt: committedAt)
+                return true
+            }
             try? await Task.sleep(for: .milliseconds(100))
         }
         return false
+    }
+
+    /// The same text, except that blank lines between paragraphs read as single line breaks.
+    nonisolated static func sameButParagraphBreaks(_ read: String, _ expected: String) -> Bool {
+        func single(_ text: String) -> String { text.replacingOccurrences(of: "\n{2,}", with: "\n", options: .regularExpression) }
+        return read != expected && expected.contains("\n\n") && single(read) == single(expected)
+    }
+
+    /// A caret or selection the app left inside the finished text (`start..<end`), not already a caret at its end.
+    nonisolated static func caretNeedsMoving(_ now: CFRange, start: Int, end: Int) -> Bool {
+        guard now.location >= start, now.length >= 0, now.location + now.length <= end else { return false }
+        return !(now.location == end && now.length == 0)
+    }
+
+    /// Where the caret belongs once the finished text is in: before the text that followed the
+    /// caret when the take began. Nil when the field no longer ends with that text.
+    nonisolated static func caretAfterFinished(read: String, after: String) -> Int? {
+        guard read.hasSuffix(after) else { return nil }
+        return (read as NSString).length - (after as NSString).length
+    }
+
+    /// The app can move its caret into the finished text, or select it, after it re-draws the field
+    /// (T3 Code, VM 2026-11-01: the whole finished text selected, so the next key replaced it): for a
+    /// moment after the commit, a caret or selection inside the finished text becomes a caret at its
+    /// end. Never when the person has pressed a key or clicked since the commit.
+    private func keepCaretAfterFinished(committedAt: UInt64) {
+        guard let field = targetField, let context = caretContext else { return }
+        let start = (context.before as NSString).length
+        Task { @MainActor [weak self] in
+            var moved = false
+            for wait in [0, 150, 300, 500, 700] {
+                if wait > 0 { try? await Task.sleep(for: .milliseconds(wait)) }
+                guard let self, PersonInput.shared.acted(since: committedAt) != true,
+                      let read = self.readTarget(field),
+                      let end = Self.caretAfterFinished(read: read, after: context.after),
+                      let now = self.selection(field) else { return }
+                guard Self.caretNeedsMoving(now, start: start, end: end) else { continue }
+                var range = CFRange(location: end, length: 0)
+                if let value = AXValueCreate(.cfRange, &range),
+                   AXUIElementSetAttributeValue(field, kAXSelectedTextRangeAttribute as CFString, value) == .success {
+                    moved = true
+                } else {
+                    ReasonLog.note("the caret could not be put after the finished text")
+                    return
+                }
+            }
+            if moved { ReasonLog.note("the caret put after the finished text") }
+        }
     }
 
     func finalizeLive(session: String, text: String) -> LiveInlineFinal {

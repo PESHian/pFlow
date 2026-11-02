@@ -19,6 +19,8 @@ final class RealPipeline {
     let injector = TextInjector()
     let hud = HUDController()
     let coordinator: RecordingCoordinator
+    /// Set for a take: the finished text is this instead of the cleaned-up words (paragraph targets).
+    let finished: FinishedTextOverride
     private let hotkeys = ActivationKeyMonitor()
 
     init(folder: URL) {
@@ -30,10 +32,11 @@ final class RealPipeline {
                                        appleEngine: { ReplayTranscriber.forCurrentFile() },
                                        appleLiveEngine: { ReplayTranscriber.forCurrentFile(fast: true) })
         session.selectedEngine = { .apple }
-        let cleanup = TranscriptCleanupService()
+        let cleanup = FinishedTextOverride(base: TranscriptCleanupService())
+        finished = cleanup
         let cleanupOn = (UserDefaults.standard.object(forKey: "cleanupEnabled") as? Bool) ?? true
         coordinator = RecordingCoordinator(session: session, injector: injector, history: history, hud: hud, sounds: HarnessSounds(),
-                                           cleaner: cleanup, cleanupEnabled: { cleanupOn }, vocabulary: { [] }, deviceName: { nil },
+                                           cleaner: cleanup, cleanupEnabled: { cleanupOn || cleanup.text != nil }, vocabulary: { [] }, deviceName: { nil },
                                            liveTextMode: { LiveTextMode.saved() })
         InputMethodInstall.ensure()
         InputMethodLink.shared.start()
@@ -42,6 +45,18 @@ final class RealPipeline {
         hotkeys.key = ActivationKey.saved()
         hotkeys.start()
         hud.prepare()
+    }
+}
+
+/// The real cleanup, or a fixed finished text for one take (a long take's paragraphs).
+final class FinishedTextOverride: TranscriptCleaning {
+    let base: TranscriptCleaning
+    var text: String?
+    init(base: TranscriptCleaning) { self.base = base }
+    var isAvailable: Bool { text != nil || base.isAvailable }
+    func process(_ input: String, cleanup: Bool, vocabulary: [String]) async -> String {
+        if let text { return text }
+        return await base.process(input, cleanup: cleanup, vocabulary: vocabulary)
     }
 }
 
@@ -110,6 +125,8 @@ extension TakeHarness {
         if target.name != "vscode", target.field != nil, !quick { await caretToEnd(target) }
         var before = quick ? Self.lastAfter[target.name] ?? "" : await target.readBack() ?? ""
         if target.name.contains("tiptap"), before.trimmingCharacters(in: .whitespacesAndNewlines) == "Write a message" { before = "" }
+        pipeline.finished.text = target.fixedPair?.1
+        defer { pipeline.finished.text = nil }
         try? audio.path.write(to: pipeline.next, atomically: true, encoding: .utf8)
         let sourceBefore = InputMethodInstall.currentSourceID() ?? "?"
         let board = NSPasteboard.general
@@ -164,6 +181,16 @@ extension TakeHarness {
         }
         _ = await waitFor(25) { pipeline.coordinator.state == .idle }
         Self.lastIdleAt = Date()
+        // The caret right as the take ends and a moment later (an app can move it after re-drawing).
+        var carets: [Int] = []
+        for wait in [0.0, 0.3, 0.8] {
+            if wait > 0 { await pause(wait) }
+            if let field = focused(target.app.processIdentifier), let raw = attribute(field, kAXSelectedTextRangeAttribute),
+               CFGetTypeID(raw) == AXValueGetTypeID() {
+                var range = CFRange()
+                if AXValueGetValue(raw as! AXValue, .cfRange, &range) { carets.append(range.location) }
+            }
+        }
         await pause(quickRun ? 0.25 : 1.0)
         try? FileManager.default.removeItem(at: framesOn)
         let after = await target.readBack() ?? ""
@@ -190,6 +217,23 @@ extension TakeHarness {
         record["sourceRestored"] = (InputMethodInstall.currentSourceID() ?? "") == sourceBefore
         record["clipboardUntouched"] = board.changeCount == clipboardCount && board.string(forType: .string) == marker
         record["reasons"] = ReasonLog.recent
+        record["caretsAtEnd"] = carets.map(String.init).joined(separator: ",")
+        if target.fixedPair != nil {
+            // The real caret: a person's key after the take, and where its letter lands.
+            personType("Z")
+            await pause(0.6)
+            let typed = await target.readBack() ?? ""
+            let z = (typed as NSString).range(of: "Z", options: .backwards)
+            record["typedAt"] = z.location == NSNotFound ? "none" : "\(z.location) of \((typed as NSString).length)"
+        }
+        if let field = focused(target.app.processIdentifier), let raw = attribute(field, kAXSelectedTextRangeAttribute),
+           CFGetTypeID(raw) == AXValueGetTypeID() {
+            var range = CFRange()
+            if AXValueGetValue(raw as! AXValue, .cfRange, &range) {
+                record["caretAfter"] = range.location
+                record["valueLength"] = ((string(field, kAXValueAttribute) ?? "") as NSString).length
+            }
+        }
         record["keyTrace"] = KeyLiveTextField.trace
         record["startError"] = pipeline.coordinator.lastStartError ?? NSNull()
         pipeline.coordinator.lastStartError = nil
@@ -197,7 +241,7 @@ extension TakeHarness {
         record["inputMethod"] = ReasonLog.recent.contains { $0.hasPrefix("finished text committed") }
         record["probation"] = ReasonLog.recent.contains("input method on probation: no activation came for this take")
         record["attachTimeout"] = ReasonLog.recent.contains { $0.hasPrefix("input method attach: timeout") }
-        note("\(label) \(target.name) \(way)\(quick ? " quick gap \(record["gapMs"]!) ms" : ""): live \(liveSeen) first \(firstLiveMs) ms, preview \(previewSeen), once \(record["landedOnce"]!), outcome \(record["outcome"]!), source \(sourceBefore)→\(sourceDuring)→\(record["sourceAfter"]!), clipboard \(record["clipboardUntouched"]!), im \(record["inputMethod"]!)")
+        note("\(label) \(target.name) \(way)\(quick ? " quick gap \(record["gapMs"]!) ms" : ""): live \(liveSeen) first \(firstLiveMs) ms, preview \(previewSeen), once \(record["landedOnce"]!), outcome \(record["outcome"]!), source \(sourceBefore)→\(sourceDuring)→\(record["sourceAfter"]!), clipboard \(record["clipboardUntouched"]!), im \(record["inputMethod"]!), caret \(record["caretAfter"] ?? "?") of \(record["valueLength"] ?? "?") (at the end \(record["caretsAtEnd"] ?? "?"), a key typed lands at \(record["typedAt"] ?? "-"))")
         pipeline.hud.hide(after: 0)
         if !quickRun { await pause(0.5) }
         return record
