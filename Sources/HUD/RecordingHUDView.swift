@@ -317,7 +317,7 @@ private struct LivePreviewCard<Status: View>: View {
         HStack(spacing: Theme.s2) {
             Image(systemName: "accessibility")
                 .foregroundStyle(Theme.accent)
-            Text("pFlow needs Accessibility to type. Press Grant, then turn on pFlow.")
+            Text("pFlow needs Accessibility to type. Press Grant, then turn on “\(PermissionsManager.listedName)”.")
                 .font(.system(size: 11))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: Theme.s2)

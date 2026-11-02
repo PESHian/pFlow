@@ -2,9 +2,10 @@ import Testing
 @testable import Yap
 
 struct SpokenTemplateCommandTests {
-    @Test func theGeneralTemplateIsPickedOnlyByItsName() throws {
+    @Test func theGeneralTemplateIsPickedByItsNameAndPhrasesButNotByOrdinaryWords() throws {
         let general = DictationTemplate.general
-        for opening in ["Use the general notes template.", "Write this as general notes.", "This is general notes."] {
+        for opening in ["Use the general notes template.", "Write this as general notes.", "This is general notes.",
+                        "Use the notes template.", "Write this as quick notes."] {
             let route = try #require(SpokenTemplateCommand.parse(opening + " Call Sam about the roof.", templates: [general]))
             #expect(route.template.id == general.id)
             #expect(route.text == "Call Sam about the roof.")

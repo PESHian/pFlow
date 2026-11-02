@@ -12,11 +12,13 @@ struct PermissionGrantTests {
         var trusted: [Bool] = []
         var showing: [Bool] = []
         var watches = 0, promptsAtWatch = -1
+        var firstPress = true
         var suspend: (() async -> Void)?
         func steps(trusted: Bool) -> PermissionsManager.AccessibilityGrantSteps {
             .init(
                 isTrusted: { [self] in self.trusted.isEmpty ? trusted : self.trusted.removeFirst() },
                 resetOwnRow: { [self] in resets += 1 },
+                firstPressForThisCopy: { [self] in firstPress },
                 watchForPrompt: { [self] in
                     watches += 1; promptsAtWatch = prompts
                     return { [self] in showing.isEmpty ? false : showing.removeFirst() }
@@ -26,6 +28,30 @@ struct PermissionGrantTests {
                 wait: { [self] in waits += 1; await suspend?() }
             )
         }
+    }
+
+    /// Owner 2026-11-01: he turned pFlow on, it still said Grant, he pressed
+    /// Grant again, and every press wiped the switch he had just turned on.
+    @Test func anotherPressNeverClearsTheSwitch() async {
+        let log = Log()
+        log.firstPress = false
+        log.showing = [true]
+        let outcome = await PermissionsManager.grantAccessibility(log.steps(trusted: false))
+        #expect(outcome == .promptShown)
+        #expect((log.resets, log.prompts) == (0, 1), "no clearing after the first press for this copy")
+    }
+
+    @Test func theOldSwitchIsClearedOncePerCopyOfPFlow() {
+        let scratch = ScratchDefaults("pflow.grant.once")
+        defer { withExtendedLifetime(scratch) {} }
+        let defaults = scratch.defaults
+        #expect(PermissionsManager.firstPress(forCopy: "copy-a", defaults: defaults))
+        #expect(!PermissionsManager.firstPress(forCopy: "copy-a", defaults: defaults))
+        #expect(!PermissionsManager.firstPress(forCopy: "copy-a", defaults: defaults))
+        #expect(PermissionsManager.firstPress(forCopy: "copy-b", defaults: defaults), "an update is a new copy: its old row is cleared once")
+        #expect(!PermissionsManager.firstPress(forCopy: "copy-b", defaults: defaults))
+        #expect(!PermissionsManager.thisCopy().isEmpty)
+        #expect(PermissionsManager.thisCopy() == PermissionsManager.thisCopy())
     }
 
     @Test func trustedAlreadyDoesNothing() async {
@@ -97,11 +123,11 @@ struct PermissionGrantTests {
         let log = Log()
         await permissions.grantAccessibility(steps: log.steps(trusted: false))
         permissions.accessibility = false
-        #expect(permissions.accessibilityHint == "Turn on pFlow in the list that opened.")
+        #expect(permissions.accessibilityHint == "Turn on “\(PermissionsManager.listedName)” in the list that opened.")
         log.showing = [true]
         await permissions.grantAccessibility(steps: log.steps(trusted: false))
         permissions.accessibility = false
-        #expect(permissions.accessibilityHint == "Choose Open System Settings in Apple's message, then turn on pFlow.")
+        #expect(permissions.accessibilityHint == "Choose Open System Settings in Apple's message, then turn on “\(PermissionsManager.listedName)”.")
         permissions.accessibility = true
         #expect(permissions.accessibilityHint == nil, "no hint once granted")
     }

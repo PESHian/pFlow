@@ -4,6 +4,7 @@ import Speech
 import ApplicationServices
 import Carbon
 import Observation
+import Security
 
 @MainActor
 @Observable
@@ -47,6 +48,10 @@ final class PermissionsManager {
         /// shows as ticked in System Settings while this build is not trusted,
         /// and while any row exists Apple's prompt will not show again.
         var resetOwnRow: () async -> Void
+        /// True on the first press for this copy of pFlow, then never again.
+        /// The old row is cleared once; a switch the person turns on after
+        /// that is never wiped by pressing Grant again.
+        var firstPressForThisCopy: () -> Bool
         /// Starts watching for Apple's prompt; the closure it returns answers
         /// whether a prompt window has appeared since the watch began.
         var watchForPrompt: () -> () -> Bool
@@ -64,7 +69,7 @@ final class PermissionsManager {
     /// nothing more is opened; a prompt that shows up later is left alone.
     static func grantAccessibility(_ steps: AccessibilityGrantSteps) async -> AccessibilityGrantOutcome {
         if steps.isTrusted() { return .alreadyTrusted }
-        await steps.resetOwnRow()
+        if steps.firstPressForThisCopy() { await steps.resetOwnRow() }
         let promptAppeared = steps.watchForPrompt()
         steps.prompt()
         for _ in 0..<promptWaits {
@@ -97,8 +102,8 @@ final class PermissionsManager {
     var accessibilityHint: String? {
         guard !accessibility else { return nil }
         switch accessibilityGrant {
-        case .promptShown: return "Choose Open System Settings in Apple's message, then turn on pFlow."
-        case .settingsOpened: return "Turn on pFlow in the list that opened."
+        case .promptShown: return "Choose Open System Settings in Apple's message, then turn on “\(Self.listedName)”."
+        case .settingsOpened: return "Turn on “\(Self.listedName)” in the list that opened."
         case .alreadyTrusted, .granted, nil: return nil
         }
     }
@@ -107,6 +112,7 @@ final class PermissionsManager {
         AccessibilityGrantSteps(
             isTrusted: { AXIsProcessTrusted() },
             resetOwnRow: { await Self.resetOwnAccessibilityRow() },
+            firstPressForThisCopy: { Self.firstPress(forCopy: Self.thisCopy(), defaults: .standard) },
             watchForPrompt: { Self.watchForAccessibilityPrompt() },
             prompt: { Self.promptForAccessibility() },
             openSettings: { Self.openPrivacyPane(.accessibility) },
@@ -199,6 +205,34 @@ final class PermissionsManager {
             SFSpeechRecognizer.requestAuthorization { _ in continuation.resume() }
         }
         refresh()
+    }
+
+    /// The name System Settings lists pFlow under: its file name, so
+    /// "pFlow by Pesh" once installed from the DMG.
+    nonisolated static var listedName: String { Bundle.main.bundleURL.deletingPathExtension().lastPathComponent }
+
+    nonisolated static let clearedForKey = "pflow.accessibility.clearedFor"
+
+    /// The rule behind `firstPressForThisCopy`: true once per copy, kept in `defaults`.
+    nonisolated static func firstPress(forCopy copy: String, defaults: UserDefaults) -> Bool {
+        guard defaults.string(forKey: clearedForKey) != copy else { return false }
+        defaults.set(copy, forKey: clearedForKey)
+        return true
+    }
+
+    /// This copy of pFlow as macOS privacy settings tell copies apart: its
+    /// code signature's unique hash (else its path and build number).
+    nonisolated static func thisCopy() -> String {
+        var code: SecCode?
+        var staticCode: SecStaticCode?
+        var info: CFDictionary?
+        if SecCodeCopySelf([], &code) == errSecSuccess, let code,
+           SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+           SecCodeCopySigningInformation(staticCode, [], &info) == errSecSuccess,
+           let unique = (info as? [String: Any])?[kSecCodeInfoUnique as String] as? Data {
+            return unique.map { String(format: "%02x", $0) }.joined()
+        }
+        return Bundle.main.bundlePath + "#" + (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "")
     }
 
     /// macOS privacy rows are keyed by the app's signature. Test builds now
