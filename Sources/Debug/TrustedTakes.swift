@@ -58,6 +58,8 @@ final class TakeTarget {
     var fixedSentence: Int?
     /// The take speaks this and finishes with this instead (a finished text in paragraphs).
     var fixedPair: (String, String)?
+    /// Runs right before each real take starts (the person's clicks that lead up to it).
+    var beforeEachTake: (() async -> Void)?
     /// Another window of the same app holds another target: raise this one's window before each take.
     var raiseWindow = false
 
@@ -378,6 +380,51 @@ final class TakeHarness {
             made = TakeTarget(name: name, app: app, windowTitle: title(app.processIdentifier) ?? "T3 Code")
             made?.emptyBeforeTake = name.hasSuffix("empty")
             if name.hasPrefix("t3para") { made?.fixedPair = Self.paragraphPair }
+        case "t3right", "t3browser":
+            // T3 Code with its right panel and its browser open (owner 2026-11-01): before each take the
+            // person clicks into the browser's page and types there, then clicks into the message box.
+            guard let base = await openTarget("t3empty") else { return nil }
+            let app = base.app, root = AXUIElementCreateApplication(app.processIdentifier)
+            if find(root, role: "AXButton", description: "Browser") == nil, find(root, role: "AXButton", description: "Close Browser") == nil,
+               let toggle = find(root, role: "AXCheckBox", description: "Toggle right panel") {
+                AXUIElementPerformAction(toggle, kAXPressAction as CFString)
+                await pause(2.5)
+            }
+            if find(root, role: "AXButton", description: "Close Browser") == nil, let browser = find(root, role: "AXButton", description: "Browser") {
+                AXUIElementPerformAction(browser, kAXPressAction as CFString)
+                await pause(4)
+            }
+            if let address = find(root, role: "AXTextField", description: ""), let box = frame(of: address) ?? nil {
+                personClick(at: CGPoint(x: box.midX, y: box.midY))
+                await pause(0.5)
+                AXUIElementSetAttributeValue(address, kAXValueAttribute as CFString, "data:text/html,<title>Test page</title><textarea autofocus rows=8 cols=40></textarea>" as CFString)
+                personKey(36)
+                await pause(3)
+                note("t3 browser page: " + (find(root, role: "AXWebArea", description: "Test page") != nil ? "loaded" : "not seen"))
+            } else { note("t3 browser: no address field") }
+            // The message box is the take's field (the common setup below reads the focused one).
+            if let message = find(root, role: "AXTextArea", description: "Message"), let box = frame(of: message) {
+                personClick(at: CGPoint(x: box.minX + 30, y: box.midY))
+                await pause(0.6)
+            }
+            made = TakeTarget(name: name, app: app, windowTitle: base.windowTitle)
+            made?.field = base.field
+            made?.readBack = base.readBack
+            made?.emptyBeforeTake = true
+            made?.beforeEachTake = { [weak self] in
+                guard let self else { return }
+                let root = AXUIElementCreateApplication(app.processIdentifier)
+                if let address = self.find(root, role: "AXTextField", description: ""), let box = self.frame(of: address) ?? nil {
+                    self.personClick(at: CGPoint(x: box.midX, y: box.maxY + 160))
+                    await self.pause(0.6)
+                    self.personType("test ")
+                    await self.pause(0.8)
+                }
+                if let message = self.find(root, role: "AXTextArea", description: "Message"), let box = self.frame(of: message) ?? nil {
+                    self.personClick(at: CGPoint(x: box.minX + 30, y: box.midY))
+                    await self.pause(0.4)
+                }
+            }
         case "t3two":
             // A second T3 Code window of the same app (the owner's two-window case), opened from its menus.
             guard let first = await openTarget("t3") else { return nil }
@@ -645,6 +692,53 @@ final class TakeHarness {
         return record
     }
 
+    /// The first element under `root` with this role whose description (or title) starts with `description`.
+    func find(_ root: AXUIElement, role: String, description: String, depth: Int = 0) -> AXUIElement? {
+        guard depth < 45 else { return nil }
+        if string(root, kAXRoleAttribute) == role,
+           [string(root, kAXDescriptionAttribute), string(root, kAXTitleAttribute)].contains(where: { ($0 ?? "\u{1}").hasPrefix(description) }) { return root }
+        for child in children(root) { if let hit = find(child, role: role, description: description, depth: depth + 1) { return hit } }
+        return nil
+    }
+
+    /// The app's menus and the controls of its front window (roles, titles, descriptions), to find how
+    /// to reach a part of it (T3 Code's browser pane).
+    func axDump(_ name: String) async -> [String: Any] {
+        guard let target = await openTarget(name) else { return ["spec": "axdump:\(name)", "error": "could not open"] }
+        let app = AXUIElementCreateApplication(target.app.processIdentifier)
+        var lines: [String] = []
+        if let bar = element(app, kAXMenuBarAttribute) {
+            for menu in children(bar) {
+                let title = string(menu, kAXTitleAttribute) ?? "?"
+                let items = children(menu).flatMap { children($0) }.compactMap { item -> String? in
+                    guard let t = string(item, kAXTitleAttribute), !t.isEmpty else { return nil }
+                    var key = ""
+                    if let c = string(item, "AXMenuItemCmdChar"), !c.isEmpty {
+                        let mods = (attribute(item, "AXMenuItemCmdModifiers") as? Int) ?? 0
+                        key = " [" + (mods & 1 != 0 ? "shift+" : "") + (mods & 2 != 0 ? "opt+" : "") + (mods & 4 != 0 ? "ctrl+" : "") + (mods & 8 != 0 ? "" : "cmd+") + c + "]"
+                    }
+                    return t + key
+                }
+                lines.append("menu \(title): " + items.joined(separator: " | "))
+            }
+        }
+        var seen = 0
+        func walk(_ e: AXUIElement, _ depth: Int) {
+            guard depth < 40, seen < 400 else { return }
+            let role = string(e, kAXRoleAttribute) ?? "?"
+            if ["AXButton", "AXTab", "AXRadioButton", "AXCheckBox", "AXWebArea", "AXTextArea", "AXTextField", "AXLink", "AXMenuButton", "AXPopUpButton"].contains(role) {
+                seen += 1
+                let t = [string(e, kAXTitleAttribute), string(e, kAXDescriptionAttribute), string(e, kAXHelpAttribute), string(e, "AXDOMIdentifier")]
+                    .compactMap { $0 }.filter { !$0.isEmpty }.map { String($0.prefix(60)) }.joined(separator: " / ")
+                lines.append(String(repeating: " ", count: min(depth, 12)) + role + " " + t)
+            }
+            for child in children(e) { walk(child, depth + 1) }
+        }
+        if let window = element(app, kAXFocusedWindowAttribute) ?? children(app).first { walk(window, 0) }
+        for line in lines { note(line) }
+        return ["spec": "axdump:\(name)", "lines": lines]
+    }
+
     /// "target:mode:count", or a guard check by name.
     func run(_ spec: String) async -> [String: Any] {
         let parts = spec.split(separator: ":").map(String.init)
@@ -658,6 +752,7 @@ final class TakeHarness {
             return ["spec": spec, "takes": takes, "exactlyOnce": once, "withLiveWords": live, "count": count]
         }
         if parts.count == 2, parts[0] == "probe" { return await probe(parts[1]) }
+        if parts.count == 2, parts[0] == "axdump" { return await axDump(parts[1]) }
         if ["real", "realframes", "realguard", "keyprobe", "learnkey", "thumbs", "setup", "twowin", "updaterenders"].contains(parts[0]) { return await realRun(parts) }
         if parts.count == 2, parts[0] == "im" { return await imSpike(parts[1]) }
         if parts.count == 2, parts[0] == "imside" { return await imSide(parts[1]) }

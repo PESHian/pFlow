@@ -76,6 +76,31 @@ struct InputMethodInjectorTests {
         #expect(!world.sent.contains { $0.kind == .commit })
     }
 
+    /// Owner 2026-11-01, T3 Code: the first marks were not seen in time, taken back, and the client could
+    /// not be read to prove them gone ("unread"): the whole take ended on the card. At the end, when the
+    /// target field is still the app's focused one and reads exactly as at the start (twice), the
+    /// finished text goes in once by the usual checked paste. The app committing them, another field
+    /// focused, or the field holding anything new: the card, as before.
+    @Test func anUnreadTakeBackIsProvenByTheFieldAtTheEnd() async {
+        for (reason, focusedSame, read, expected) in [
+            ("unread", true, "Dear Sam,", LiveInlineFinal.notTyped),
+            ("committed", true, "Dear Sam,", LiveInlineFinal.kept(.otherWindow)),
+            ("unread", false, "Dear Sam,", LiveInlineFinal.kept(.otherWindow)),
+            ("unread", true, "Dear Sam, Bye", LiveInlineFinal.kept(.otherWindow)),
+        ] {
+            let world = World()
+            let (injector, link) = freshTake(world)
+            world.read = read
+            injector.focusedFieldNow = { focusedSame ? AXUIElementCreateApplication(getpid()) : AXUIElementCreateApplication(1) }
+            link.receive(.init(.marked, take: "t", seq: 1, ok: true))
+            #expect(await waitFor(2.5) { world.sent.contains { $0.kind == .cancel } })
+            link.receive(.init(.cleared, take: "t", ok: false, reason: reason))
+            let final = await injector.finishInputMethod(session: "t", text: "The harbor lights.")
+            #expect(final == expected, "\(reason), focused \(focusedSame), field \(read)")
+            #expect(!world.sent.contains { $0.kind == .commit })
+        }
+    }
+
     @Test func firstMarksProvenGoneLetTheTakeGoOnAnotherWay() async {
         let world = World()
         let (injector, _) = probationTake(world)

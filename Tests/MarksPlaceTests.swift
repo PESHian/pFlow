@@ -23,6 +23,12 @@ struct MarksPlaceTests {
                 "twice, and neither right before the caret: no way to tell which is pFlow's")
         #expect(TextInjector.marksPlace(value: "the harbor and the harbor", caret: CFRange(location: 25, length: 0), words: "the harbor") == 15)
         #expect(TextInjector.marksPlace(value: "anything", caret: nil, words: "") == nil)
+        #expect(TextInjector.marksPlace(value: "Dear Sam, Sorry", caret: CFRange(location: 0, length: 0), words: " So") == nil,
+                "part of a word is not pFlow's words")
+        #expect(TextInjector.marksPlace(value: "Dear Sam, So. Bye", caret: CFRange(location: 0, length: 0), words: " So") == 9)
+        #expect(TextInjector.marksPlace(value: "Mr. Harbor", caret: nil, words: "Harbor") == 4)
+        #expect(TextInjector.marksPlace(value: "Mr. Harbors", caret: nil, words: "Harbor") == nil)
+        #expect(TextInjector.marksPlace(value: "Seaharbor", caret: nil, words: "harbor") == nil, "the end of a longer word")
     }
 
     /// Owner 2026-11-01, T3 Code: its message box keeps one line break where pFlow's finished text has

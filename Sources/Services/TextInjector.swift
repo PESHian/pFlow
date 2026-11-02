@@ -184,6 +184,12 @@ final class TextInjector: TextInjecting {
     private var capturedAt: UInt64 = 0
     /// Looking for the first marks in the target field, or taking marks back out: finishing waits for it.
     private var inputMethodCheck: Task<Void, Never>?
+    /// For a moment after a take: keeps the caret after the finished text (keepCaretAfterFinished).
+    private var caretKeeper: Task<Void, Never>?
+    /// The first marks were taken back out and the client could not be read to prove them gone.
+    private var inputMethodTakeBackUnread = false
+    /// The target app's focused field now (replaceable in tests).
+    lazy var focusedFieldNow: () -> AXUIElement? = { [unowned self] in self.targetApp.flatMap(self.focusedField) }
     /// Words heard while the first marks are being looked for; marked once they are seen.
     private var inputMethodPending: String?
     /// How long the first marks have to show in the target field before they are taken back out.
@@ -251,6 +257,7 @@ final class TextInjector: TextInjecting {
         inputMethod.end()
         inputMethodTake = nil
         inputMethodStopped = nil
+        inputMethodTakeBackUnread = false
         inputMethodNothingShown = false
         inputMethodAllowed = true
         inputMethodCheck?.cancel()
@@ -278,6 +285,7 @@ final class TextInjector: TextInjecting {
         placeholder = nil
         inputMethodTake = session
         inputMethodStopped = nil
+        inputMethodTakeBackUnread = false
         inputMethodNothingShown = false
         inputMethodAllowed = true
         inputMethodStarted = PersonInput.now()
@@ -287,6 +295,9 @@ final class TextInjector: TextInjecting {
     /// The focused field of the captured app and what it holds, so a paste
     /// later can tell whether anything changed.
     private func captureField() {
+        // A new take: the last take's caret keeper must not move the caret this take starts from.
+        caretKeeper?.cancel()
+        caretKeeper = nil
         targetField = targetApp.flatMap(focusedField)
         // A field whose text Accessibility does not show is treated as unreadable.
         fieldUnreadable = targetField.map(FocusedElement.unreadable) ?? false
@@ -615,6 +626,18 @@ final class TextInjector: TextInjecting {
         return InputMethodFinish.showsAtCaret(read: readTarget(targetField), texts: [words], before: context.before, after: context.after)
     }
 
+    /// At the end of a take whose first marks were taken back without proof (owner 2026-11-01, T3 Code):
+    /// the target field is still the app's focused one and reads exactly as when the take began, twice,
+    /// a quarter second apart. Then nothing of pFlow's is in it, and the finished text can go in once
+    /// by the usual checked paste instead of only on the card. Anything else: no proof, the card.
+    private func takeBackProvenByTheField() async -> Bool {
+        guard targetReadable, let field = targetField, let now = focusedFieldNow(), CFEqual(now, field),
+              fieldShowsCaretContext() else { return false }
+        try? await Task.sleep(for: .milliseconds(250))
+        guard let again = focusedFieldNow(), CFEqual(again, field) else { return false }
+        return fieldShowsCaretContext()
+    }
+
     /// The target field shows what it held around the caret when the take began, nothing of pFlow's.
     private func fieldShowsCaretContext() -> Bool {
         guard let targetField, let context = caretContext, let read = readTarget(targetField) else { return false }
@@ -655,6 +678,14 @@ final class TextInjector: TextInjecting {
         }
         let first = text.range(of: words), last = text.range(of: words, options: .backwards)
         guard first.location != NSNotFound, first.location == last.location else { return nil }
+        // Whole words only: " So" is not in "Sorry".
+        func letter(_ at: Int) -> Bool {
+            guard at >= 0, at < text.length, let scalar = Unicode.Scalar(text.character(at: at)) else { return false }
+            return CharacterSet.alphanumerics.contains(scalar)
+        }
+        let wordsText = words as NSString
+        if letter(first.location - 1), CharacterSet.alphanumerics.contains(Unicode.Scalar(wordsText.character(at: 0)) ?? " ") { return nil }
+        if letter(NSMaxRange(first)), CharacterSet.alphanumerics.contains(Unicode.Scalar(wordsText.character(at: wordsText.length - 1)) ?? " ") { return nil }
         return first.location
     }
 
@@ -693,6 +724,8 @@ final class TextInjector: TextInjecting {
     /// once at the end. Not proven: nothing more is written and the finished text stays on the card.
     private func leaveInputMethod(session: String, proven: Bool, provisional: Bool) {
         guard proven else {
+            // No proof either way (the client could not be read), not the app committing them.
+            inputMethodTakeBackUnread = inputMethod.lastClearReason == InputMethodTakeBack.unread.rawValue
             ReasonLog.note("input method words not proven gone: the finished text stays on the card")
             inputMethodStopped = .otherWindow
             inputMethodStopNotice = .otherWindow
@@ -731,7 +764,14 @@ final class TextInjector: TextInjecting {
             inputMethod.end()
             return .notTyped
         }
-        if let stop = inputMethodStopped { return overLeftWords() ?? .kept(stop) }
+        if let stop = inputMethodStopped {
+            if let left = overLeftWords() { return left }
+            if stop == .otherWindow, inputMethodTakeBackUnread, await takeBackProvenByTheField() {
+                ReasonLog.note("input method words gone from the target field at the end: the finished text goes in once")
+                return .notTyped
+            }
+            return .kept(stop)
+        }
         if let reason = inputMethod.interrupted {
             return .kept(stopInputMethod(InputMethodLink.stop(for: reason)))
         }
@@ -908,11 +948,12 @@ final class TextInjector: TextInjecting {
     private func keepCaretAfterFinished(committedAt: UInt64) {
         guard let field = targetField, let context = caretContext else { return }
         let start = (context.before as NSString).length
-        Task { @MainActor [weak self] in
+        caretKeeper?.cancel()
+        caretKeeper = Task { @MainActor [weak self] in
             var moved = false
             for wait in [0, 150, 300, 500, 700] {
                 if wait > 0 { try? await Task.sleep(for: .milliseconds(wait)) }
-                guard let self, PersonInput.shared.acted(since: committedAt) != true,
+                guard !Task.isCancelled, let self, PersonInput.shared.acted(since: committedAt) != true,
                       let read = self.readTarget(field),
                       let end = Self.caretAfterFinished(read: read, after: context.after),
                       let now = self.selection(field) else { return }
@@ -1124,12 +1165,24 @@ final class TextInjector: TextInjecting {
         // acknowledgment: they get a bounded grace period before the clipboard
         // goes back. Once a paste is queued, cancellation must not shorten it.
         let placeholderStart = self.placeholderStart
+        let pastedAt = PersonInput.now()
+        // Single line breaks where the text has blank lines between paragraphs (T3 Code): the same text.
+        var breaksOnly = false
         let seen = await Self.pasteSeen(reads: keepCopy ? 30 : 20, late: Self.lateReads, read: read,
-                                         landed: { EditorPlaceholder.landed($0, expected: expected, start: before, startedAsPlaceholder: placeholderStart) },
+                                         landed: { now in
+                                             if EditorPlaceholder.landed(now, expected: expected, start: before, startedAsPlaceholder: placeholderStart) { return true }
+                                             guard let now, let expected, Self.sameButParagraphBreaks(now, expected) else { return false }
+                                             breaksOnly = true
+                                             return true
+                                         },
                                          asBefore: { now in before.map { !$0.isEmpty && EditorPlaceholder.same(now, $0, startedAsPlaceholder: false) } ?? false },
                                          owned: { PasteboardSnapshot.isOwned(self.pasteboard, change: change, session: sessionID) },
                                          wait: { await withCheckedContinuation { continuation in
                                              DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { continuation.resume() } } })
+        if breaksOnly, seen == .landed || seen == .landedLate {
+            ReasonLog.note("pasted text seen with single line breaks between paragraphs")
+            keepCaretAfterFinished(committedAt: pastedAt)
+        }
         switch seen {
         case .landed: return .pasted
         case .landedLate:

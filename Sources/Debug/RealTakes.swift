@@ -134,6 +134,7 @@ extension TakeHarness {
         board.clearContents()
         board.setString(marker, forType: .string)
         let clipboardCount = board.changeCount
+        if let before = target.beforeEachTake { await before() }
         if let beforeStart { await beforeStart() }
         ReasonLog.recent.removeAll()
         KeyLiveTextField.trace.removeAll()
