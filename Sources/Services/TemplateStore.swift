@@ -27,34 +27,17 @@ struct DictationTemplate: Codable, Equatable, Identifiable {
     var sections: [ReportSection]
     var voiceTriggers: [String]?
 
-    static var policeReport: DictationTemplate {
-        DictationTemplate(name: "Police report", title: "Incident report",
-            instructions: "Write a factual report. Preserve the speaker's perspective. Do not infer facts or include advice.",
+    /// The one example a new install starts with. Upgrades never get it:
+    /// pFlow adds, changes or removes no template a person already has.
+    static var general: DictationTemplate {
+        DictationTemplate(name: "General notes", title: "Notes",
+            instructions: "Organize what the speaker said. Keep their words, names and numbers. Do not add facts or advice.",
+            missingText: "None.",
             sections: [
-                ReportSection(title: "Narrated by", instructions: "The reporting officer's full name, role, agency, and badge number, only if stated. Include the name and badge, not just the agency."),
-                ReportSection(title: "Synopsis", instructions: "One or two short sentences summarizing the overall incident and outcome.", summarize: true),
-                ReportSection(title: "Date and time", instructions: "The event's date and time, only if stated. Do not use today's date."),
-                ReportSection(title: "Narrative", instructions: "All incident details in the order reported. Preserve names, actions, locations, and uncertainty.", includeFullDictation: true),
-                ReportSection(title: "Evidence", instructions: "Only evidence explicitly described. Do not assume collection, custody, or test results.", bullets: true)
-            ], voiceTriggers: ["initial report", "police report"])
-    }
-
-    static var supplement: DictationTemplate {
-        var value = policeReport
-        value.name = "Supplement"
-        value.title = "Supplemental report"
-        value.instructions = "Document only the additional information dictated. Do not assume facts from an earlier report."
-        value.voiceTriggers = ["supplement", "supplemental report"]
-        return value
-    }
-
-    static var followUp: DictationTemplate {
-        var value = policeReport
-        value.name = "Follow-up report"
-        value.title = "Follow-up report"
-        value.instructions = "Document the follow-up actions and findings dictated. Do not assume earlier incident facts."
-        value.voiceTriggers = ["follow up", "follow-up report"]
-        return value
+                ReportSection(title: "Summary", instructions: "One or two short sentences on what this is about.", summarize: true),
+                ReportSection(title: "Details", instructions: "Everything the speaker said, in order.", includeFullDictation: true),
+                ReportSection(title: "Next steps", instructions: "Only actions or to-dos the speaker stated.", bullets: true)
+            ], voiceTriggers: ["notes"])
     }
 
     /// Titles/order/formatting come from the user's template, never the model.
@@ -102,42 +85,30 @@ final class TemplateStore {
         }
     }
 
+    static let savedKey = "pflow.templates"
+    /// Saved templates this version could not read, kept as they were.
+    static let unreadableKey = "pflow.templates.unreadable"
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        if let data = defaults.data(forKey: "pflow.templates"),
-           let saved = try? JSONDecoder().decode([DictationTemplate].self, from: data) {
-            templates = saved
-        } else { templates = [.policeReport] }
+        var isNewInstall = false
+        if let data = defaults.data(forKey: Self.savedKey) {
+            if let saved = try? JSONDecoder().decode([DictationTemplate].self, from: data) {
+                templates = saved
+            } else {
+                // Never write over templates pFlow cannot read: keep the bytes aside.
+                if defaults.data(forKey: Self.unreadableKey) == nil { defaults.set(data, forKey: Self.unreadableKey) }
+                templates = []
+            }
+        } else {
+            templates = [.general]
+            isNewInstall = true
+        }
         activeID = defaults.string(forKey: "pflow.template.active").flatMap(UUID.init(uuidString:))
-        if defaults.integer(forKey: "pflow.templates.voiceCatalog") < 1 {
-            for index in templates.indices where templates[index].name == "Police report" && templates[index].voiceTriggers == nil {
-                templates[index].voiceTriggers = ["initial report", "police report"]
-            }
-            for example in [DictationTemplate.supplement, .followUp] {
-                if !templates.contains(where: { $0.name.caseInsensitiveCompare(example.name) == .orderedSame }) {
-                    templates.append(example)
-                }
-            }
-        }
-        // Update only unchanged factory sections. Explicit choices and edited
-        // templates remain intact, including an explicit false for full text.
-        let factory = DictationTemplate.policeReport
-        for index in templates.indices where ["Police report", "Supplement", "Follow-up report"].contains(templates[index].name) {
-            for field in templates[index].sections.indices {
-                let section = templates[index].sections[field]
-                if section.title == "Narrative", section.includeFullDictation == nil,
-                   !section.summarize, !section.bullets,
-                   section.instructions == factory.sections[3].instructions {
-                    templates[index].sections[field].includeFullDictation = true
-                }
-                if section.title == "Narrated by", section.instructions == "The reporting officer's name and role, only if stated." {
-                    templates[index].sections[field].instructions = factory.sections[0].instructions
-                }
-            }
-        }
-        // Persist the seeded example's UUID before it can be selected. Otherwise
-        // the active template would disappear on the next launch.
-        persist()
+        // A new install only. Saved before it can be selected, so its ID lasts.
+        if isNewInstall { persist() }
+        // pFlow 0.3.20 and older add their report examples when this is unset.
+        // Set it so going back to an older copy adds nothing either.
         defaults.set(1, forKey: "pflow.templates.voiceCatalog")
         if activeID != nil, active == nil { activeID = nil; defaults.removeObject(forKey: "pflow.template.active") }
     }
@@ -160,6 +131,6 @@ final class TemplateStore {
 
     private func persist() {
         guard let data = try? JSONEncoder().encode(templates) else { return }
-        defaults.set(data, forKey: "pflow.templates")
+        defaults.set(data, forKey: Self.savedKey)
     }
 }

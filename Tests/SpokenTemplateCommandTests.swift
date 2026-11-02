@@ -2,6 +2,15 @@ import Testing
 @testable import Yap
 
 struct SpokenTemplateCommandTests {
+    @Test func theGeneralTemplateIsPickedByItsNameOrByNotes() throws {
+        let general = DictationTemplate.general
+        for opening in ["Use the general notes template.", "Write this as notes.", "This is general notes."] {
+            let route = try #require(SpokenTemplateCommand.parse(opening + " Call Sam about the roof.", templates: [general]))
+            #expect(route.template.id == general.id)
+            #expect(route.text == "Call Sam about the roof.")
+        }
+        #expect(SpokenTemplateCommand.parse("These notes are for Sam. Use the general notes template.", templates: [general]) == nil)
+    }
     @Test func understandsNaturalReportRequestsAndKeepsTheNarration() throws {
         let template = DictationTemplate.policeReport
         for opening in ["This is a police report. So use the police report template.",
