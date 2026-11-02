@@ -57,4 +57,13 @@ struct MarksPlaceTests {
         #expect(!TextInjector.caretNeedsMoving(CFRange(location: 5, length: 9), start: 10, end: 19), "a selection reaching into the person's text")
         #expect(TextInjector.caretNeedsMoving(CFRange(location: 20, length: 0), start: 10, end: 25))
     }
+
+    @MainActor @Test func anotherAppOrDesktopComingForwardIsRemembered() {
+        let moves = FocusMoves.shared
+        let before = PersonInput.now()
+        #expect(!moves.moved(since: PersonInput.now() + 1_000_000_000), "nothing after a time still to come")
+        moves.noteMoveForTesting()
+        #expect(moves.moved(since: before))
+        #expect(!moves.moved(since: PersonInput.now() + 1_000_000_000))
+    }
 }

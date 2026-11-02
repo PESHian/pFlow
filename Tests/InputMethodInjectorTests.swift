@@ -82,17 +82,19 @@ struct InputMethodInjectorTests {
     /// finished text goes in once by the usual checked paste. The app committing them, another field
     /// focused, or the field holding anything new: the card, as before.
     @Test func anUnreadTakeBackIsProvenByTheFieldAtTheEnd() async {
-        // (take-back reason, focused field the same, field text, the person acted, the field changes after the first look)
-        let cases: [(String, Bool, String, Bool?, Bool, LiveInlineFinal)] = [
-            ("unread", true, "Dear Sam,", false, false, .notTyped),
-            ("committed", true, "Dear Sam,", false, false, .kept(.otherWindow)),
-            ("unread", false, "Dear Sam,", false, false, .kept(.otherWindow)),
-            ("unread", true, "Dear Sam, Bye", false, false, .kept(.otherWindow)),
-            ("unread", true, "Dear Sam,", true, false, .kept(.otherWindow)),
-            ("unread", true, "Dear Sam,", nil, false, .kept(.otherWindow)),
-            ("unread", true, "Dear Sam,", false, true, .kept(.otherWindow)),
+        // (take-back reason, focused field the same, field text, the person acted, the field changes after
+        // the first look, another app or desktop came forward)
+        let cases: [(String, Bool, String, Bool?, Bool, Bool, LiveInlineFinal)] = [
+            ("unread", true, "Dear Sam,", false, false, false, .notTyped),
+            ("committed", true, "Dear Sam,", false, false, false, .kept(.otherWindow)),
+            ("unread", false, "Dear Sam,", false, false, false, .kept(.otherWindow)),
+            ("unread", true, "Dear Sam, Bye", false, false, false, .kept(.otherWindow)),
+            ("unread", true, "Dear Sam,", true, false, false, .kept(.otherWindow)),
+            ("unread", true, "Dear Sam,", nil, false, false, .kept(.otherWindow)),
+            ("unread", true, "Dear Sam,", false, true, false, .kept(.otherWindow)),
+            ("unread", true, "Dear Sam,", false, false, true, .kept(.otherWindow)),
         ]
-        for (reason, focusedSame, read, acted, changes, expected) in cases {
+        for (reason, focusedSame, read, acted, changes, moved, expected) in cases {
             let world = World()
             let (injector, link) = freshTake(world)
             world.read = read
@@ -104,11 +106,12 @@ struct InputMethodInjectorTests {
                 return focusedSame ? AXUIElementCreateApplication(getpid()) : AXUIElementCreateApplication(1)
             }
             injector.personActedSinceCapture = { acted }
+            injector.focusMovedSinceCapture = { moved }
             link.receive(.init(.marked, take: "t", seq: 1, ok: true))
             #expect(await waitFor(2.5) { world.sent.contains { $0.kind == .cancel } })
             link.receive(.init(.cleared, take: "t", ok: false, reason: reason))
             let final = await injector.finishInputMethod(session: "t", text: "The harbor lights.")
-            #expect(final == expected, "\(reason), focused \(focusedSame), field \(read), acted \(String(describing: acted)), changes \(changes)")
+            #expect(final == expected, "\(reason), focused \(focusedSame), field \(read), acted \(String(describing: acted)), changes \(changes), moved \(moved)")
             #expect(!world.sent.contains { $0.kind == .commit })
         }
     }

@@ -193,6 +193,9 @@ final class TextInjector: TextInjecting {
     /// Whether the person pressed a key or clicked since the take's target was captured; nil when
     /// nothing watches, so nobody can say (replaceable in tests).
     lazy var personActedSinceCapture: () -> Bool? = { [unowned self] in PersonInput.shared.acted(since: self.capturedAt) }
+    /// Whether another app came forward or the desktop (Space) changed since the take's target was
+    /// captured: a blur can make the app commit marked words with no key or click (replaceable in tests).
+    lazy var focusMovedSinceCapture: () -> Bool = { [unowned self] in FocusMoves.shared.moved(since: self.capturedAt) }
     /// Words heard while the first marks are being looked for; marked once they are seen.
     private var inputMethodPending: String?
     /// How long the first marks have to show in the target field before they are taken back out.
@@ -298,6 +301,7 @@ final class TextInjector: TextInjecting {
     /// The focused field of the captured app and what it holds, so a paste
     /// later can tell whether anything changed.
     private func captureField() {
+        FocusMoves.shared.start()
         // A new take: the last take's caret keeper must not move the caret this take starts from.
         caretKeeper?.cancel()
         caretKeeper = nil
@@ -636,10 +640,11 @@ final class TextInjector: TextInjecting {
     /// apart. Then nothing of pFlow's is in it, and the finished text can go in once by the usual checked
     /// paste instead of only on the card. Anything else, or nobody watching for keys and clicks: the card.
     private func takeBackProvenByTheField() async -> Bool {
-        guard personActedSinceCapture() == false, targetReadable, let field = targetField,
+        guard personActedSinceCapture() == false, !focusMovedSinceCapture(), targetReadable, let field = targetField,
               let now = focusedFieldNow(), CFEqual(now, field), fieldShowsCaretContext() else { return false }
         try? await Task.sleep(for: .milliseconds(250))
-        guard personActedSinceCapture() == false, let again = focusedFieldNow(), CFEqual(again, field) else { return false }
+        guard personActedSinceCapture() == false, !focusMovedSinceCapture(),
+              let again = focusedFieldNow(), CFEqual(again, field) else { return false }
         return fieldShowsCaretContext()
     }
 
@@ -1355,4 +1360,30 @@ enum PasteboardSnapshot {
             pasteboard.writeObjects(items)
         }
     }
+}
+
+/// When another app last came forward or the desktop (Space) last changed, on the clock PersonInput
+/// uses. Watched from the first take on, for as long as pFlow runs.
+@MainActor
+final class FocusMoves {
+    static let shared = FocusMoves()
+    private var last: UInt64 = 0
+    private var started = false
+
+    func start() {
+        guard !started else { return }
+        started = true
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didActivateApplicationNotification, NSWorkspace.activeSpaceDidChangeNotification] {
+            center.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { FocusMoves.shared.last = PersonInput.now() }
+            }
+        }
+    }
+
+    func moved(since time: UInt64) -> Bool { last >= time && last != 0 }
+
+    #if DEBUG
+    func noteMoveForTesting(at time: UInt64 = PersonInput.now()) { last = time }
+    #endif
 }
