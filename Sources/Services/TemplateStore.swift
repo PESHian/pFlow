@@ -37,7 +37,8 @@ struct DictationTemplate: Codable, Equatable, Identifiable {
                 ReportSection(title: "Summary", instructions: "One or two short sentences on what this is about.", summarize: true),
                 ReportSection(title: "Details", instructions: "Everything the speaker said, in order.", includeFullDictation: true),
                 ReportSection(title: "Next steps", instructions: "Only actions or to-dos the speaker stated.", bullets: true)
-            ], voiceTriggers: ["notes"])
+            ])
+        // No extra trigger: a bare "notes" would turn "Use the notes from Tuesday..." into a template switch.
     }
 
     /// Titles/order/formatting come from the user's template, never the model.

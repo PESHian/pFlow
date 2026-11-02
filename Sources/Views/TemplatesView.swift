@@ -16,7 +16,7 @@ struct TemplatesView: View {
                     VStack(alignment: .leading, spacing: Theme.s4) {
                         Text("Choose how your next dictations are formatted. The selected template stays active until you change it.")
                             .font(.system(size: 12)).foregroundStyle(.secondary)
-                        Text("Say ‘Use the general notes template’ or ‘Write this as notes’, then talk. Your own template names work too. Say only the command to keep that format for the dictations after it.")
+                        Text("Say ‘Use the general notes template’ or ‘Write this as general notes’, then talk. Your own template names work too. Say only the command to keep that format for the dictations after it.")
                             .font(.system(size: 12)).foregroundStyle(.secondary)
                         Button { app.templates.activeID = nil } label: {
                             Label("Plain dictation", systemImage: app.templates.active == nil ? "checkmark.circle.fill" : "circle")
