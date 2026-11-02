@@ -8,6 +8,7 @@ final class FakeSession: DictationSessioning {
     var onLevel: ((Float) -> Void)?
     var onTranscript: ((TranscriptUpdate) -> Void)?
     var onLiveStopped: (() -> Void)?
+    var onMicrophoneLost: (() -> Void)?
     private(set) var live: Bool?
     var textToReturn = "hello world"
     var stopError: Error?
@@ -30,8 +31,12 @@ final class FakeSession: DictationSessioning {
         if suspendStart { await withCheckedContinuation { startGate = $0 } }
         if let startError { throw startError }
     }
+    /// A stop that waits (a real session's stop takes a moment) until `stopGate` is resumed.
+    var suspendStop = false
+    var stopGate: CheckedContinuation<Void, Never>?
     func stop() async throws -> TranscriptUpdate {
         stopCalled += 1
+        if suspendStop { await withCheckedContinuation { stopGate = $0 } }
         onStop?()
         if let stopError { throw stopError }
         return update(textToReturn, isFinal: true)
@@ -291,6 +296,45 @@ struct RecordingCoordinatorTests {
         await coordinator.toggle()
         #expect(hud.reasons.last == RecordingCoordinator.modelNotReadyNote)
         #expect(hud.phases.last == .failed)
+    }
+
+    /// The key comes up while the failed start is still stopping its session: the card still stays
+    /// its few seconds, and the stop starts nothing (review M1).
+    @Test func aStopLandingWhileTheFailedStartWindsDownKeepsTheCard() async {
+        let session = FakeSession()
+        session.startError = FakeSession.Failure.start
+        session.suspendStop = true
+        let hud = FakeHUD()
+        let coordinator = makeCoordinator(session: session, injector: FakeInjector(), hud: hud)
+        coordinator.begin()
+        while session.stopGate == nil { await Task.yield() }
+        #expect(coordinator.state == .recording)
+        let finish = Task { await coordinator.finish() }
+        while coordinator.state == .recording { await Task.yield() }
+        session.suspendStop = false
+        session.stopGate?.resume()
+        await finish.value
+        #expect(hud.reasons.last == RecordingCoordinator.startFailedNote)
+        #expect(hud.hideDelays == [RecordingCoordinator.noteSeconds], "not hidden at once: \(hud.hideDelays)")
+        #expect(coordinator.state == .idle)
+        #expect(session.stopCalled == 1)
+    }
+
+    /// The microphone stops mid-take: the card says so at once, whatever the Live text choice;
+    /// never "Listening" over nothing until the key comes up (review M3).
+    @Test func aMicrophoneThatStopsMidTakeIsShownAtOnce() async {
+        for mode in [LiveTextMode.off, .typeInApp] {
+            let session = FakeSession()
+            let hud = FakeHUD()
+            let coordinator = makeCoordinator(session: session, injector: FakeInjector(), hud: hud, liveTextMode: { mode })
+            await coordinator.toggle()
+            session.emit("the harbor")
+            #expect(!hud.livePreview || mode == .typeInApp)
+            session.onMicrophoneLost?()
+            #expect(hud.livePreview, "\(mode): the card")
+            #expect(hud.notes.last == RecordingCoordinator.microphoneStoppedNote)
+            await coordinator.finish()
+        }
     }
 
     @Test func releaseWaitsForStartupAndStopsOnlyOnce() async {

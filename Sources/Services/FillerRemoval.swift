@@ -61,7 +61,7 @@ enum FillerRemoval {
     }
 
     /// Short words a period ends without ending the sentence.
-    static let abbreviations: Set<String> = ["mr", "mrs", "ms", "dr", "prof", "st", "jr", "sr", "vs", "approx", "no", "fig"]
+    static let abbreviations: Set<String> = ["mr", "mrs", "ms", "dr", "prof", "st", "jr", "sr", "vs", "approx", "fig"]
 
     /// The word whose period is at `end` is an abbreviation: it has a period inside ("i.e.", "e.g.")
     /// or is a short title or term ("Dr.", "vs.").

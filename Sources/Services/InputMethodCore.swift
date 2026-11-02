@@ -19,9 +19,6 @@ protocol MarkedTextClient: AnyObject {
     func text(in range: NSRange) -> String?
     /// How long the client's whole text is (nil when unknown).
     var textLength: Int? { get }
-    /// Replaces the client's text in `range` with `text` (the only use: pFlow's own words the app
-    /// committed itself, taken back out of exactly where they are).
-    func replace(_ range: NSRange, with text: String)
 }
 
 /// How taking marked words back out of a client went.
@@ -34,11 +31,9 @@ enum InputMethodTakeBack: String {
     case stillMarked
     /// The client's text around them could not be read: no proof either way.
     case unread
-    /// The app had committed them itself; they came back out of exactly where they were, proven.
-    case removed
 
     /// Proven out of the client: pFlow may go on another way.
-    var proven: Bool { self == .gone || self == .removed }
+    var proven: Bool { self == .gone }
 }
 
 /// What the input method writes for one take, and through which client
@@ -59,8 +54,6 @@ final class InputMethodTakeCore {
     private var takeBack: InputMethodTakeBack?
     /// The words of the last take-back, where they began and the client, to look again.
     private var takenBack: (words: String, start: Int?, client: MarkedTextClient)?
-    /// The app put the last mark in as typed text: it shows no marked text.
-    private(set) var typedNotMarked = false
     /// How much of the words' end is read back where they would be if committed, in UTF-16 units
     /// (an app keeps only a little text around the caret for input methods; Chrome about 100 units).
     static let tailLength = 60
@@ -100,8 +93,6 @@ final class InputMethodTakeCore {
         markedController = controller
         markedClient = client
         binding.marked = true
-        // An app with no marked text takes a mark as typed text: nothing shows as marked.
-        if !text.isEmpty, client.markedLength == 0 { typedNotMarked = true }
         return true
     }
 
@@ -173,41 +164,26 @@ final class InputMethodTakeCore {
 
     /// The last take-back looked at again: an app can answer reads a moment late (Chromium answers
     /// from a cache of the page's text), so words read as still there may be gone a moment later.
+    /// Nothing is written. No take-back on record: no proof.
     func recheck() -> InputMethodTakeBack {
-        guard let takenBack else { return takeBack ?? .gone }
+        guard let takenBack else { return .unread }
         let result = Self.verdict(words: takenBack.words, start: takenBack.start, client: takenBack.client)
         takeBack = result
         return result
     }
 
-    /// Words the app committed itself (it has no marked text, or committed them on a blur) come back
-    /// out of exactly where they are: only while the client's text there is the words, start and end,
-    /// with the caret right after them and nothing marked; then proven gone, or no proof.
-    func removeCommitted() -> InputMethodTakeBack {
-        guard let takenBack, let start = takenBack.start else { return takeBack ?? .unread }
-        let words = takenBack.words, client = takenBack.client
-        guard Self.verdict(words: words, start: start, client: client) == .committed else { return recheck() }
-        let length = (words as NSString).length, head = min(length, Self.tailLength)
-        guard client.text(in: NSRange(location: start, length: head)) == (words as NSString).substring(to: head) else {
-            takeBack = .committed
-            return .committed
+    /// A take-back that is not proven at once is looked at again, `looks` times, `wait` apart, until
+    /// proven gone. Never anything more: words still read as there (a cache that stays late longer
+    /// than the looks, or an app that committed them) are left exactly as they are; pFlow then pastes
+    /// nothing beside them and keeps the text on its card. pFlow Dictation never deletes text.
+    func settle(_ first: InputMethodTakeBack, looks: Int, wait: () async -> Void) async -> InputMethodTakeBack {
+        var result = first, left = looks
+        while !result.proven, left > 0 {
+            await wait()
+            result = recheck()
+            left -= 1
         }
-        client.replace(NSRange(location: start, length: length), with: "")
-        let after = Self.verdict(words: words, start: start, client: client)
-        takeBack = after == .gone ? .removed : after
-        return takeBack!
-    }
-
-    /// The app took the last mark as typed text (nothing marked, the words in its text right before
-    /// the caret): they come back out, as a take-back, and the take goes on without the input method.
-    /// Nil when that is not what the client shows: the take carries on with its marks.
-    func takeBackTyped() -> InputMethodTakeBack? {
-        guard typedNotMarked, let markedClient else { return nil }
-        typedNotMarked = false
-        guard Self.verdict(words: marked, start: markStart, client: markedClient) == .committed else { return nil }
-        takenBack = (marked, markStart, markedClient)
-        marked = ""
-        return removeCommitted()
+        return result
     }
 
     func end() {
@@ -222,6 +198,5 @@ final class InputMethodTakeCore {
         markStart = nil
         takeBack = nil
         takenBack = nil
-        typedNotMarked = false
     }
 }

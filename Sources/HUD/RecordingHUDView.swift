@@ -131,8 +131,17 @@ struct RecordingHUDView: View {
         model.phase == .transcribing || model.phase == .cleaning
     }
 
-    private var title: String {
-        switch model.phase {
+    private var title: String { Self.title(model.phase, historySaved: model.historySaved) }
+
+    /// Where the words are kept, in the card's words: History, or only until pFlow quits when the
+    /// History file could not be opened this launch.
+    static func kept(historySaved: Bool) -> String {
+        historySaved ? "Saved in History" : "Kept until pFlow quits (History can't be saved now)"
+    }
+
+    static func title(_ phase: HUDPhase, historySaved: Bool) -> String {
+        let history = historySaved ? "saved in History" : "kept until pFlow quits"
+        switch phase {
         case .listening: return "Listening"
         case .confirmCancel: return "Press esc again to cancel"
         case .transcribing: return "Transcribing…"
@@ -140,13 +149,14 @@ struct RecordingHUDView: View {
         case .failed: return "Dictation could not finish."
         case .pasteUnconfirmed: return "Paste could not be verified. Check your text before pasting again."
         case .copied: return "Text copied. Press Command V to paste."
-        case .savedToHistory: return "Text saved in History. Clipboard unchanged."
+        case .savedToHistory: return "Text \(history). Clipboard unchanged."
         case .restarting: return "Restarting pFlow"
-        case .liveTextKept: return "pFlow stopped listening early. The words so far are saved in History."
+        case .liveTextKept: return "pFlow stopped listening early. The words so far are \(history)."
         case .liveTextKeptTyped:
-            return "pFlow stopped listening early. The words already typed stay in your app, and the words so far are saved in History."
+            return "pFlow stopped listening early. The words already typed stay in your app, and the words so far are \(history)."
         case .passwordField: return "Dictation is off in password fields."
-        case .typingStopped: return "Typing stopped, so the finished text was not put in. Copy it here; it is also in History."
+        case .typingStopped:
+            return "Typing stopped, so the finished text was not put in. Copy it here; it is also \(historySaved ? "in History" : "kept until pFlow quits")."
         case .typedTextLeft: return "Cancelled. Words pFlow already typed are still in the app."
         }
     }
@@ -286,7 +296,7 @@ private struct LivePreviewCard<Status: View>: View {
     /// takes focus, so the app the person was in keeps it.
     private var copyRow: some View {
         HStack(spacing: Theme.s2) {
-            Text(model.reason == nil ? title : "Saved in History")
+            Text(model.reason == nil ? title : RecordingHUDView.kept(historySaved: model.historySaved))
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

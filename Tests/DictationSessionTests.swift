@@ -118,7 +118,7 @@ struct DictationSessionTests {
                                        appleEngine: { engine }, appleLiveEngine: nil)
         DictationSession.assumeSupported(Locale(identifier: "en-US"))
         var stopped = 0
-        session.onLiveStopped = { stopped += 1 }
+        session.onMicrophoneLost = { stopped += 1 }
         try await session.start(take: "t", live: false)
         capture.onLost?()
         for _ in 0..<20 where stopped == 0 { await Task.yield() }

@@ -19,6 +19,9 @@ enum InsertionBlock: Equatable {
     /// The take was cancelled while the paste was waiting.
     case cancelled
     case clipboard
+    /// The clipboard holds something pFlow cannot save whole and put back (a promise its app no
+    /// longer keeps): it is left alone, so the text cannot be pasted this time.
+    case clipboardUnsaved
     case nothingToInsert
     case terminal
     case remoteViewer
@@ -46,6 +49,7 @@ enum InsertionBlock: Equatable {
         case .interrupted: return "A key was still held down, so the text was not put in."
         case .cancelled: return "The take was cancelled before the text could go in."
         case .clipboard: return "The clipboard could not be used, so the text was not put in."
+        case .clipboardUnsaved: return "Your clipboard holds something pFlow can't put back whole, so pFlow left it alone. Copy the text here."
         case .nothingToInsert: return "There was no text to put in."
         case .terminal: return "pFlow does not type into terminals, where a line break would run a command."
         case .remoteViewer: return "pFlow does not type into remote desktop or virtual machine windows."
@@ -327,6 +331,12 @@ final class TextInjector: TextInjecting {
             ReasonLog.note(inputMethod.connected ? "input method not added in Keyboard settings" : "input method not connected")
             return nil
         }
+        // An app that types marked words in would get every mark typed again beside the last one.
+        if appMarks[bundle] == .types {
+            ReasonLog.note("input method not used: this app types marked words in")
+            inputMethodAllowed = false
+            return .preview(.uncertain)
+        }
         let classes = targetField.map { TargetCheck(pid: targetApp.processIdentifier, element: $0, bundleID: bundle).classes($0) } ?? []
         let composing = InputComposition.composing(markedLength: targetField.flatMap(FocusedElement.markedLength),
                                                    tracked: composition.composing)
@@ -476,14 +486,6 @@ final class TextInjector: TextInjecting {
             defer { inputMethodStopNotice = nil }
             return inputMethodStopNotice
         }
-        if let reason = inputMethod.interrupted, InputMethodWire.typedReasons.contains(reason), let session = inputMethodTake {
-            leaveTyped(reason, session: session)
-            if inputMethodTake == session {
-                defer { inputMethodStopNotice = nil }
-                return inputMethodStopNotice
-            }
-            return reconcileLive(session: session, transcript: transcript)
-        }
         if let reason = inputMethod.interrupted { return stopInputMethod(InputMethodLink.stop(for: reason)) }
         if let stop = markedTextCheck() { return stopInputMethod(stop) }
         let words = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -532,18 +534,21 @@ final class TextInjector: TextInjecting {
         let started = Date()
         inputMethodCheck = Task { [weak self] in
             while let self, self.inputMethodTake == session, self.inputMethodStopped == nil, !Task.isCancelled {
-                if let reason = self.inputMethod.interrupted, InputMethodWire.typedReasons.contains(reason) {
-                    self.leaveTyped(reason, session: session)
-                    return
-                }
                 if let seq = self.marksAtCaret(settled: 0.05) {
                     let probation = self.inputMethod.provisional
+                    var again: String?
+                    if let bundle = self.inputMethod.take?.bundle, self.appMarks[bundle] == nil {
+                        guard let words = await self.checkAppKeepsMarks(bundle: bundle, session: session) else { return }
+                        again = words
+                    }
                     self.inputMethod.confirm(seq: seq)
                     ReasonLog.note(probation ? "input method words seen in the target: the client on probation is the take's"
                                              : "input method words seen in the target")
                     if let words = self.inputMethodPending {
                         self.inputMethodPending = nil
                         if !self.inputMethod.mark(self.prepared(words).text) { _ = self.stopInputMethod(.uncertain) }
+                    } else if let again, !self.inputMethod.mark(again) {
+                        _ = self.stopInputMethod(.uncertain)
                     }
                     return
                 }
@@ -554,6 +559,59 @@ final class TextInjector: TextInjecting {
                 try? await Task.sleep(for: .milliseconds(40))
             }
         }
+    }
+
+    /// What an app does with marked words, learned on its first take with pFlow Dictation this launch.
+    enum AppMarks { case keeps, types }
+    /// By bundle ID, for as long as pFlow runs.
+    private(set) var appMarks: [String: AppMarks] = [:]
+    #if DEBUG
+    func rememberMarksForTesting(_ kind: AppMarks, for bundle: String) { appMarks[bundle] = kind }
+    #endif
+
+    /// The first take in an app this launch: its first words, just seen at the caret, are taken back
+    /// out once. An app with marked text shows them gone, and they come straight back (the words to
+    /// mark again are returned). An app that put them in as typed text still has them where the target
+    /// field shows them, and every later mark would type the words again beside them: pFlow Dictation
+    /// stops for this take (those words stay; the finished text goes over them at the end) and is not
+    /// used in that app again this launch. Anything unclear stops it for this take only. pFlow Dictation
+    /// deletes nothing either way.
+    private func checkAppKeepsMarks(bundle: String, session: String) async -> String? {
+        let words = inputMethod.newestMarked
+        ReasonLog.note("input method: first take in this app, checking it keeps marked words")
+        let cleared = await inputMethod.clear()
+        guard inputMethodTake == session, inputMethodStopped == nil else { return nil }
+        // pFlow Dictation's reads can come from a late cache: the target field itself decides.
+        let stillThere = words.map { shownAtCaret($0) } ?? false
+        if cleared || (!stillThere && fieldShowsCaretContext()) {
+            appMarks[bundle] = .keeps
+            ReasonLog.note("input method: this app keeps marked words")
+            return words
+        }
+        if stillThere {
+            appMarks[bundle] = .types
+            ReasonLog.note("input method: this app types marked words in; pFlow's card for it from now on")
+        } else {
+            ReasonLog.note("input method: this app's marked words could not be checked")
+        }
+        inputMethodLeftWords = words.map { [$0] } ?? []
+        inputMethodStopped = .unsupported
+        inputMethodStopNotice = .unsupported
+        inputMethod.end()
+        return nil
+    }
+
+    /// The target field shows `words` at the captured caret (as the first marks are looked for).
+    private func shownAtCaret(_ words: String) -> Bool {
+        guard let targetField, let context = caretContext else { return false }
+        return InputMethodFinish.showsAtCaret(read: readTarget(targetField), texts: [words], before: context.before, after: context.after)
+    }
+
+    /// The target field shows what it held around the caret when the take began, nothing of pFlow's.
+    private func fieldShowsCaretContext() -> Bool {
+        guard let targetField, let context = caretContext, let read = readTarget(targetField) else { return false }
+        return InputMethodFinish.clean(read).trimmingCharacters(in: .newlines)
+            == InputMethodFinish.clean(context.before + context.after).trimmingCharacters(in: .newlines)
     }
 
     /// The first marks never showed in the target: out of that client they come, and only once the
@@ -568,19 +626,6 @@ final class TextInjector: TextInjecting {
         guard inputMethodTake == session else { return }
         if !cleared, committed { inputMethodLeftWords = words.map { [$0] } ?? [] }
         leaveInputMethod(session: session, proven: cleared, provisional: provisional)
-    }
-
-    /// The app has no marked text and took the first words as typed text: pFlow Dictation took them
-    /// back out of exactly where they were (proven), or could not.
-    private func leaveTyped(_ reason: String, session: String) {
-        guard inputMethodTake == session, inputMethodStopped == nil else { return }
-        let proven = reason == InputMethodWire.typedTakenBack
-        ReasonLog.note(proven ? "input method: the app took the words as typed text; they came back out"
-                              : "input method: the app took the words as typed text; they could not come back out")
-        let provisional = inputMethod.provisional
-        if !proven { inputMethodLeftWords = [inputMethod.newestMarked, inputMethod.everyMarkTyped].compactMap { $0 } }
-        inputMethod.end()
-        leaveInputMethod(session: session, proven: proven, provisional: provisional)
     }
 
     /// The take's words are out of the input method's client (`proven`), or may still be there.
@@ -622,7 +667,6 @@ final class TextInjector: TextInjecting {
     func finishInputMethod(session: String, text: String) async -> LiveInlineFinal? {
         // The first marks may still be looked for, or marks taken back out: that decides first.
         await inputMethodCheck?.value
-        if let reason = inputMethod.interrupted, InputMethodWire.typedReasons.contains(reason) { leaveTyped(reason, session: session) }
         guard inputMethodTake == session else { return nil }
         inputMethodTake = nil
         // Nothing was ever marked (pFlow's source was not the selected one): the text goes in the usual way.
@@ -679,9 +723,12 @@ final class TextInjector: TextInjecting {
         let candidates = inputMethodLeftWords
         inputMethodLeftWords = []
         guard !candidates.isEmpty, targetReadable, !placeholderStart, let context = caretContext, let field = leftWordsField() else { return nil }
-        // The newest words, or every mark typed in one after another (an app with no marked text).
+        // The newest words, or every mark typed in one after another (an app with no marked text). Read
+        // twice, a moment apart, both the same: a field that answers from a late cache is not trusted.
         let value = field.state().value
-        guard let words = candidates.first(where: { value == context.before + $0 + context.after }) else {
+        leftWordsSettle()
+        guard field.state().value == value,
+              let words = candidates.first(where: { value == context.before + $0 + context.after }) else {
             ReasonLog.note("input method words the app committed: not found at the caret")
             return nil
         }
@@ -698,6 +745,9 @@ final class TextInjector: TextInjecting {
         return .replace(OwnedWords(range: range, text: trimmed, personActed: { field.personActedSinceSelect() },
                                    collapse: { field.collapse() }))
     }
+
+    /// The pause between the two reads of the field before the select-and-paste (a test passes none).
+    var leftWordsSettle: () -> Void = { usleep(250_000) }
 
     /// The target field for the select-and-paste over app-committed words (a test passes its own).
     lazy var leftWordsField: () -> LiveTextField? = { [unowned self] in
@@ -932,9 +982,12 @@ final class TextInjector: TextInjecting {
         let prepared = Self.pasteItem(text: text, formatted: formatted, sessionID: sessionID, keepCopy: keepCopy)
         var saved: [[NSPasteboard.PasteboardType: Data]]?
         if !keepCopy {
+            // The person's clipboard comes back whole or is not touched: a type that cannot be saved
+            // (Excel's lazy formats, a promised attachment) leaves it alone, and the card has the text.
             let count = pasteboard.changeCount
             guard let snapshot = PasteboardSnapshot.capture(pasteboard), pasteboard.changeCount == count else {
-                return .savedToHistory(.clipboard)
+                ReasonLog.note("the clipboard holds something that cannot be saved whole: not used")
+                return .savedToHistory(pasteboard.changeCount == count ? .clipboardUnsaved : .clipboard)
             }
             saved = snapshot
         }
@@ -1087,23 +1140,21 @@ final class TextInjector: TextInjecting {
 enum PasteboardSnapshot {
     static let sessionType = NSPasteboard.PasteboardType("com.frigade.yap.session")
 
-    /// The clipboard's items with every type that gives its data. A type that gives none (a promise
-    /// its app no longer keeps, an Excel range's lazy formats) is left out rather than blocking every
-    /// paste; the rest comes back. Nil when nothing at all could be read from a clipboard that holds
-    /// something (restoring would empty it), or when it changed while being read.
+    /// Every item of the clipboard with every type's data, so it can come back whole. Nil when any
+    /// type gives no data (a promise its app no longer keeps, an Excel range's lazy formats): a
+    /// partial copy would come back without them, so the clipboard is not used at all then. Nil too
+    /// when it changed while being read.
     static func capture(_ pasteboard: NSPasteboard = .general) -> [[NSPasteboard.PasteboardType: Data]]? {
         let before = pasteboard.changeCount
         var saved: [[NSPasteboard.PasteboardType: Data]] = []
-        let items = pasteboard.pasteboardItems ?? []
-        for item in items {
+        for item in pasteboard.pasteboardItems ?? [] {
             var representation: [NSPasteboard.PasteboardType: Data] = [:]
             for type in item.types {
-                guard let data = item.data(forType: type) else { continue }
+                guard let data = item.data(forType: type) else { return nil }
                 representation[type] = data
             }
-            if !representation.isEmpty { saved.append(representation) }
+            saved.append(representation)
         }
-        if !items.isEmpty, saved.isEmpty { return nil }
         return pasteboard.changeCount == before ? saved : nil
     }
 

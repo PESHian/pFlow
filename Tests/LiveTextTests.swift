@@ -395,6 +395,21 @@ struct LiveTextTests {
         #expect(hud.model.reason == nil && hud.model.copyOffer == nil)
     }
 
+    /// History is in memory only this launch (its file could not be opened): no card says "Saved in
+    /// History"; each says the words are kept until pFlow quits (review S3).
+    @Test func theCardNeverSaysSavedInHistoryWhenHistoryIsNotSaved() {
+        let phases: [HUDPhase] = [.savedToHistory, .typingStopped, .liveTextKept, .liveTextKeptTyped]
+        for phase in phases {
+            #expect(RecordingHUDView.title(phase, historySaved: true).contains("History"))
+            let unsaved = RecordingHUDView.title(phase, historySaved: false)
+            #expect(!unsaved.contains("saved in History") && !unsaved.contains("also in History") && unsaved.contains("until pFlow quits"), "\(phase): \(unsaved)")
+        }
+        #expect(RecordingHUDView.kept(historySaved: true) == "Saved in History")
+        #expect(!RecordingHUDView.kept(historySaved: false).contains("Saved in History"))
+        let hud = HUDController(pasteboard: NSPasteboard(name: .init("pflow.history.tests.\(UUID().uuidString)")))
+        #expect(hud.model.historySaved, "saved unless pFlow says otherwise")
+    }
+
     /// The clipboard refused the words: the button never says "Copied" (hunt H9).
     @Test func copySaysCopiedOnlyWhenTheClipboardTookTheWords() {
         let hud = HUDController(pasteboard: NSPasteboard(name: .init("pflow.copyfail.tests.\(UUID().uuidString)")))

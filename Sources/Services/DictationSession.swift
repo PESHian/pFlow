@@ -8,6 +8,8 @@ protocol DictationSessioning: AnyObject {
     var onTranscript: ((TranscriptUpdate) -> Void)? { get set }
     /// Live words stopped during the current take; the take still finishes.
     var onLiveStopped: (() -> Void)? { get set }
+    /// The microphone stopped giving audio during the current take (a device change).
+    var onMicrophoneLost: (() -> Void)? { get set }
     /// `live` is the take's Live text choice. Off adds no live recognition work.
     func start(take: String, live: Bool) async throws
     /// Ends the take and returns its final update, numbered after every partial.
@@ -19,6 +21,10 @@ protocol DictationSessioning: AnyObject {
 extension DictationSessioning {
     func cancel() async { _ = try? await stop() }
     var onLiveStopped: (() -> Void)? {
+        get { nil }
+        set {}
+    }
+    var onMicrophoneLost: (() -> Void)? {
         get { nil }
         set {}
     }
@@ -46,6 +52,7 @@ final class DictationSession: DictationSessioning {
     var onLevel: ((Float) -> Void)?
     var onTranscript: ((TranscriptUpdate) -> Void)?
     var onLiveStopped: (() -> Void)?
+    var onMicrophoneLost: (() -> Void)?
 
     private let capture: AudioCapturing
     private let whisperModel: URL
@@ -145,7 +152,7 @@ final class DictationSession: DictationSessioning {
             Task { @MainActor in
                 guard let self, self.feed === feed else { return }
                 self.microphoneLost = true
-                self.onLiveStopped?()
+                self.onMicrophoneLost?()
             }
         }
         try capture.start()

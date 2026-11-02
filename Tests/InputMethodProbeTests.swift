@@ -22,13 +22,8 @@ struct InputMethodProbeTests {
         var noCaret = false
         /// Like IMK's proxy for many apps: a read that runs past the end of the text gives nothing at all.
         var nothingPastTheEnd = false
-        /// An app with no marked text: a mark goes in as typed text, an empty one changes nothing.
-        var noMarkedText = false
         /// An app that answers reads from a cache this many reads old (Chromium's text cache).
         var lateReads = 0
-        /// An app that ignores a replacement range.
-        var ignoresReplacement = false
-        var replaced: [NSRange] = []
         private(set) var text: String
         private var caret: Int
         private var shown = ""
@@ -39,21 +34,7 @@ struct InputMethodProbeTests {
         func setMarked(_ words: String) {
             marks.append(words)
             if lateReads > 0 { stale = (document, caret + (shown as NSString).length, lateReads) }
-            if noMarkedText {
-                if !words.isEmpty { typeIn(words) }
-                return
-            }
             if !(refusesToClear && words.isEmpty) { shown = words }
-        }
-        private func typeIn(_ words: String) {
-            text = (text as NSString).replacingCharacters(in: NSRange(location: caret, length: 0), with: words)
-            caret += (words as NSString).length
-        }
-        func replace(_ range: NSRange, with words: String) {
-            replaced.append(range)
-            guard !ignoresReplacement else { return }
-            text = (text as NSString).replacingCharacters(in: range, with: words)
-            caret = range.location + (words as NSString).length
         }
         var textLength: Int? { unreadable ? nil : (read.document as NSString).length }
         func insert(_ words: String) {
@@ -217,86 +198,52 @@ struct InputMethodProbeTests {
         _ = core.probe(id(client), client: client, window: nil)
         _ = core.mark(" the harbor", controller: id(client), client: client)
         #expect(core.clear() == .gone)
-        #expect(client.text == "Dear Sam,\n" && client.replaced.isEmpty)
+        #expect(client.text == "Dear Sam,\n" && client.inserts.isEmpty)
     }
 
     /// An app that answers reads a moment late still shows the words right after the empty mark;
-    /// looked at again, they are gone. Nothing is removed on the strength of a late read.
-    @Test func anAppThatAnswersLateIsLookedAtAgain() {
+    /// looked at again (InputMethodTakeCore.settle, as pFlow Dictation runs it), they are gone.
+    @Test func aTakeBackReadLateIsSettledByLookingAgain() async {
         let core = InputMethodTakeCore()
         let client = FakeClient("com.example.writer", text: "Dear Sam,\n")
         _ = core.begin(bundle: "com.example.writer", after: 20)
         _ = core.probe(id(client), client: client, window: nil)
         _ = core.mark(" the harbor", controller: id(client), client: client)
         client.lateReads = 3
-        #expect(!core.clear().proven, "read late: not proven yet")
-        var looks = 0, result = InputMethodTakeBack.unread
-        while !result.proven, looks < 8 { result = core.recheck(); looks += 1 }
+        let first = core.clear()
+        #expect(!first.proven, "read late: not proven yet")
+        var looks = 0
+        let result = await core.settle(first, looks: 8, wait: { looks += 1 })
         #expect(result == .gone && looks <= 3, "\(result) after \(looks) looks")
-        #expect(client.replaced.isEmpty && client.text == "Dear Sam,\n")
+        #expect(client.text == "Dear Sam,\n" && client.inserts.isEmpty)
     }
 
-    /// The app committed the words itself: they come back out of exactly where they are, proven.
-    @Test func wordsTheAppCommittedComeBackOutOfExactlyWhereTheyAre() {
+    /// A cache that stays late longer than every look (Chrome busy for a second, the caret in the
+    /// middle of a paragraph), or words the app committed itself: nothing is ever deleted, the
+    /// person's text stays exactly as it is, and there is no proof (pFlow keeps the card).
+    @Test func pFlowDictationNeverDeletesWhatItCannotProve() async {
         let core = InputMethodTakeCore()
-        let client = FakeClient("com.example.writer", text: "Dear Sam, see you")
-        _ = core.begin(bundle: "com.example.writer", after: 20)
+        let client = FakeClient("com.google.Chrome", text: "Dear Sam, see you at the harbor gate")
+        _ = core.begin(bundle: "com.google.Chrome", after: 20)
         _ = core.probe(id(client), client: client, window: nil)
         _ = core.mark(" the harbor", controller: id(client), client: client)
-        client.appCommitsComposition()
-        #expect(core.clear() == .committed)
-        #expect(core.removeCommitted() == .removed)
-        #expect(client.text == "Dear Sam, see you", "the person's text as it was")
-        #expect(client.replaced == [NSRange(location: 17, length: 11)], "exactly the words, nothing else")
+        client.lateReads = 40
+        var looks = 0
+        let result = await core.settle(core.clear(), looks: 8, wait: { looks += 1 })
+        #expect(!result.proven && looks == 8)
+        #expect(client.marks == [" the harbor", ""], "one empty mark, nothing else written")
         #expect(client.inserts.isEmpty)
-    }
 
-    /// Not the words there any more (the person typed over them), or an app that ignores the range:
-    /// nothing is removed blindly, and there is no proof.
-    @Test func committedWordsStayWhenTheirPlaceCannotBeProven() {
-        let core = InputMethodTakeCore()
-        let client = FakeClient("com.example.writer", text: "Dear Sam,")
-        _ = core.begin(bundle: "com.example.writer", after: 20)
-        _ = core.probe(id(client), client: client, window: nil)
-        _ = core.mark(" the harbor", controller: id(client), client: client)
-        client.appCommitsComposition()
-        #expect(core.clear() == .committed)
-        client.insert("!")
-        #expect(core.removeCommitted() != .removed)
-        #expect(client.replaced.isEmpty, "the text after the caret changed: nothing removed")
-
-        let stubborn = FakeClient("com.example.writer", text: "Dear Sam,")
-        stubborn.ignoresReplacement = true
+        let committing = FakeClient("com.example.writer", text: "Dear Sam, see you")
         let core2 = InputMethodTakeCore()
         _ = core2.begin(bundle: "com.example.writer", after: 20)
-        _ = core2.probe(id(stubborn), client: stubborn, window: nil)
-        _ = core2.mark(" the harbor", controller: id(stubborn), client: stubborn)
-        stubborn.appCommitsComposition()
-        #expect(core2.clear() == .committed)
-        #expect(core2.removeCommitted() == .committed, "the app ignored the range: no proof")
-    }
-
-    /// An app with no marked text takes a mark as typed text: it comes back out at once, before any
-    /// second mark could type the words again beside it. An app with marked text is left alone.
-    @Test func anAppWithNoMarkedTextHasTheWordsTakenBackAtOnce() {
-        let core = InputMethodTakeCore()
-        let client = FakeClient("com.example.writer", text: "Dear Sam,\n")
-        client.noMarkedText = true
-        client.nothingPastTheEnd = true
-        _ = core.begin(bundle: "com.example.writer", after: 20)
-        _ = core.probe(id(client), client: client, window: nil)
-        #expect(core.mark("The copper kettle", controller: id(client), client: client))
-        #expect(client.text == "Dear Sam,\nThe copper kettle", "the app typed them")
-        #expect(core.takeBackTyped() == .removed)
-        #expect(client.text == "Dear Sam,\n")
-
-        let marked = FakeClient("com.example.writer", text: "Dear Sam,\n")
-        let core2 = InputMethodTakeCore()
-        _ = core2.begin(bundle: "com.example.writer", after: 20)
-        _ = core2.probe(id(marked), client: marked, window: nil)
-        #expect(core2.mark("The copper kettle", controller: id(marked), client: marked))
-        #expect(core2.takeBackTyped() == nil)
-        #expect(marked.markedLength == 17 && marked.replaced.isEmpty)
+        _ = core2.probe(id(committing), client: committing, window: nil)
+        _ = core2.mark(" the harbor", controller: id(committing), client: committing)
+        committing.appCommitsComposition()
+        let kept = await core2.settle(core2.clear(), looks: 8, wait: {})
+        #expect(kept == .committed)
+        #expect(committing.text == "Dear Sam, see you the harbor", "left exactly as the app has it")
+        #expect(committing.inserts.isEmpty)
     }
 
     @Test func unconfirmedWordsAreTakenOutWhenTheTakeEndsNotKept() {

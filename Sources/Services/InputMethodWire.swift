@@ -27,11 +27,6 @@ enum InputMethodWire {
     #endif
     /// Longest message, in bytes; a take's words are far shorter.
     static let maxMessage = 1 << 20
-    /// A refused mark's reasons: the app has no marked text and took the words as typed text; they
-    /// came back out (proven), or they could not.
-    static let typedTakenBack = "noMarkedText"
-    static let typedLeft = "noMarkedTextLeft"
-    static let typedReasons: Set<String> = [typedTakenBack, typedLeft]
 
     /// Where the socket lives. A Debug build has its own, so it never replaces the real pFlow's.
     static var folder: URL {

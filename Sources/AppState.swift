@@ -143,6 +143,7 @@ final class AppState {
 
         let history = HistoryStore(context: modelContainer.mainContext)
         self.history = history
+        hud.model.historySaved = !historyUnavailable
 
         sounds.enabled = { [weak self] in self?.soundsEnabled ?? true }
         injector.copyToClipboard = { [weak self] in self?.clipboardSettings.copyDictation ?? false }

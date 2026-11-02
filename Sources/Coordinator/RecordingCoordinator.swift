@@ -133,16 +133,15 @@ final class RecordingCoordinator {
                 self.transcript.cancel()
                 self.stopAwaitingTyping()
                 self.leaveLiveTyping()
-                // The key may already be up: the stop (or cancel) that waits for this start owns the
-                // end of the take. It sees the failure, leaves this card up and goes idle itself, so a
-                // press meanwhile cannot start a take that nothing can stop.
-                let stopping = self.state != .recording
-                if stopping { self.startFailed = take }
+                // The key may already be up, or come up while the session stops: the stop (or cancel)
+                // that waits for this start owns the end of the take. It sees the failure, leaves this
+                // card up and goes idle itself, so a press meanwhile cannot start a take that nothing
+                // can stop. Decided after the last wait, so a stop landing during it counts.
                 _ = try? await self.session.stop()
                 let modelMissing: Bool
                 if case TranscriptionError.modelNotReady = error { modelMissing = true } else { modelMissing = false }
                 self.explain(.failed, modelMissing ? Self.modelNotReadyNote : Self.startFailedNote, text: nil)
-                if !stopping { self.state = .idle }
+                if self.state == .recording { self.state = .idle } else { self.startFailed = take }
             }
         }
     }
@@ -261,6 +260,17 @@ final class RecordingCoordinator {
 
     /// Live words stopped mid-take. Say so; the words shown stay, and stopping
     /// still runs the normal final recognition.
+    /// The microphone stopped mid-take: the card says so at once (never "Listening" over nothing);
+    /// the words so far are kept when the key comes up.
+    private func microphoneStopped() {
+        guard state == .recording else { return }
+        hud.setLivePreview(true)
+        hud.setPartial(transcript.text)
+        hud.setLiveNote(Self.microphoneStoppedNote)
+    }
+
+    static let microphoneStoppedNote = "Microphone stopped: let go to keep your words"
+
     private func liveStopped() {
         guard state == .recording, takeLiveTextMode.showsPreview else { return }
         showCard(note: "Live words stopped")
@@ -312,6 +322,7 @@ final class RecordingCoordinator {
         session.onLevel = { [weak self] level in self?.hud.setLevel(level) }
         session.onTranscript = { [weak self] update in self?.receive(update) }
         session.onLiveStopped = { [weak self] in self?.liveStopped() }
+        session.onMicrophoneLost = { [weak self] in self?.microphoneStopped() }
 
         hud.setActions(
             onConfirm: { [weak self] in Task { await self?.toggle() } },

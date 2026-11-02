@@ -33,6 +33,8 @@ struct InputMethodInjectorTests {
     /// A take whose client is on probation (no activation came), its first words marked and acknowledged.
     private func probationTake(_ world: World) -> (TextInjector, InputMethodLink) {
         let (injector, link) = setUp(world)
+        // Chrome keeps marked words (learned on its first take this launch).
+        injector.rememberMarksForTesting(.keeps, for: "com.google.Chrome")
         #expect(link.begin(id: "t", bundle: "com.google.Chrome", readable: true))
         link.receive(.init(.client, take: "t", bundle: "com.google.Chrome", provisional: true))
         injector.adoptInputMethodTakeForTesting(session: "t", field: AXUIElementCreateApplication(getpid()), value: "Dear Sam,", caret: 9)
@@ -117,31 +119,22 @@ struct InputMethodInjectorTests {
         #expect(!world.sent.contains { $0.kind == .commit })
     }
 
-    /// The app has no marked text and took the first words as typed text; pFlow Dictation took them
-    /// back out (proven): the take goes on in the card, the finished text goes in once at the end.
-    @Test func anAppThatTypedTheMarksGoesOnInTheCardOnceTheyAreOut() async {
-        let world = World()
-        let (injector, link) = freshTake(world)
-        link.receive(.init(.marked, take: "t", seq: 1, ok: false, reason: InputMethodWire.typedTakenBack))
-        #expect(injector.reconcileLive(session: "t", transcript: "the harbor lights") == .unsupported)
-        #expect(world.sent.contains { $0.kind == .end })
-        #expect(!world.sent.contains { $0.kind == .cancel }, "already out: nothing more to take back")
-        #expect(world.sent.filter { $0.kind == .mark }.count == 1, "never marked again beside them")
-        #expect(await injector.finishInputMethod(session: "t", text: "The harbor lights.") == nil)
-        #expect(injector.finalizeLive(session: "t", text: "The harbor lights.") == .notTyped)
-    }
-
-    /// Words the app typed in and that could not come back out, shown exactly at the caret: they are
-    /// selected there and the finished text goes over them (the whole text once). Not exactly there
-    /// (the person's text changed): the card.
-    @Test func typedWordsLeftAtTheCaretGetTheFinishedTextOverThem() async {
-        for exact in [true, false] {
+    /// Words the app committed itself and that could not come back out, shown exactly at the caret:
+    /// they are selected there and the finished text goes over them (the whole text once). Not
+    /// exactly there (the person's text changed): the card.
+    @Test func committedWordsLeftAtTheCaretGetTheFinishedTextOverThem() async {
+        for (exact, late) in [(true, false), (false, false), (false, true)] {
             let world = World()
             let (injector, link) = freshTake(world)
-            let field = SimulatedTextField(exact ? "Dear Sam, the harbor" : "Dear Sam, the harbor!")
+            let field = SimulatedTextField(exact || late ? "Dear Sam, the harbor" : "Dear Sam, the harbor!")
+            // A field that answers from a late cache: the second read shows the words gone.
+            if late { field.afterNextRead = { field.current.value = "Dear Sam," } }
             injector.leftWordsField = { field }
-            link.receive(.init(.marked, take: "t", seq: 1, ok: false, reason: InputMethodWire.typedLeft))
-            _ = injector.reconcileLive(session: "t", transcript: "the harbor lights")
+            injector.leftWordsSettle = {}
+            link.receive(.init(.marked, take: "t", seq: 1, ok: true))
+            #expect(await waitFor(1.5) { world.sent.contains { $0.kind == .cancel } })
+            link.receive(.init(.cleared, take: "t", ok: false, reason: "committed"))
+            #expect(await waitFor(1) { world.sent.contains { $0.kind == .end } })
             let final = await injector.finishInputMethod(session: "t", text: "The harbor lights.")
             if exact {
                 guard case .replace(let own)? = final else { Issue.record("expected the finished text over the words: \(String(describing: final))"); continue }
@@ -154,14 +147,59 @@ struct InputMethodInjectorTests {
         }
     }
 
-    /// The same, but they could not come back out: nothing more is written and the card says why.
-    @Test func typedMarksThatCouldNotComeBackOutKeepTheCard() async {
+    /// An app that types each mark in as typed text (no marked text): its first words, seen at the
+    /// caret, are taken back once to check; they are still there, so nothing more is marked (no
+    /// doubled words), pFlow Dictation stops, the finished text goes over those words at the end,
+    /// and the app gets pFlow's card from then on (review S2).
+    @Test func anAppThatTypesMarksInIsNeverMarkedTwice() async {
         let world = World()
         let (injector, link) = freshTake(world)
-        link.receive(.init(.marked, take: "t", seq: 1, ok: false, reason: InputMethodWire.typedLeft))
-        #expect(injector.reconcileLive(session: "t", transcript: "the harbor lights") == .otherWindow)
-        #expect(await injector.finishInputMethod(session: "t", text: "The harbor lights.") == .kept(.otherWindow))
-        #expect(world.sent.filter { $0.kind == .mark }.count == 1)
+        link.receive(.init(.marked, take: "t", seq: 1, ok: true))
+        world.read = "Dear Sam, the harbor"
+        #expect(await waitFor(1) { world.sent.contains { $0.kind == .cancel } }, "the one check")
+        link.receive(.init(.cleared, take: "t", ok: false, reason: "committed"))
+        #expect(await waitFor(1) { world.sent.contains { $0.kind == .end } })
+        #expect(!world.sent.contains { $0.kind == .confirm }, "never confirmed: nothing may commit")
+        #expect(injector.reconcileLive(session: "t", transcript: "the harbor lights") == .unsupported, "the card")
+        #expect(injector.reconcileLive(session: "t", transcript: "the harbor lights glow") == nil)
+        #expect(world.sent.filter { $0.kind == .mark }.count == 1, "never marked again beside them")
+        #expect(injector.appMarks["com.example.writer"] == .types)
+        let field = SimulatedTextField("Dear Sam, the harbor")
+        injector.leftWordsField = { field }
+        injector.leftWordsSettle = {}
+        guard case .replace(let own)? = await injector.finishInputMethod(session: "t", text: "The harbor lights glow.") else {
+            Issue.record("the finished text goes over the typed words"); return
+        }
+        #expect(own.text == "the harbor")
+    }
+
+    /// An app with marked text: the check takes the first words back, they are gone, they come straight
+    /// back and the take goes on; the next take in that app is not checked again.
+    @Test func anAppThatKeepsMarksIsCheckedOnceAndTheWordsComeBack() async {
+        let world = World()
+        let (injector, link) = freshTake(world)
+        link.receive(.init(.marked, take: "t", seq: 1, ok: true))
+        world.read = "Dear Sam, the harbor"
+        #expect(await waitFor(1) { world.sent.contains { $0.kind == .cancel } })
+        world.read = "Dear Sam,"
+        link.receive(.init(.cleared, take: "t", ok: true, reason: "gone"))
+        #expect(await waitFor(1) { link.confirmed }, "confirmed after the check")
+        #expect(world.sent.filter { $0.kind == .mark }.map(\.text) == [" the harbor", " the harbor"], "the words come straight back")
+        #expect(injector.appMarks["com.example.writer"] == .keeps)
+        #expect(!world.sent.contains { $0.kind == .end })
+
+        // The next take in the same app: no check.
+        world.sent.removeAll()
+        world.read = "Dear Sam,"
+        #expect(link.begin(id: "t2", bundle: "com.example.writer", readable: true))
+        link.receive(.init(.client, take: "t2", bundle: "com.example.writer", provisional: false))
+        injector.adoptInputMethodTakeForTesting(session: "t2", field: AXUIElementCreateApplication(getpid()), value: "Dear Sam,", caret: 9)
+        #expect(injector.reconcileLive(session: "t2", transcript: "the kites") == nil)
+        let seq = link.take?.seq ?? 0
+        link.receive(.init(.marked, take: "t2", seq: seq, ok: true))
+        world.read = "Dear Sam, the kites"
+        #expect(await waitFor(1) { link.confirmed })
+        #expect(!world.sent.contains { $0.kind == .cancel }, "checked once per app")
     }
 
     /// Recognition failed mid-take: the words shown stay as they are and the person's source comes

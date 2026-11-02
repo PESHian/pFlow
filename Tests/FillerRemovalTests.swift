@@ -52,6 +52,7 @@ struct FillerRemovalTests {
     @Test func capitalizesOnlyRealSentenceStarts() {
         #expect(strip("um, go to pesh.tech, i.e. the site") == "Go to pesh.tech, i.e. the site")
         #expect(strip("uh it costs 3.50 now. um see Dr. smith e.g. today! uh ok") == "It costs 3.50 now. See Dr. smith e.g. today! Ok")
+        #expect(strip("um no. we can't") == "No. We can't", "\"No.\" ends a sentence (review M2)")
     }
 
     @Test func allFillerBecomesEmpty() {
