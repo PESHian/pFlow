@@ -82,21 +82,33 @@ struct InputMethodInjectorTests {
     /// finished text goes in once by the usual checked paste. The app committing them, another field
     /// focused, or the field holding anything new: the card, as before.
     @Test func anUnreadTakeBackIsProvenByTheFieldAtTheEnd() async {
-        for (reason, focusedSame, read, expected) in [
-            ("unread", true, "Dear Sam,", LiveInlineFinal.notTyped),
-            ("committed", true, "Dear Sam,", LiveInlineFinal.kept(.otherWindow)),
-            ("unread", false, "Dear Sam,", LiveInlineFinal.kept(.otherWindow)),
-            ("unread", true, "Dear Sam, Bye", LiveInlineFinal.kept(.otherWindow)),
-        ] {
+        // (take-back reason, focused field the same, field text, the person acted, the field changes after the first look)
+        let cases: [(String, Bool, String, Bool?, Bool, LiveInlineFinal)] = [
+            ("unread", true, "Dear Sam,", false, false, .notTyped),
+            ("committed", true, "Dear Sam,", false, false, .kept(.otherWindow)),
+            ("unread", false, "Dear Sam,", false, false, .kept(.otherWindow)),
+            ("unread", true, "Dear Sam, Bye", false, false, .kept(.otherWindow)),
+            ("unread", true, "Dear Sam,", true, false, .kept(.otherWindow)),
+            ("unread", true, "Dear Sam,", nil, false, .kept(.otherWindow)),
+            ("unread", true, "Dear Sam,", false, true, .kept(.otherWindow)),
+        ]
+        for (reason, focusedSame, read, acted, changes, expected) in cases {
             let world = World()
             let (injector, link) = freshTake(world)
             world.read = read
-            injector.focusedFieldNow = { focusedSame ? AXUIElementCreateApplication(getpid()) : AXUIElementCreateApplication(1) }
+            var looks = 0
+            injector.focusedFieldNow = {
+                looks += 1
+                // The second look comes after the quarter-second wait: the field changed meanwhile.
+                if changes, looks == 2 { world.read = "Dear Sam, Bye" }
+                return focusedSame ? AXUIElementCreateApplication(getpid()) : AXUIElementCreateApplication(1)
+            }
+            injector.personActedSinceCapture = { acted }
             link.receive(.init(.marked, take: "t", seq: 1, ok: true))
             #expect(await waitFor(2.5) { world.sent.contains { $0.kind == .cancel } })
             link.receive(.init(.cleared, take: "t", ok: false, reason: reason))
             let final = await injector.finishInputMethod(session: "t", text: "The harbor lights.")
-            #expect(final == expected, "\(reason), focused \(focusedSame), field \(read)")
+            #expect(final == expected, "\(reason), focused \(focusedSame), field \(read), acted \(String(describing: acted)), changes \(changes)")
             #expect(!world.sent.contains { $0.kind == .commit })
         }
     }

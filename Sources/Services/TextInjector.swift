@@ -190,6 +190,9 @@ final class TextInjector: TextInjecting {
     private var inputMethodTakeBackUnread = false
     /// The target app's focused field now (replaceable in tests).
     lazy var focusedFieldNow: () -> AXUIElement? = { [unowned self] in self.targetApp.flatMap(self.focusedField) }
+    /// Whether the person pressed a key or clicked since the take's target was captured; nil when
+    /// nothing watches, so nobody can say (replaceable in tests).
+    lazy var personActedSinceCapture: () -> Bool? = { [unowned self] in PersonInput.shared.acted(since: self.capturedAt) }
     /// Words heard while the first marks are being looked for; marked once they are seen.
     private var inputMethodPending: String?
     /// How long the first marks have to show in the target field before they are taken back out.
@@ -627,14 +630,16 @@ final class TextInjector: TextInjecting {
     }
 
     /// At the end of a take whose first marks were taken back without proof (owner 2026-11-01, T3 Code):
-    /// the target field is still the app's focused one and reads exactly as when the take began, twice,
-    /// a quarter second apart. Then nothing of pFlow's is in it, and the finished text can go in once
-    /// by the usual checked paste instead of only on the card. Anything else: no proof, the card.
+    /// the person has not pressed a key or clicked since the take began (a click can make the app commit
+    /// the marked words where Accessibility does not show them: review 2026-11-01), and the target field
+    /// is still the app's focused one and reads exactly as when the take began, twice, a quarter second
+    /// apart. Then nothing of pFlow's is in it, and the finished text can go in once by the usual checked
+    /// paste instead of only on the card. Anything else, or nobody watching for keys and clicks: the card.
     private func takeBackProvenByTheField() async -> Bool {
-        guard targetReadable, let field = targetField, let now = focusedFieldNow(), CFEqual(now, field),
-              fieldShowsCaretContext() else { return false }
+        guard personActedSinceCapture() == false, targetReadable, let field = targetField,
+              let now = focusedFieldNow(), CFEqual(now, field), fieldShowsCaretContext() else { return false }
         try? await Task.sleep(for: .milliseconds(250))
-        guard let again = focusedFieldNow(), CFEqual(again, field) else { return false }
+        guard personActedSinceCapture() == false, let again = focusedFieldNow(), CFEqual(again, field) else { return false }
         return fieldShowsCaretContext()
     }
 
