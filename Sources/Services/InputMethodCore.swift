@@ -176,6 +176,9 @@ final class InputMethodTakeCore {
     /// proven gone. Never anything more: words still read as there (a cache that stays late longer
     /// than the looks, or an app that committed them) are left exactly as they are; pFlow then pastes
     /// nothing beside them and keeps the text on its card. pFlow Dictation never deletes text.
+    /// On the main actor: a text client is only ever read from the main thread (read from a
+    /// background thread, IMK answers nothing and every look reads as no proof).
+    @MainActor
     func settle(_ first: InputMethodTakeBack, looks: Int, wait: () async -> Void) async -> InputMethodTakeBack {
         var result = first, left = looks
         while !result.proven, left > 0 {
