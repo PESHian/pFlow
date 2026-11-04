@@ -4,6 +4,7 @@ import Speech
 import ApplicationServices
 import Carbon
 import Observation
+import Security
 
 @MainActor
 @Observable
@@ -46,7 +47,14 @@ final class PermissionsManager {
         /// Clears pFlow's own Accessibility row. A row from an earlier build
         /// shows as ticked in System Settings while this build is not trusted,
         /// and while any row exists Apple's prompt will not show again.
-        var resetOwnRow: () async -> Void
+        /// True when it ran and macOS confirmed it.
+        var resetOwnRow: () async -> Bool
+        /// Whether this press may clear the row: the first press for this copy
+        /// of pFlow, or the last clear was over two minutes ago. A switch the
+        /// person turns on right after a press is never wiped by the next one.
+        var mayClearOldRow: () -> Bool
+        /// Remembers a clear that worked (a failed one is tried on the next press).
+        var clearedOldRow: () -> Void
         /// Starts watching for Apple's prompt; the closure it returns answers
         /// whether a prompt window has appeared since the watch began.
         var watchForPrompt: () -> () -> Bool
@@ -64,7 +72,7 @@ final class PermissionsManager {
     /// nothing more is opened; a prompt that shows up later is left alone.
     static func grantAccessibility(_ steps: AccessibilityGrantSteps) async -> AccessibilityGrantOutcome {
         if steps.isTrusted() { return .alreadyTrusted }
-        await steps.resetOwnRow()
+        if steps.mayClearOldRow(), await steps.resetOwnRow() { steps.clearedOldRow() }
         let promptAppeared = steps.watchForPrompt()
         steps.prompt()
         for _ in 0..<promptWaits {
@@ -97,8 +105,8 @@ final class PermissionsManager {
     var accessibilityHint: String? {
         guard !accessibility else { return nil }
         switch accessibilityGrant {
-        case .promptShown: return "Choose Open System Settings in Apple's message, then turn on pFlow."
-        case .settingsOpened: return "Turn on pFlow in the list that opened."
+        case .promptShown: return "Choose Open System Settings in Apple's message, then turn on “\(Self.listedName)”."
+        case .settingsOpened: return "Turn on “\(Self.listedName)” in the list that opened."
         case .alreadyTrusted, .granted, nil: return nil
         }
     }
@@ -107,6 +115,8 @@ final class PermissionsManager {
         AccessibilityGrantSteps(
             isTrusted: { AXIsProcessTrusted() },
             resetOwnRow: { await Self.resetOwnAccessibilityRow() },
+            mayClearOldRow: { Self.mayClear(copy: Self.thisCopy(), now: Date(), defaults: .standard) },
+            clearedOldRow: { Self.recordCleared(copy: Self.thisCopy(), now: Date(), defaults: .standard) },
             watchForPrompt: { Self.watchForAccessibilityPrompt() },
             prompt: { Self.promptForAccessibility() },
             openSettings: { Self.openPrivacyPane(.accessibility) },
@@ -201,15 +211,52 @@ final class PermissionsManager {
         refresh()
     }
 
+    /// The name System Settings lists pFlow under: its file name, so
+    /// "pFlow by Pesh" once installed from the DMG.
+    nonisolated static var listedName: String { Bundle.main.bundleURL.deletingPathExtension().lastPathComponent }
+
+    nonisolated static let clearedForKey = "pflow.accessibility.clearedFor"
+    nonisolated static let clearedAtKey = "pflow.accessibility.clearedAt"
+    /// Long enough to turn the switch on and come back; short enough that a
+    /// row an older copy wrote again can still be cleared from pFlow.
+    nonisolated static let clearAgainAfter: TimeInterval = 120
+
+    /// The rule behind `mayClearOldRow`, kept in `defaults`.
+    nonisolated static func mayClear(copy: String, now: Date, defaults: UserDefaults) -> Bool {
+        guard defaults.string(forKey: clearedForKey) == copy,
+              let at = defaults.object(forKey: clearedAtKey) as? Date else { return true }
+        return now.timeIntervalSince(at) >= clearAgainAfter || now < at
+    }
+
+    nonisolated static func recordCleared(copy: String, now: Date, defaults: UserDefaults) {
+        defaults.set(copy, forKey: clearedForKey)
+        defaults.set(now, forKey: clearedAtKey)
+    }
+
+    /// This copy of pFlow as macOS privacy settings tell copies apart: its
+    /// code signature's unique hash (else its path and build number).
+    nonisolated static func thisCopy() -> String {
+        var code: SecCode?
+        var staticCode: SecStaticCode?
+        var info: CFDictionary?
+        if SecCodeCopySelf([], &code) == errSecSuccess, let code,
+           SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+           SecCodeCopySigningInformation(staticCode, [], &info) == errSecSuccess,
+           let unique = (info as? [String: Any])?[kSecCodeInfoUnique as String] as? Data {
+            return unique.map { String(format: "%02x", $0) }.joined()
+        }
+        return Bundle.main.bundlePath + "#" + (Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "")
+    }
+
     /// macOS privacy rows are keyed by the app's signature. Test builds now
     /// carry one stable requirement (scripts/mac_release.py), but a row made
     /// by an older build stays ticked in System Settings while this build is
     /// not trusted. `tccutil` clears only pFlow's own row and needs no admin.
     /// Runs off the main actor: a press of Grant during a take must not
     /// stop the waveform or the live words while tccutil finishes.
-    private static func resetOwnAccessibilityRow() async {
-        guard let bundleID = Bundle.main.bundleIdentifier else { return }
-        await Task.detached(priority: .userInitiated) {
+    private static func resetOwnAccessibilityRow() async -> Bool {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return false }
+        return await Task.detached(priority: .userInitiated) {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
             task.arguments = ["reset", "Accessibility", bundleID]
@@ -219,8 +266,10 @@ final class PermissionsManager {
                 if task.terminationStatus != 0 {
                     NSLog("pFlow: tccutil reset exited \(task.terminationStatus)")
                 }
+                return task.terminationStatus == 0
             } catch {
                 NSLog("pFlow: tccutil reset failed: \(error.localizedDescription)")
+                return false
             }
         }.value
     }

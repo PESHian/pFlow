@@ -44,3 +44,22 @@ final class HistoryStore: HistoryStoring {
         try? context.save()
     }
 }
+
+/// Where History lives. The file SwiftData opens by default is never moved, copied or changed
+/// here; when it cannot be opened (a damaged file, another app's schema in the same default file),
+/// pFlow still starts, with History kept in memory for this launch only.
+enum HistoryContainer {
+    static let unavailableNote = "pFlow couldn't open your History file this time, so new takes are kept only until pFlow quits. Your earlier History file is left as it was."
+
+    static func make(open: () throws -> ModelContainer = { try ModelContainer(for: Transcript.self) })
+        -> (container: ModelContainer, unavailable: Bool) {
+        do {
+            return (try open(), false)
+        } catch {
+            NSLog("pFlow: History file could not be opened, History is in memory for this launch: \(error)")
+            // An in-memory store cannot fail for want of a file.
+            let memory = try! ModelContainer(for: Transcript.self, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+            return (memory, true)
+        }
+    }
+}

@@ -134,4 +134,37 @@ struct TranscriptionEngineTests {
         #expect(captured.length > 1000)
         #expect(try FileManager.default.contentsOfDirectory(atPath: recordings.path).isEmpty)
     }
+
+    // MARK: The end of an Apple Speech take (hunt H4)
+
+    /// The analyzer finished, but its last final result is still on its way: the end of the take
+    /// waits for the stream to end, so the last words are in the text, not dropped.
+    @Test func theLastFinalResultArrivingLateIsKept() async throws {
+        let service = TranscriptionService()
+        let (stream, results) = AsyncStream<(text: String, isFinal: Bool)>.makeStream()
+        service.readResults(stream)
+        results.yield((text: "The harbor ", isFinal: true))
+        results.yield((text: "opens at", isFinal: false))
+        Task {
+            try? await Task.sleep(for: .milliseconds(200))
+            results.yield((text: "opens at dawn.", isFinal: true))
+            results.finish()
+        }
+        #expect(try await service.finish() == "The harbor opens at dawn.")
+    }
+
+    /// The stream never finalizes the last words: after a bounded wait, the words the person saw
+    /// live still go in.
+    @Test func wordsSeenLiveButNeverFinalizedAreKept() async throws {
+        let service = TranscriptionService()
+        let (stream, results) = AsyncStream<(text: String, isFinal: Bool)>.makeStream()
+        service.readResults(stream)
+        results.yield((text: "The harbor ", isFinal: true))
+        results.yield((text: "opens at dawn", isFinal: false))
+        try await Task.sleep(for: .milliseconds(100))
+        let started = Date()
+        #expect(try await service.finish() == "The harbor opens at dawn")
+        #expect(Date().timeIntervalSince(started) < 2.5, "a bounded wait")
+        withExtendedLifetime(results) {}
+    }
 }

@@ -10,6 +10,8 @@ final class AppState {
     static let shared = AppState()
 
     let modelContainer: ModelContainer
+    /// The History file could not be opened this launch: takes are kept until pFlow quits only.
+    let historyUnavailable: Bool
     let permissions = PermissionsManager()
     let launchAtLogin = LaunchAtLoginService()
     let vocabulary = VocabularyStore()
@@ -116,11 +118,9 @@ final class AppState {
     private let dictation: DictationSession
 
     private init() {
-        do {
-            modelContainer = try ModelContainer(for: Transcript.self)
-        } catch {
-            fatalError("pFlow: failed to create model container: \(error)")
-        }
+        // A History file that cannot be opened never stops pFlow: it is left exactly as it is, and
+        // this launch runs with History kept in memory only (the History page says so).
+        (modelContainer, historyUnavailable) = HistoryContainer.make()
 
         soundsEnabled = (UserDefaults.standard.object(forKey: "soundsEnabled") as? Bool) ?? true
         transcriptionEngine = TranscriptionEngine.saved()
@@ -143,6 +143,7 @@ final class AppState {
 
         let history = HistoryStore(context: modelContainer.mainContext)
         self.history = history
+        hud.model.historySaved = !historyUnavailable
 
         sounds.enabled = { [weak self] in self?.soundsEnabled ?? true }
         injector.copyToClipboard = { [weak self] in self?.clipboardSettings.copyDictation ?? false }

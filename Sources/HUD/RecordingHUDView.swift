@@ -60,36 +60,48 @@ struct RecordingHUDView: View {
         Group {
             if isRecordingPhase {
                 Self.capsuleWaveformView(model)
-            } else if model.phase == .pasteUnconfirmed {
-                capsuleLabel("Check paste", "info.circle")
-                    .help("The app could not verify the paste. Check your text before pasting again.")
-            } else if model.phase == .copied {
-                capsuleLabel("Press ⌘V", "doc.on.clipboard")
-            } else if model.phase == .savedToHistory {
-                capsuleLabel("In History", "clock.arrow.circlepath")
-                    .help(title)
-            } else if model.phase == .failed {
-                capsuleLabel("Failed", "exclamationmark.triangle")
-                    .foregroundStyle(.orange)
-                    .help(title)
-            } else if model.phase == .liveTextKept || model.phase == .liveTextKeptTyped {
-                capsuleLabel(model.phase == .liveTextKeptTyped ? "Words stay" : "In History",
-                             "clock.arrow.circlepath")
-                    .help(title)
-            } else if model.phase == .passwordField {
-                capsuleLabel("Password", "lock")
-                    .help(title)
-            } else if model.phase == .typingStopped {
-                capsuleLabel("Not put in", "exclamationmark.circle")
-                    .help(title)
-            } else if model.phase == .typedTextLeft {
-                capsuleLabel("Words stay", "info.circle")
-                    .help(title)
+            } else if let shown = Self.afterTake(model.phase) {
+                if model.phase == .failed {
+                    capsuleLabel(shown.words, shown.icon).foregroundStyle(.orange).help(title)
+                } else {
+                    capsuleLabel(shown.words, shown.icon).help(title)
+                }
             } else {
                 // The system spinner draws for the window's light or dark
                 // look, which is dark on the capsule's dark glass.
                 ProcessingSweep(palette: model.palette)
                     .frame(width: Self.capsuleWaveform.width, height: Self.capsuleWaveform.height)
+            }
+        }
+    }
+
+    /// A status after the take, in a few plain words, and its icon. The card's
+    /// header shows both; the capsule shows the icon, with the words as its
+    /// tooltip and VoiceOver label. Nil while pFlow listens or works.
+    static func afterTake(_ phase: HUDPhase) -> (words: String, icon: String)? {
+        switch phase {
+        case .listening, .confirmCancel, .transcribing, .cleaning, .restarting: return nil
+        case .pasteUnconfirmed: return ("Check your text", "info.circle")
+        case .copied: return ("On the clipboard", "doc.on.clipboard")
+        case .savedToHistory, .typingStopped: return ("Not put in", "exclamationmark.circle")
+        case .failed: return ("Dictation stopped", "exclamationmark.triangle")
+        case .liveTextKept, .liveTextKeptTyped: return ("Stopped early", "clock.arrow.circlepath")
+        case .passwordField: return ("Password field", "lock")
+        case .typedTextLeft: return ("Cancelled", "info.circle")
+        }
+    }
+
+    /// The card's header after the take: its icon and its words, never an icon alone.
+    static func afterTakeHeader(_ phase: HUDPhase) -> some View {
+        HStack(alignment: .center, spacing: Theme.s2) {
+            if let shown = afterTake(phase) {
+                Image(systemName: shown.icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(phase == .failed || phase == .typingStopped || phase == .savedToHistory
+                                     ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+                Text(shown.words)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
             }
         }
     }
@@ -119,8 +131,17 @@ struct RecordingHUDView: View {
         model.phase == .transcribing || model.phase == .cleaning
     }
 
-    private var title: String {
-        switch model.phase {
+    private var title: String { Self.title(model.phase, historySaved: model.historySaved) }
+
+    /// Where the words are kept, in the card's words: History, or only until pFlow quits when the
+    /// History file could not be opened this launch.
+    static func kept(historySaved: Bool) -> String {
+        historySaved ? "Saved in History" : "Kept until pFlow quits (History can't be saved now)"
+    }
+
+    static func title(_ phase: HUDPhase, historySaved: Bool) -> String {
+        let history = historySaved ? "saved in History" : "kept until pFlow quits"
+        switch phase {
         case .listening: return "Listening"
         case .confirmCancel: return "Press esc again to cancel"
         case .transcribing: return "Transcribing…"
@@ -128,13 +149,14 @@ struct RecordingHUDView: View {
         case .failed: return "Dictation could not finish."
         case .pasteUnconfirmed: return "Paste could not be verified. Check your text before pasting again."
         case .copied: return "Text copied. Press Command V to paste."
-        case .savedToHistory: return "Text saved in History. Clipboard unchanged."
+        case .savedToHistory: return "Text \(history). Clipboard unchanged."
         case .restarting: return "Restarting pFlow"
-        case .liveTextKept: return "pFlow stopped listening early. The words so far are saved in History."
+        case .liveTextKept: return "pFlow stopped listening early. The words so far are \(history)."
         case .liveTextKeptTyped:
-            return "pFlow stopped listening early. The words already typed stay in your app, and the words so far are saved in History."
+            return "pFlow stopped listening early. The words already typed stay in your app, and the words so far are \(history)."
         case .passwordField: return "Dictation is off in password fields."
-        case .typingStopped: return "Typing stopped, so the finished text was not put in. Copy it here; it is also in History."
+        case .typingStopped:
+            return "Typing stopped, so the finished text was not put in. Copy it here; it is also \(historySaved ? "in History" : "kept until pFlow quits")."
         case .typedTextLeft: return "Cancelled. Words pFlow already typed are still in the app."
         }
     }
@@ -142,8 +164,9 @@ struct RecordingHUDView: View {
 
 /// Live text: the newest words in a calm floating card. It never takes focus
 /// (the panel cannot become key) and keeps the same size for the whole take.
-/// Header: Pesh mark, recording dot and a short caption leading, the live
-/// waveform trailing. Below a hairline, the transcript fills from the bottom
+/// Header: recording dot and a short caption leading, the live waveform
+/// trailing; after the take, what happened in words with its icon (no logo:
+/// at this size it reads as a broken glyph). Below a hairline, the transcript fills from the bottom
 /// of a fixed box; the top of the box fades so older lines dissolve instead
 /// of being cut.
 private struct LivePreviewCard<Status: View>: View {
@@ -170,7 +193,6 @@ private struct LivePreviewCard<Status: View>: View {
     @ViewBuilder private var content: some View {
         if messageOnly, let reason = model.reason {
             HStack(alignment: .center, spacing: Theme.s2) {
-                PeshMark(size: 16)
                 status()
                 Text(reason)
                     .font(.system(size: 12))
@@ -248,7 +270,6 @@ private struct LivePreviewCard<Status: View>: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: Theme.s2) {
-            PeshMark(size: 16)
             if isRecordingPhase {
                 RecordingDot(pulsing: model.phase == .listening && !reduceMotion)
                 Text(caption)
@@ -259,12 +280,12 @@ private struct LivePreviewCard<Status: View>: View {
                 Spacer(minLength: Theme.s2)
                 RecordingWaveform(levels: Array(model.levels.suffix(25)),
                                   style: model.waveformStyle, compact: true, palette: model.palette)
-            } else if isProcessingPhase {
-                ProgressView().controlSize(.small).tint(Theme.accent)
-                Text(title).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+            } else if RecordingHUDView.afterTake(model.phase) != nil {
+                RecordingHUDView.afterTakeHeader(model.phase)
                 Spacer(minLength: 0)
             } else {
-                status()
+                ProgressView().controlSize(.small).tint(Theme.accent)
+                Text(title).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: 0)
             }
         }
@@ -275,7 +296,7 @@ private struct LivePreviewCard<Status: View>: View {
     /// takes focus, so the app the person was in keeps it.
     private var copyRow: some View {
         HStack(spacing: Theme.s2) {
-            Text(model.reason == nil ? title : "Saved in History")
+            Text(model.reason == nil ? title : RecordingHUDView.kept(historySaved: model.historySaved))
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -296,7 +317,7 @@ private struct LivePreviewCard<Status: View>: View {
         HStack(spacing: Theme.s2) {
             Image(systemName: "accessibility")
                 .foregroundStyle(Theme.accent)
-            Text("pFlow needs Accessibility to type. Press Grant, then turn on pFlow.")
+            Text("pFlow needs Accessibility to type. Press Grant, then turn on “\(PermissionsManager.listedName)”.")
                 .font(.system(size: 11))
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: Theme.s2)

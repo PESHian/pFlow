@@ -39,5 +39,8 @@ final class HUDModel {
     /// This build is not trusted for Accessibility: the card says so and
     /// offers the one-press Grant.
     var needsAccessibility = false
+    /// History is saved to disk. False when the History file could not be opened this launch: the
+    /// words are kept only until pFlow quits, and the card says that, not "Saved in History".
+    var historySaved = true
     var onGrantAccessibility: (() -> Void)?
 }

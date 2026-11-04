@@ -133,12 +133,21 @@ final class RecordingCoordinator {
                 self.transcript.cancel()
                 self.stopAwaitingTyping()
                 self.leaveLiveTyping()
+                // The key may already be up, or come up while the session stops: the stop (or cancel)
+                // that waits for this start owns the end of the take. It sees the failure, leaves this
+                // card up and goes idle itself, so a press meanwhile cannot start a take that nothing
+                // can stop. Decided after the last wait, so a stop landing during it counts.
                 _ = try? await self.session.stop()
-                self.explain(.failed, Self.startFailedNote, text: nil)
-                self.state = .idle
+                let modelMissing: Bool
+                if case TranscriptionError.modelNotReady = error { modelMissing = true } else { modelMissing = false }
+                self.explain(.failed, modelMissing ? Self.modelNotReadyNote : Self.startFailedNote, text: nil)
+                if self.state == .recording { self.state = .idle } else { self.startFailed = take }
             }
         }
     }
+
+    /// The take whose start failed while its stop was already waiting for it.
+    private var startFailed: String?
 
     static let needsAccessibilityNote = "pFlow needs Accessibility to type"
     static let onClipboardNote = "Your words are on the clipboard. Press ⌘V to paste them."
@@ -251,6 +260,17 @@ final class RecordingCoordinator {
 
     /// Live words stopped mid-take. Say so; the words shown stay, and stopping
     /// still runs the normal final recognition.
+    /// The microphone stopped mid-take: the card says so at once (never "Listening" over nothing);
+    /// the words so far are kept when the key comes up.
+    private func microphoneStopped() {
+        guard state == .recording else { return }
+        hud.setLivePreview(true)
+        hud.setPartial(transcript.text)
+        hud.setLiveNote(Self.microphoneStoppedNote)
+    }
+
+    static let microphoneStoppedNote = "Microphone stopped: let go to keep your words"
+
     private func liveStopped() {
         guard state == .recording, takeLiveTextMode.showsPreview else { return }
         showCard(note: "Live words stopped")
@@ -302,6 +322,7 @@ final class RecordingCoordinator {
         session.onLevel = { [weak self] level in self?.hud.setLevel(level) }
         session.onTranscript = { [weak self] update in self?.receive(update) }
         session.onLiveStopped = { [weak self] in self?.liveStopped() }
+        session.onMicrophoneLost = { [weak self] in self?.microphoneStopped() }
 
         hud.setActions(
             onConfirm: { [weak self] in Task { await self?.toggle() } },
@@ -319,6 +340,7 @@ final class RecordingCoordinator {
         hideAfterLiveTyping()
         pauseCapture(true)
         await startTask?.value
+        startFailed = nil
         await session.cancel()
         startTask = nil
         state = .idle
@@ -376,6 +398,12 @@ final class RecordingCoordinator {
         pauseCapture(true)
         await startTask?.value
         startTask = nil
+        if let failed = startFailed, failed == take {
+            // The start failed after the key was up: its card says why and stays up.
+            startFailed = nil
+            state = .idle
+            return
+        }
 
         do {
             // The final update carries the last words. Partials still on their
@@ -532,21 +560,36 @@ final class RecordingCoordinator {
     /// words in History instead of dropping them, and say so. Nothing is
     /// typed: the text never finished, so it is not treated as a success.
     private func keepRecoverableText(after error: Error, duration: Double?) {
-        // Words already typed stay where they are; nothing more is typed.
+        // Words already typed stay where they are; nothing more is typed. pFlow Dictation lets go now,
+        // so the person's own input source is back between takes.
+        let typed = take.map { injector.typedLive(session: $0) } ?? false
+        if typingLive, let take { injector.endLive(session: take) }
         typingLive = false
         var kept = transcript.text
+        var note = (typed: Self.keptTypedNote, untyped: Self.keptNote)
+        var dropped = false
         if case TranscriptionError.interrupted(let recovered) = error, !recovered.isEmpty { kept = recovered }
+        if case TranscriptionError.audioDropped(let recovered) = error {
+            if !recovered.isEmpty { kept = recovered }
+            note = (Self.droppedNote, Self.droppedNote)
+            dropped = true
+        }
+        if case TranscriptionError.microphoneLost(let recovered) = error {
+            if !recovered.isEmpty { kept = recovered }
+            note = (Self.microphoneLostNote, Self.microphoneLostNote)
+            dropped = true
+        }
         transcript.cancel()
         kept = kept.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !kept.isEmpty else {
-            hud.hide(after: 0)
+            // Nothing heard: still never silent when audio was lost.
+            if dropped { explain(.failed, note.untyped, text: nil) } else { hud.hide(after: 0) }
             return
         }
         history.save(text: kept, duration: duration, device: recordingDevice,
                      spokenWordCount: kept.split(whereSeparator: \.isWhitespace).count,
                      applicationName: applicationName, applicationBundleID: applicationBundleID)
-        let typed = take.map { injector.typedLive(session: $0) } ?? false
-        explain(typed ? .liveTextKeptTyped : .liveTextKept, typed ? Self.keptTypedNote : Self.keptNote, text: kept)
+        explain(typed ? .liveTextKeptTyped : .liveTextKept, typed ? note.typed : note.untyped, text: kept)
     }
 
     /// pFlow did not put the text in: the card says why in one plain sentence
@@ -571,4 +614,7 @@ final class RecordingCoordinator {
     static let typedLeftNote = "Cancelled. The words pFlow already typed are still in the app."
     static let keptNote = "pFlow stopped listening early, so nothing was typed."
     static let keptTypedNote = "pFlow stopped listening early. The words it already typed stay in the app."
+    static let microphoneLostNote = "The microphone stopped partway (a headset or input change), so nothing more was typed."
+    static let droppedNote = "pFlow missed some of what you said while it got ready, so nothing more was typed."
+    static let modelNotReadyNote = "The speech model for your language isn't on this Mac yet. Check your internet, then try again."
 }

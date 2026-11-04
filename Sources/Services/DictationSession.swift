@@ -8,6 +8,8 @@ protocol DictationSessioning: AnyObject {
     var onTranscript: ((TranscriptUpdate) -> Void)? { get set }
     /// Live words stopped during the current take; the take still finishes.
     var onLiveStopped: (() -> Void)? { get set }
+    /// The microphone stopped giving audio during the current take (a device change).
+    var onMicrophoneLost: (() -> Void)? { get set }
     /// `live` is the take's Live text choice. Off adds no live recognition work.
     func start(take: String, live: Bool) async throws
     /// Ends the take and returns its final update, numbered after every partial.
@@ -19,6 +21,10 @@ protocol DictationSessioning: AnyObject {
 extension DictationSessioning {
     func cancel() async { _ = try? await stop() }
     var onLiveStopped: (() -> Void)? {
+        get { nil }
+        set {}
+    }
+    var onMicrophoneLost: (() -> Void)? {
         get { nil }
         set {}
     }
@@ -35,6 +41,8 @@ protocol AudioCapturing: AnyObject {
     func stop()
     func pause()
     func resume() throws
+    /// Called on the main queue when a device change left nothing recording.
+    var onLost: (() -> Void)? { get set }
 }
 
 extension AudioCaptureService: AudioCapturing {}
@@ -44,17 +52,20 @@ final class DictationSession: DictationSessioning {
     var onLevel: ((Float) -> Void)?
     var onTranscript: ((TranscriptUpdate) -> Void)?
     var onLiveStopped: (() -> Void)?
+    var onMicrophoneLost: (() -> Void)?
 
     private let capture: AudioCapturing
     private let whisperModel: URL
     private let appleEngine: () -> StreamingTranscriber
     /// The fast recognizer for live words only (DualTranscriber); nil keeps one recognizer.
     private let appleLiveEngine: (() -> StreamingTranscriber)?
-    private let relay = AudioBufferRelay()
+    private let relay: AudioBufferRelay
     private var transcriber: StreamingTranscriber?
     private var feed: LiveTranscriptFeed?
     private var locale: Locale
     private var capturePaused = false
+    /// The microphone stopped giving audio partway through this take (a device change).
+    private var microphoneLost = false
 
     func setCapturePaused(_ paused: Bool) throws {
         capturePaused = paused
@@ -83,7 +94,9 @@ final class DictationSession: DictationSessioning {
     init(locale: Locale = .current, capture: AudioCapturing = AudioCaptureService(),
          whisperModel: URL = WhisperModelStore.modelURL,
          appleEngine: @escaping () -> StreamingTranscriber = { TranscriptionService() },
-         appleLiveEngine: (() -> StreamingTranscriber)? = { TranscriptionService(fastResults: true) }) {
+         appleLiveEngine: (() -> StreamingTranscriber)? = { TranscriptionService(fastResults: true) },
+         relay: AudioBufferRelay = AudioBufferRelay()) {
+        self.relay = relay
         self.locale = locale
         self.capture = capture
         self.whisperModel = whisperModel
@@ -133,6 +146,14 @@ final class DictationSession: DictationSessioning {
         }
         capture.onBuffer = { [weak self] buffer in
             self?.relay.receive(buffer)
+        }
+        microphoneLost = false
+        capture.onLost = { [weak self] in
+            Task { @MainActor in
+                guard let self, self.feed === feed else { return }
+                self.microphoneLost = true
+                self.onMicrophoneLost?()
+            }
         }
         try capture.start()
         if capturePaused { capture.pause() }
@@ -187,6 +208,7 @@ final class DictationSession: DictationSessioning {
 
     func stop() async throws -> TranscriptUpdate {
         capture.stop()
+        let dropped = relay.dropped
         relay.reset()
         let feed = self.feed ?? LiveTranscriptFeed(session: "", deliver: { _ in })
         defer {
@@ -195,6 +217,17 @@ final class DictationSession: DictationSessioning {
             self.feed = nil
         }
         let text = try await transcriber?.finish() ?? ""
+        // Audio held while recognition got ready ran past what pFlow keeps: the text has a gap, so
+        // it is never put in as if whole; the take keeps it in History and says what happened.
+        if dropped > 0 {
+            NSLog("pFlow: audio dropped while recognition got ready: \(dropped) buffers")
+            throw TranscriptionError.audioDropped(kept: text.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        // The microphone stopped partway (a headset went away): the words so far are kept and the
+        // take says so, never put in as if it were the whole of what was said.
+        if microphoneLost {
+            throw TranscriptionError.microphoneLost(kept: text.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
         return feed.finish(text)
     }
 

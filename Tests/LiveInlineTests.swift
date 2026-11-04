@@ -142,6 +142,9 @@ final class LiveFakeInjector: TextInjecting {
     func typedLive(session: String) -> Bool { live.typed(session: session) }
     func finalizeLive(session: String, text: String) -> LiveInlineFinal { live.finalize(session: session, text: text) }
     func cancelLive(session: String) -> LiveInlineCancel { live.cancel(session: session) }
+    /// Takes whose live words were let go without a finished text (recognition failed).
+    var endedLive: [String] = []
+    func endLive(session: String) { endedLive.append(session) }
     /// The end replace: what it was given, and what it answers.
     var overSelection: [(String, OwnedWords)] = []
     var overSelectionOutcome: InjectionOutcome?
@@ -739,6 +742,7 @@ struct LiveInlineTests {
             #expect(injector.delivered.isEmpty)
             #expect(history.saved == ["harbor lights glow"])
             #expect(hud.phases.last == (typedFirst ? .liveTextKeptTyped : .liveTextKept))
+            #expect(injector.endedLive.count == 1, "live words let go now: pFlow Dictation is not left selected until the next take")
         }
     }
 

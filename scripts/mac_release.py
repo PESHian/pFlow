@@ -169,9 +169,24 @@ def package(app, dist, *, testing=False, env=None):
             staple(final_app)
             run('spctl', '--assess', '--type', 'execute', final_app)
         else:
-            # Ad-hoc as built. Never a hand-written designated requirement: without a
-            # certificate anchor any local app signed with the same identifier would
-            # inherit this app's privacy grants.
+            # A local signing key (the self-signed "Pesh" certificate, no name or email): every
+            # build signed with it keeps one designated requirement, the identifier plus that
+            # certificate, so macOS keeps a person's privacy grants across test copies and
+            # updates. Only the key's holder can sign to it. Without one: ad-hoc as built.
+            # Never a hand-written designated requirement: without a certificate anchor any
+            # local app signed with the same identifier would inherit this app's grants.
+            local = env.get('PFLOW_LOCAL_IDENTITY', '')
+            if local:
+                if not re.fullmatch(r'[A-Fa-f0-9]{40}', local):
+                    raise ValueError('PFLOW_LOCAL_IDENTITY must be the signing certificate SHA-1')
+                keychain = env.get('PFLOW_LOCAL_KEYCHAIN')
+                codes = code_paths(final_app)
+                for code in codes:
+                    run('codesign', '--force', '--sign', local, *(['--keychain', keychain] if keychain else []),
+                        '--preserve-metadata=entitlements', code)
+                leaf = f'certificate leaf = H"{local.lower()}"'
+                for code in codes:
+                    run('codesign', '--verify', '--strict', '-R', '=' + leaf, code)
             run('codesign', '--verify', '--deep', '--strict', final_app)
         shutil.copyfile(ROOT / 'LICENSE', stage / 'LICENSE.txt')
         (stage / 'Applications').symlink_to('/Applications')

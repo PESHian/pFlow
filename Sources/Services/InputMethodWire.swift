@@ -315,10 +315,12 @@ struct InputMethodBinding {
         return .bound
     }
 
-    /// The input method selected with no take and no pFlow to talk to puts the person's source back after this long.
+    /// The input method selected with no take puts the person's source back after this long: pFlow
+    /// went away, a take let go without it, or the person landed on it (Control-Space or the Globe key
+    /// go through every keyboard source). Between takes it is never left on.
     static let orphanDelay: TimeInterval = 3
 
-    static func orphanRestoreDue(hasTake: Bool, connected: Bool, selectedIsOurs: Bool, sinceActivation: TimeInterval) -> Bool {
-        !hasTake && !connected && selectedIsOurs && sinceActivation >= orphanDelay
+    static func orphanRestoreDue(hasTake: Bool, selectedIsOurs: Bool, sinceActivation: TimeInterval) -> Bool {
+        !hasTake && selectedIsOurs && sinceActivation >= orphanDelay
     }
 }

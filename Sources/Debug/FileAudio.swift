@@ -7,6 +7,7 @@ import Foundation
 final class FileCapture: AudioCapturing, @unchecked Sendable {
     var onBuffer: ((AVAudioPCMBuffer) -> Void)?
     var onLevel: ((Float) -> Void)?
+    var onLost: (() -> Void)?
     private let url: URL
     private let lock = NSLock()
     private var running = false
@@ -61,6 +62,7 @@ final class QueuedFileCapture: AudioCapturing, @unchecked Sendable {
     var onLevel: ((Float) -> Void)? {
         didSet { current?.onLevel = onLevel }
     }
+    var onLost: (() -> Void)?
     let next: URL
     private var current: FileCapture?
 

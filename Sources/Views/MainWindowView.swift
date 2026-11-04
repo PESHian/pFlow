@@ -29,7 +29,8 @@ struct MainWindowView: View {
                     onOpenTemplates: { app.mainPage = .templates }
                 )
             case .history:
-                HistoryView(onBack: { app.mainPage = .settings })
+                HistoryView(onBack: { app.mainPage = .settings },
+                            unavailableNote: app.historyUnavailable ? HistoryContainer.unavailableNote : nil)
             case .dictionary:
                 DictionaryView(onBack: { app.mainPage = .settings })
             case .statistics:

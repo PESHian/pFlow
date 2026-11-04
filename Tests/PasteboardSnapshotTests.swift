@@ -68,4 +68,24 @@ struct PasteboardSnapshotTests {
         board.writeObjects([item])
         withExtendedLifetime(provider) { #expect(PasteboardSnapshot.capture(board) == nil) }
     }
+
+    /// An Excel range or a promised attachment: one type gives no data. A partial copy would come
+    /// back without it, so the clipboard is not used at all: no snapshot, the clipboard untouched
+    /// (review Q2: back whole, or not touched; the text goes in another way or the card has it).
+    @Test func aTypeThatGivesNoDataLeavesTheClipboardUntouched() throws {
+        final class EmptyProvider: NSObject, NSPasteboardItemDataProvider {
+            func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem,
+                            provideDataForType type: NSPasteboard.PasteboardType) {}
+        }
+        let board = NSPasteboard(name: .init("pflow.snapshot.tests.\(UUID())"))
+        defer { board.releaseGlobally() }
+        let provider = EmptyProvider(), item = NSPasteboardItem()
+        item.setString("Fictional cell A1", forType: .string)
+        item.setDataProvider(provider, forTypes: [NSPasteboard.PasteboardType("com.example.lazy-format")])
+        board.writeObjects([item])
+        let count = board.changeCount
+        withExtendedLifetime(provider) { #expect(PasteboardSnapshot.capture(board) == nil, "never a partial copy") }
+        #expect(board.changeCount == count && board.string(forType: .string) == "Fictional cell A1")
+        #expect(InsertionBlock.clipboardUnsaved.reason.contains("left it alone"))
+    }
 }

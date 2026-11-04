@@ -15,7 +15,7 @@ struct TemplateTests {
         #expect(summary.render(["No staff were injured."], source: source) == "Synopsis\nNo staff were injured.")
     }
 
-    @Test func legacySectionDecodeAndFactoryUpgradePreserveUserChoices() throws {
+    @Test func anUpdateKeepsEveryChangedTemplateExactlyAsSaved() throws {
         var legacy = DictationTemplate.policeReport
         legacy.sections[3].includeFullDictation = nil
         legacy.sections[0].instructions = "The reporting officer's name and role, only if stated."
@@ -23,7 +23,6 @@ struct TemplateTests {
         #expect(try JSONDecoder().decode(DictationTemplate.self, from: encoded).sections[3].includeFullDictation == nil)
         let scratch = ScratchDefaults("pflow.fullsource.test")
         defer { withExtendedLifetime(scratch) {} }
-        let suite = scratch.name
         let defaults = scratch.defaults
         var custom = DictationTemplate.supplement
         custom.sections[3].includeFullDictation = false
@@ -33,30 +32,104 @@ struct TemplateTests {
         var bulleted = DictationTemplate.policeReport
         bulleted.sections[3].includeFullDictation = nil
         bulleted.sections[3].bullets = true
-        defaults.set(try JSONEncoder().encode([legacy, custom, summarized, bulleted]), forKey: "pflow.templates")
-        defaults.set(legacy.id.uuidString, forKey: "pflow.template.active")
+        var oneWord = DictationTemplate.policeReport
+        oneWord.instructions += " Use plain words."
+        var bold = DictationTemplate.followUp
+        bold.boldHeadings = true
+        defaults.set(try JSONEncoder().encode([legacy, custom, summarized, bulleted, oneWord, bold]), forKey: "pflow.templates")
+        defaults.set(custom.id.uuidString, forKey: "pflow.template.active")
         let store = TemplateStore(defaults: defaults)
-        #expect(store.active?.id == legacy.id)
-        #expect(store.active?.sections[3].includeFullDictation == true)
-        #expect(store.active?.sections[0].instructions.contains("badge") == true)
-        #expect(store.templates.first { $0.id == custom.id }?.sections[3].includeFullDictation == false)
-        #expect(store.templates.first { $0.id == summarized.id }?.sections[3].includeFullDictation == nil)
-        #expect(store.templates.first { $0.id == bulleted.id }?.sections[3].includeFullDictation == nil)
+        #expect(Array(store.templates.dropLast()) == [custom, summarized, bulleted, oneWord, bold], "only the untouched older example goes")
+        #expect(store.templates.last?.name == "General notes")
+        #expect(store.active == custom)
+        #expect(TemplateStore(defaults: defaults).templates == store.templates)
     }
-    @Test func voiceCatalogMigrationPreservesCustomTemplateAndActiveSelection() throws {
+    @Test func anUpdateRemovesTheUntouchedReportExamplesAndAddsGeneralNotesOnce() throws {
         let scratch = ScratchDefaults("pflow.template.migration")
         defer { withExtendedLifetime(scratch) {} }
-        let name = scratch.name
         let defaults = scratch.defaults
         let custom = DictationTemplate(name: "My report", sections: [ReportSection(title: "My facts")])
-        defaults.set(try JSONEncoder().encode([custom]), forKey: "pflow.templates")
-        defaults.set(custom.id.uuidString, forKey: "pflow.template.active")
-        let migrated = TemplateStore(defaults: defaults)
-        #expect(migrated.active == custom)
-        #expect(migrated.templates.contains { $0.name == "Supplement" })
-        #expect(migrated.templates.contains { $0.name == "Follow-up report" })
-        let ids = migrated.templates.map(\.id)
-        #expect(TemplateStore(defaults: defaults).templates.map(\.id) == ids)
+        var oldest = DictationTemplate.followUp
+        oldest.voiceTriggers = nil
+        oldest.sections[3].includeFullDictation = nil
+        oldest.sections[0].instructions = "The reporting officer's name and role, only if stated."
+        let police = DictationTemplate.policeReport
+        defaults.set(try JSONEncoder().encode([police, custom, .supplement, oldest]), forKey: "pflow.templates")
+        defaults.set(police.id.uuidString, forKey: "pflow.template.active")
+        let updated = TemplateStore(defaults: defaults)
+        #expect(updated.templates.map(\.name) == ["My report", "General notes"])
+        #expect(updated.templates.first == custom)
+        #expect(updated.active == nil, "the removed example was the one in use: back to plain dictation")
+        #expect(defaults.string(forKey: "pflow.template.active") == nil)
+        let general = try #require(updated.templates.last)
+        #expect(TemplateStore(defaults: defaults).templates == [custom, general], "General notes keeps its ID")
+        updated.remove(general.id)
+        #expect(TemplateStore(defaults: defaults).templates == [custom], "removed once, never added back")
+        // pFlow 0.3.20 adds its report examples while this is unset.
+        #expect(defaults.integer(forKey: "pflow.templates.voiceCatalog") == 1)
+    }
+    @Test func anUpdateNeverAddsASecondGeneralNotes() throws {
+        let scratch = ScratchDefaults("pflow.template.samename")
+        defer { withExtendedLifetime(scratch) {} }
+        let defaults = scratch.defaults
+        let mine = DictationTemplate(name: "general notes", sections: [ReportSection(title: "Mine")])
+        defaults.set(try JSONEncoder().encode([mine]), forKey: "pflow.templates")
+        #expect(TemplateStore(defaults: defaults).templates == [mine])
+    }
+    @Test func theExampleUsesEveryTemplateOption() {
+        let general = DictationTemplate.general
+        #expect(!general.title.isEmpty && !general.instructions.isEmpty)
+        #expect(general.headingStyle != .plain)
+        #expect(general.boldHeadings == true)
+        #expect(!general.missingText.isEmpty && general.missingText != DictationTemplate(name: "x", sections: []).missingText)
+        #expect(!(general.voiceTriggers ?? []).isEmpty)
+        #expect(general.sections.contains { $0.summarize })
+        #expect(general.sections.contains { $0.bullets })
+        #expect(general.sections.contains { $0.includeFullDictation == true })
+        #expect(general.sections.allSatisfy { !$0.instructions.isEmpty })
+        let report = general.render(["A roof leak.", "- Call Sam", "", ""], source: "Sam says the roof leaks. Call Sam.")
+        #expect(report == "Notes\n\nSUMMARY\nA roof leak.\n\nKEY POINTS\n- Call Sam\n\nDETAILS\nSam says the roof leaks. Call Sam.\n\nNEXT STEPS\nNone mentioned.")
+    }
+    @Test func aNewInstallGetsOnlyTheGeneralTemplate() throws {
+        let scratch = ScratchDefaults("pflow.template.fresh")
+        defer { withExtendedLifetime(scratch) {} }
+        let defaults = scratch.defaults
+        let store = TemplateStore(defaults: defaults)
+        #expect(store.templates.map(\.name) == ["General notes"])
+        #expect(store.active == nil)
+        let shipped = store.templates.map { template in
+            ([template.name, template.title, template.instructions] + template.sections.flatMap { [$0.title, $0.instructions] })
+                .joined(separator: " ")
+        }.joined(separator: " ").lowercased()
+        for word in ["police", "supplement", "follow", "incident", "officer", "evidence", "badge"] { #expect(!shipped.contains(word)) }
+        #expect(defaults.integer(forKey: "pflow.templates.voiceCatalog") == 1)
+        let general = try #require(store.templates.first)
+        store.activeID = general.id
+        let restarted = TemplateStore(defaults: defaults)
+        #expect(restarted.templates == [general])
+        #expect(restarted.active == general)
+    }
+    @Test func someoneWhoRemovedEveryTemplateGetsNoneBack() throws {
+        let scratch = ScratchDefaults("pflow.template.none")
+        defer { withExtendedLifetime(scratch) {} }
+        let defaults = scratch.defaults
+        let store = TemplateStore(defaults: defaults)
+        store.remove(try #require(store.templates.first).id)
+        #expect(TemplateStore(defaults: defaults).templates.isEmpty)
+    }
+    @Test func templatesPFlowCannotReadAreNeverWrittenOver() throws {
+        let scratch = ScratchDefaults("pflow.template.unreadable")
+        defer { withExtendedLifetime(scratch) {} }
+        let defaults = scratch.defaults
+        let unreadable = Data("not templates".utf8)
+        defaults.set(unreadable, forKey: "pflow.templates")
+        let store = TemplateStore(defaults: defaults)
+        #expect(store.templates.isEmpty)
+        #expect(defaults.data(forKey: "pflow.templates") == unreadable)
+        #expect(defaults.data(forKey: "pflow.templates.unreadable") == unreadable)
+        store.save(DictationTemplate(name: "Mine", sections: [ReportSection(title: "Facts")]))
+        #expect(defaults.data(forKey: "pflow.templates.unreadable") == unreadable)
+        #expect(TemplateStore(defaults: defaults).templates.map(\.name) == ["Mine"])
     }
     @Test func seededTemplateSelectionAndEditsSurviveRestart() throws {
         let scratch = ScratchDefaults("pflow.template.tests")

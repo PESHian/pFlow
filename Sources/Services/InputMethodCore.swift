@@ -17,6 +17,8 @@ protocol MarkedTextClient: AnyObject {
     var caretLocation: Int? { get }
     /// The client's text in `range` (nil when it cannot be read).
     func text(in range: NSRange) -> String?
+    /// How long the client's whole text is (nil when unknown).
+    var textLength: Int? { get }
 }
 
 /// How taking marked words back out of a client went.
@@ -29,6 +31,9 @@ enum InputMethodTakeBack: String {
     case stillMarked
     /// The client's text around them could not be read: no proof either way.
     case unread
+
+    /// Proven out of the client: pFlow may go on another way.
+    var proven: Bool { self == .gone }
 }
 
 /// What the input method writes for one take, and through which client
@@ -47,6 +52,8 @@ final class InputMethodTakeCore {
     private var markStart: Int?
     /// How the last take-back went: asked again with nothing marked, the same answer.
     private var takeBack: InputMethodTakeBack?
+    /// The words of the last take-back, where they began and the client, to look again.
+    private var takenBack: (words: String, start: Int?, client: MarkedTextClient)?
     /// How much of the words' end is read back where they would be if committed, in UTF-16 units
     /// (an app keeps only a little text around the caret for input methods; Chrome about 100 units).
     static let tailLength = 60
@@ -126,23 +133,60 @@ final class InputMethodTakeCore {
         let words = marked
         markedClient.setMarked("")
         marked = ""
-        guard markedClient.markedLength == 0 else { return .stillMarked }
+        takenBack = (words, markStart, markedClient)
+        return Self.verdict(words: words, start: markStart, client: markedClient)
+    }
+
+    /// Where the words are now, by the client's own reads (nothing written).
+    static func verdict(words: String, start: Int?, client: MarkedTextClient) -> InputMethodTakeBack {
+        guard client.markedLength == 0 else { return .stillMarked }
         let probe = words.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !probe.isEmpty else { return .gone }
-        guard let start = markStart else { return .unread }
+        guard let start else { return .unread }
         // Where the client's caret is now: right after the words if the app committed them, back
         // where they began if they came out. Anything else, or no caret: no proof.
-        guard let caret = markedClient.caretLocation else { return .unread }
+        guard let caret = client.caretLocation else { return .unread }
         let length = (words as NSString).length
         let head = min(length, Self.tailLength)
         if caret == start + length, length > 0 {
-            guard let before = markedClient.text(in: NSRange(location: caret - head, length: head)) else { return .unread }
+            guard let before = client.text(in: NSRange(location: caret - head, length: head)) else { return .unread }
             return before == (words as NSString).substring(from: length - head) ? .committed : .unread
         }
         guard caret == start else { return .unread }
-        // Back at the start: the text there must not begin with the words.
-        guard let after = markedClient.text(in: NSRange(location: start, length: head)) else { return .unread }
+        // Back at the start: the text there must not begin with the words. At the end of the text
+        // there is nothing after the start (an app answers a read past its end with nothing at all),
+        // and less text than the words cannot hold them.
+        let available = client.textLength.map { max(0, $0 - start) }
+        if available == 0 { return .gone }
+        guard let after = client.text(in: NSRange(location: start, length: min(head, available ?? head))) else { return .unread }
         return after == (words as NSString).substring(to: head) ? .committed : .gone
+    }
+
+    /// The last take-back looked at again: an app can answer reads a moment late (Chromium answers
+    /// from a cache of the page's text), so words read as still there may be gone a moment later.
+    /// Nothing is written. No take-back on record: no proof.
+    func recheck() -> InputMethodTakeBack {
+        guard let takenBack else { return .unread }
+        let result = Self.verdict(words: takenBack.words, start: takenBack.start, client: takenBack.client)
+        takeBack = result
+        return result
+    }
+
+    /// A take-back that is not proven at once is looked at again, `looks` times, `wait` apart, until
+    /// proven gone. Never anything more: words still read as there (a cache that stays late longer
+    /// than the looks, or an app that committed them) are left exactly as they are; pFlow then pastes
+    /// nothing beside them and keeps the text on its card. pFlow Dictation never deletes text.
+    /// On the main actor: a text client is only ever read from the main thread (read from a
+    /// background thread, IMK answers nothing and every look reads as no proof).
+    @MainActor
+    func settle(_ first: InputMethodTakeBack, looks: Int, wait: () async -> Void) async -> InputMethodTakeBack {
+        var result = first, left = looks
+        while !result.proven, left > 0 {
+            await wait()
+            result = recheck()
+            left -= 1
+        }
+        return result
     }
 
     func end() {
@@ -156,5 +200,6 @@ final class InputMethodTakeCore {
         markedClient = nil
         markStart = nil
         takeBack = nil
+        takenBack = nil
     }
 }

@@ -98,6 +98,28 @@ class MacReleaseTests(unittest.TestCase):
         self.assertFalse((self.dist / 'pFlow-Mac-0.3.6-testing.dmg').exists())
         self.assertFalse(any(a[:2] == ('hdiutil', 'create') for a in self.calls))
 
+    def test_testing_copy_signed_with_the_local_key_inside_out(self):
+        local = 'D' * 40
+        release.package(self.app, self.dist, testing=True, env=dict(PFLOW_LOCAL_IDENTITY=local, PFLOW_LOCAL_KEYCHAIN='/fictional/k.keychain-db'))
+        signs = [a for a in self.calls if a[:2] == ('codesign', '--force')]
+        self.assertTrue(signs and all(a[2:4] == ('--sign', local) and '--preserve-metadata=entitlements' in a for a in signs))
+        self.assertTrue(all('--keychain' in a and '--timestamp' not in a for a in signs))
+        signed = [Path(a[-1]).name for a in signs]
+        self.assertEqual(signed[-1], 'pFlow by Pesh.app', 'the app bundle last, after everything inside it')
+        self.assertIn('whisper-cli', signed)
+        checks = [a for a in self.calls if a[:3] == ('codesign', '--verify', '--strict') and '-R' in a]
+        self.assertEqual(len(checks), len(signs))
+        self.assertTrue(all(a[a.index('-R') + 1] == f'=certificate leaf = H"{local.lower()}"' for a in checks))
+        self.assertFalse((self.dist / 'pFlow-Mac-0.3.6-testing.dmg.trusted.json').exists())
+
+    def test_testing_copy_without_a_local_key_stays_as_built(self):
+        release.package(self.app, self.dist, testing=True, env={})
+        self.assertFalse([a for a in self.calls if a[:2] == ('codesign', '--force')])
+
+    def test_a_malformed_local_key_is_refused(self):
+        with self.assertRaises(ValueError):
+            release.package(self.app, self.dist, testing=True, env=dict(PFLOW_LOCAL_IDENTITY='Pesh'))
+
     def test_signs_inside_out_and_hashes_only_final_bytes(self):
         dmg = self.package()
         self.assertEqual(dmg.read_bytes(), b'fictional-dmg-signature-ticket')

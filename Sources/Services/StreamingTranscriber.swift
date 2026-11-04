@@ -29,4 +29,12 @@ enum TranscriptionError: Error {
     /// Live recognition stopped partway through a take. `kept` is the text
     /// recognized before it stopped, after trying to finish the take normally.
     case interrupted(kept: String)
+    /// Audio was dropped before recognition could take it (the speech model was still getting
+    /// ready for longer than pFlow holds audio). `kept` is what was recognized.
+    case audioDropped(kept: String)
+    /// The speech model for the language is not on this Mac and could not be fetched now.
+    case modelNotReady
+    /// The microphone stopped giving audio partway through (a device change). `kept` is what was
+    /// recognized before.
+    case microphoneLost(kept: String)
 }

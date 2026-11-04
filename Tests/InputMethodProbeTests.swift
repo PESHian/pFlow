@@ -20,13 +20,23 @@ struct InputMethodProbeTests {
         var unreadable = false
         /// A client that reports no caret (a background window's client does).
         var noCaret = false
+        /// Like IMK's proxy for many apps: a read that runs past the end of the text gives nothing at all.
+        var nothingPastTheEnd = false
+        /// An app that answers reads from a cache this many reads old (Chromium's text cache).
+        var lateReads = 0
         private(set) var text: String
         private var caret: Int
         private var shown = ""
+        private var stale: (document: String, caret: Int, reads: Int)?
         init(_ bundle: String, caret rect: CGRect? = nil, text: String = "Dear Sam,") {
             self.bundle = bundle; caretRect = rect; self.text = text; caret = (text as NSString).length
         }
-        func setMarked(_ words: String) { marks.append(words); if !(refusesToClear && words.isEmpty) { shown = words } }
+        func setMarked(_ words: String) {
+            marks.append(words)
+            if lateReads > 0 { stale = (document, caret + (shown as NSString).length, lateReads) }
+            if !(refusesToClear && words.isEmpty) { shown = words }
+        }
+        var textLength: Int? { unreadable ? nil : (read.document as NSString).length }
         func insert(_ words: String) {
             inserts.append(words)
             text = (text as NSString).replacingCharacters(in: NSRange(location: caret, length: 0), with: words)
@@ -41,12 +51,19 @@ struct InputMethodProbeTests {
             caret += (words as NSString).length
         }
         var markedLength: Int { (shown as NSString).length }
-        var caretLocation: Int? { noCaret ? nil : caret }
+        var caretLocation: Int? { noCaret ? nil : read.caret }
         private var document: String { (text as NSString).replacingCharacters(in: NSRange(location: caret, length: 0), with: shown) }
-        /// Like an app's text client: a range past the end reads as what there is.
+        /// What a read sees: the cache while it is late, else the text now.
+        private var read: (document: String, caret: Int) {
+            if let stale, stale.reads > 0 { return (stale.document, stale.caret) }
+            return (document, caret)
+        }
+        /// Like an app's text client: a range past the end reads as what there is (or as nothing at all).
         func text(in range: NSRange) -> String? {
-            let all = document as NSString
+            let all = read.document as NSString
+            if var cache = stale, cache.reads > 0 { cache.reads -= 1; stale = cache }
             guard !unreadable, range.location <= all.length else { return unreadable ? nil : "" }
+            if nothingPastTheEnd, range.location + range.length > all.length { return nil }
             return all.substring(with: NSRange(location: range.location, length: min(range.length, all.length - range.location)))
         }
     }
@@ -167,6 +184,66 @@ struct InputMethodProbeTests {
         _ = core.probe(id(client), client: client, window: nil)
         _ = core.mark(" the harbor", controller: id(client), client: client)
         #expect(core.clear() == .gone)
+    }
+
+    // MARK: Apps that hide their text (book writer, 0.3.20): proven gone, or taken back out where they are
+
+    /// At the end of the text (where a writer adds the next words) nothing follows the caret, and an
+    /// app answers a read past its end with nothing at all: still proven gone, never "no proof".
+    @Test func wordsTakenBackAtTheEndOfTheTextAreProvenGone() {
+        let core = InputMethodTakeCore()
+        let client = FakeClient("com.example.writer", text: "Dear Sam,\n")
+        client.nothingPastTheEnd = true
+        _ = core.begin(bundle: "com.example.writer", after: 20)
+        _ = core.probe(id(client), client: client, window: nil)
+        _ = core.mark(" the harbor", controller: id(client), client: client)
+        #expect(core.clear() == .gone)
+        #expect(client.text == "Dear Sam,\n" && client.inserts.isEmpty)
+    }
+
+    /// An app that answers reads a moment late still shows the words right after the empty mark;
+    /// looked at again (InputMethodTakeCore.settle, as pFlow Dictation runs it), they are gone.
+    @Test func aTakeBackReadLateIsSettledByLookingAgain() async {
+        let core = InputMethodTakeCore()
+        let client = FakeClient("com.example.writer", text: "Dear Sam,\n")
+        _ = core.begin(bundle: "com.example.writer", after: 20)
+        _ = core.probe(id(client), client: client, window: nil)
+        _ = core.mark(" the harbor", controller: id(client), client: client)
+        client.lateReads = 3
+        let first = core.clear()
+        #expect(!first.proven, "read late: not proven yet")
+        var looks = 0
+        let result = await core.settle(first, looks: 8, wait: { looks += 1 })
+        #expect(result == .gone && looks <= 3, "\(result) after \(looks) looks")
+        #expect(client.text == "Dear Sam,\n" && client.inserts.isEmpty)
+    }
+
+    /// A cache that stays late longer than every look (Chrome busy for a second, the caret in the
+    /// middle of a paragraph), or words the app committed itself: nothing is ever deleted, the
+    /// person's text stays exactly as it is, and there is no proof (pFlow keeps the card).
+    @Test func pFlowDictationNeverDeletesWhatItCannotProve() async {
+        let core = InputMethodTakeCore()
+        let client = FakeClient("com.google.Chrome", text: "Dear Sam, see you at the harbor gate")
+        _ = core.begin(bundle: "com.google.Chrome", after: 20)
+        _ = core.probe(id(client), client: client, window: nil)
+        _ = core.mark(" the harbor", controller: id(client), client: client)
+        client.lateReads = 40
+        var looks = 0
+        let result = await core.settle(core.clear(), looks: 8, wait: { looks += 1 })
+        #expect(!result.proven && looks == 8)
+        #expect(client.marks == [" the harbor", ""], "one empty mark, nothing else written")
+        #expect(client.inserts.isEmpty)
+
+        let committing = FakeClient("com.example.writer", text: "Dear Sam, see you")
+        let core2 = InputMethodTakeCore()
+        _ = core2.begin(bundle: "com.example.writer", after: 20)
+        _ = core2.probe(id(committing), client: committing, window: nil)
+        _ = core2.mark(" the harbor", controller: id(committing), client: committing)
+        committing.appCommitsComposition()
+        let kept = await core2.settle(core2.clear(), looks: 8, wait: {})
+        #expect(kept == .committed)
+        #expect(committing.text == "Dear Sam, see you the harbor", "left exactly as the app has it")
+        #expect(committing.inserts.isEmpty)
     }
 
     @Test func unconfirmedWordsAreTakenOutWhenTheTakeEndsNotKept() {

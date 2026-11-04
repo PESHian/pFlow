@@ -99,7 +99,7 @@ final class AppearanceSettingsTests {
         defaults.set("ZZ1234", forKey: "pflow.appearance.primary")
         defaults.set("#12345678", forKey: "pflow.appearance.secondary")
         defaults.set(false, forKey: "soundsEnabled")
-        defaults.set(123.5, forKey: "pflow.hud.x")
+        defaults.set(123.5, forKey: HUDPanel.spotX)
         let settings = AppearanceSettings(defaults: defaults)
         #expect(settings.mode == .dark && settings.theme == .pesh)
         #expect(settings.waveformStyle == .wave)
@@ -107,7 +107,7 @@ final class AppearanceSettingsTests {
         #expect(settings.customPrimary == ThemePalette.pesh.primary)
         #expect(settings.customSecondary == ThemePalette.pesh.secondary)
         #expect(!defaults.bool(forKey: "soundsEnabled"))
-        #expect(defaults.double(forKey: "pflow.hud.x") == 123.5)
+        #expect(defaults.double(forKey: HUDPanel.spotX) == 123.5)
     }
 
     @Test func existingUsersKeepTheirCurrentWaveform() {

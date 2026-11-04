@@ -195,8 +195,7 @@ final class Link {
                 reasons.notice("trace take-back after: caret \(client.caretLocation ?? -1) result \(result.rawValue)")
             }
             #endif
-            if result != .gone { reasons.notice("take-back not proven: \(result.rawValue)") }
-            send(.init(.cleared, take: message.take, ok: result == .gone, reason: result.rawValue))
+            settleTakeBack(result, take: message.take, looks: Self.takeBackLooks)
         case .keep:
             core.keepAsIs()
         case .end:
@@ -209,6 +208,22 @@ final class Link {
             core.end()
         default:
             break
+        }
+    }
+
+    /// How often, 0.1 s apart, a take-back that is not proven at once is looked at again (pFlow waits
+    /// for the answer longer than this).
+    static let takeBackLooks = 8
+
+    /// A take-back not proven at once is looked at again (InputMethodTakeCore.settle): an app can
+    /// answer reads a moment late. Nothing is ever deleted; then pFlow hears the answer.
+    private func settleTakeBack(_ first: InputMethodTakeBack, take id: String?, looks: Int) {
+        Task { @MainActor [self] in
+            var result = await core.settle(first, looks: looks, wait: { try? await Task.sleep(for: .milliseconds(100)) })
+            // Another take began meanwhile: nothing about these words is proven.
+            if take?.id != id { result = .unread }
+            if !result.proven { reasons.notice("take-back not proven: \(result.rawValue)") }
+            send(.init(.cleared, take: id, ok: result.proven, reason: result.rawValue))
         }
     }
 
@@ -285,12 +300,13 @@ final class Link {
         #endif
     }
 
-    /// Selected with no take and no pFlow to talk to (pFlow died between the
-    /// switch and its begin, or quit): after a few seconds the person's own
-    /// source comes back, the one pFlow saved before switching.
+    /// Selected with no take (pFlow died between the switch and its begin, or
+    /// quit; or the person landed on it between takes): after a few seconds
+    /// the person's own source comes back, the one pFlow saved before
+    /// switching, else their keyboard layout.
     private func checkOrphanedSoon() {
         DispatchQueue.main.asyncAfter(deadline: .now() + InputMethodBinding.orphanDelay) { [self] in
-            guard InputMethodBinding.orphanRestoreDue(hasTake: take != nil, connected: fd >= 0,
+            guard InputMethodBinding.orphanRestoreDue(hasTake: take != nil,
                                                      selectedIsOurs: Self.selectedSourceID() == InputMethodWire.sourceID,
                                                      sinceActivation: ProcessInfo.processInfo.systemUptime - activatedAt) else { return }
             let saved = CFPreferencesCopyAppValue("inputMethodRestoreSource" as CFString, InputMethodWire.appIdentifier as CFString) as? String
@@ -401,4 +417,5 @@ final class IMKClient: MarkedTextClient {
         var actual = NSRange()
         return client.attributedSubstring(from: range)?.string ?? client.string(from: range, actualRange: &actual)
     }
+
 }

@@ -395,6 +395,33 @@ struct LiveTextTests {
         #expect(hud.model.reason == nil && hud.model.copyOffer == nil)
     }
 
+    /// History is in memory only this launch (its file could not be opened): no card says "Saved in
+    /// History"; each says the words are kept until pFlow quits (review S3).
+    @Test func theCardNeverSaysSavedInHistoryWhenHistoryIsNotSaved() {
+        let phases: [HUDPhase] = [.savedToHistory, .typingStopped, .liveTextKept, .liveTextKeptTyped]
+        for phase in phases {
+            #expect(RecordingHUDView.title(phase, historySaved: true).contains("History"))
+            let unsaved = RecordingHUDView.title(phase, historySaved: false)
+            #expect(!unsaved.contains("saved in History") && !unsaved.contains("also in History") && unsaved.contains("until pFlow quits"), "\(phase): \(unsaved)")
+        }
+        #expect(RecordingHUDView.kept(historySaved: true) == "Saved in History")
+        #expect(!RecordingHUDView.kept(historySaved: false).contains("Saved in History"))
+        let hud = HUDController(pasteboard: NSPasteboard(name: .init("pflow.history.tests.\(UUID().uuidString)")))
+        #expect(hud.model.historySaved, "saved unless pFlow says otherwise")
+    }
+
+    /// The clipboard refused the words: the button never says "Copied" (hunt H9).
+    @Test func copySaysCopiedOnlyWhenTheClipboardTookTheWords() {
+        let hud = HUDController(pasteboard: NSPasteboard(name: .init("pflow.copyfail.tests.\(UUID().uuidString)")))
+        hud.writeClipboard = { _ in false }
+        hud.offerCopy("The harbor opens at dawn.")
+        hud.model.onCopy?()
+        #expect(!hud.model.copied, "still Copy, to press again")
+        hud.writeClipboard = { _ in true }
+        hud.model.onCopy?()
+        #expect(hud.model.copied)
+    }
+
     /// The capsule is one low pill (70x22 pt) in every phase;
     /// a status after the take is an icon, its words on the card.
     @Test func capsuleIsThePillSizeWhileRecordingAndFinishing() throws {
@@ -442,6 +469,119 @@ struct LiveTextTests {
         #expect(!RecordingCoordinator.keptNote.contains("History"), "History is named once, in the card's footer")
     }
 
+    /// A panel macOS no longer keeps on the person's desktop (the owner's Mac:
+    /// the reused panel sat on Space 4 while he worked on Space 8) is dropped and
+    /// a fresh one shows: when a take starts, and while one shows, on a desktop
+    /// switch or a display change.
+    @Test func aPanelOffTheActiveDesktopIsReplacedByAFreshOne() throws {
+        let scratch = ScratchDefaults("pflow.hud.tests")
+        let hud = HUDController(pasteboard: NSPasteboard(name: .init("pflow.space.tests.\(UUID().uuidString)")), defaults: scratch.defaults)
+        hud.show(device: nil, livePreview: false)
+        let first = try #require(hud.panelForTesting)
+        #expect(first.isOnActiveSpace, "a real panel shows on the active desktop")
+        hud.hide(after: 0)
+
+        var stuck = Set<ObjectIdentifier>()
+        hud.isOnActiveSpace = { !stuck.contains(ObjectIdentifier($0)) }
+        stuck.insert(ObjectIdentifier(first))
+        hud.show(device: nil, livePreview: false)
+        let fresh = try #require(hud.panelForTesting)
+        #expect(fresh !== first, "a take starts in a fresh panel")
+        #expect(fresh.isVisible && !first.isVisible)
+        #expect(fresh.frame.size == NSSize(width: RecordingHUDView.capsuleSize.width, height: RecordingHUDView.capsuleSize.height))
+
+        hud.setLivePreview(true)
+        hud.setPartial("The harbor opens at dawn")
+        stuck.insert(ObjectIdentifier(fresh))
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: NSWorkspace.shared)
+        let afterSwitch = try #require(hud.panelForTesting)
+        #expect(afterSwitch !== fresh && afterSwitch.isVisible && !fresh.isVisible, "a desktop switch mid-take")
+        #expect(afterSwitch.frame.height > RecordingHUDView.capsuleSize.height, "still the card, words and all")
+        #expect(hud.model.partial == "The harbor opens at dawn")
+
+        stuck.insert(ObjectIdentifier(afterSwitch))
+        NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: NSApp)
+        let afterDisplays = try #require(hud.panelForTesting)
+        #expect(afterDisplays !== afterSwitch && afterDisplays.isVisible, "a display change mid-take")
+
+        // On the active desktop: kept as it is.
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: NSWorkspace.shared)
+        #expect(hud.panelForTesting === afterDisplays)
+        hud.hide(after: 0)
+        // Hidden: nothing to check until the next take.
+        stuck.insert(ObjectIdentifier(afterDisplays))
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: NSWorkspace.shared)
+        #expect(hud.panelForTesting === afterDisplays)
+    }
+
+    /// Only the person's own drag saves the capsule's spot: never pFlow's moves,
+    /// never AppKit's moves on a resize (the owner's capsule was saved over his
+    /// text that way). A spot off every screen goes back to bottom center; a spot
+    /// saved by an older pFlow is not used.
+    @Test func onlyThePersonsDragSavesTheCapsuleSpot() throws {
+        let scratch = ScratchDefaults("pflow.hud.tests")
+        let defaults = scratch.defaults
+        defaults.set(672.0, forKey: "pflow.hud.x")
+        defaults.set(129.0, forKey: "pflow.hud.y")
+        let hud = HUDController(pasteboard: NSPasteboard(name: .init("pflow.spot.tests.\(UUID().uuidString)")), defaults: defaults)
+        hud.show(device: nil, livePreview: false)
+        let panel = try #require(hud.panelForTesting)
+        let visible = try #require(panel.screen).visibleFrame
+        #expect(abs(panel.frame.midX - visible.midX) <= 1 && abs(panel.frame.minY - (visible.minY + 40)) <= 1,
+                "a spot saved by an older pFlow is not used: \(panel.frame) in \(visible)")
+        #expect(defaults.object(forKey: "pflow.hud.x") == nil && defaults.object(forKey: "pflow.hud.y") == nil)
+        func moved() { panel.windowDidMove(Notification(name: NSWindow.didMoveNotification, object: panel)) }
+
+        // pFlow's own moves: the card and back, and the caret avoided.
+        hud.setLivePreview(true)
+        hud.setLivePreview(false)
+        moved()
+        // AppKit moving the window as it resizes, and any move with no drag.
+        panel.setFrame(NSRect(x: visible.minX + 30, y: visible.minY + 300, width: 380, height: 140), display: false)
+        moved()
+        panel.setFrameOrigin(NSPoint(x: visible.minX + 50, y: visible.minY + 60))
+        moved()
+        #expect(defaults.object(forKey: HUDPanel.spotX) == nil && defaults.object(forKey: HUDPanel.spotY) == nil)
+
+        // The person's drag, from where pFlow put it.
+        func saved() -> NSPoint? {
+            defaults.object(forKey: HUDPanel.spotX) == nil ? nil
+                : NSPoint(x: defaults.double(forKey: HUDPanel.spotX), y: defaults.double(forKey: HUDPanel.spotY))
+        }
+        func near(_ a: NSPoint?, _ b: NSPoint) -> Bool { a.map { abs($0.x - b.x) < 1 && abs($0.y - b.y) < 1 } ?? false }
+        panel.reposition()
+        panel.personBeganDrag()
+        let dragged = NSPoint(x: (visible.minX + 200).rounded(), y: (visible.minY + 150).rounded())
+        panel.setFrameOrigin(dragged)
+        moved()
+        #expect(near(saved(), dragged), "\(String(describing: saved()))")
+        // A resize right after the drag moves the window too: not saved.
+        panel.setFrame(NSRect(x: visible.minX + 420, y: visible.minY + 260, width: 380, height: 140), display: false)
+        moved()
+        #expect(near(saved(), dragged), "\(String(describing: saved()))")
+        hud.hide(after: 0)
+        // Hidden ends the drag: a move afterwards is not the person's.
+        panel.setFrameOrigin(NSPoint(x: visible.minX + 500, y: visible.minY + 300))
+        moved()
+        #expect(near(saved(), dragged), "\(String(describing: saved()))")
+
+        // The next take shows where the person put it.
+        hud.show(device: nil, livePreview: false)
+        #expect(near(panel.frame.origin, dragged), "\(panel.frame.origin)")
+        hud.hide(after: 0)
+
+        // A spot on a screen that is gone: bottom center.
+        defaults.set(-90_000.0, forKey: HUDPanel.spotX)
+        defaults.set(-90_000.0, forKey: HUDPanel.spotY)
+        hud.show(device: nil, livePreview: false)
+        #expect(abs(panel.frame.midX - visible.midX) <= 1 && abs(panel.frame.minY - (visible.minY + 40)) <= 1, "\(panel.frame)")
+        hud.hide(after: 0)
+        let screens = [NSRect(x: 0, y: 0, width: 1440, height: 900), NSRect(x: 1440, y: 0, width: 1920, height: 1080)]
+        #expect(HUDPanel.display(showing: NSRect(x: 5000, y: 5000, width: 70, height: 22), among: screens) == nil)
+        #expect(HUDPanel.display(showing: NSRect(x: 1420, y: 100, width: 70, height: 22), among: screens) == screens[1], "most of it")
+        #expect(HUDPanel.display(showing: NSRect(x: CGFloat.nan, y: 100, width: 70, height: 22), among: screens) == nil)
+    }
+
     /// The reason-only card's close button, clicked, hides the panel.
     @Test func aReasonOnlyCardClosesWithItsCloseButton() throws {
         let hud = HUDController(pasteboard: NSPasteboard(name: .init("pflow.close.tests.\(UUID().uuidString)")))
@@ -470,6 +610,27 @@ struct LiveTextTests {
     @Test func aStatusInTheCapsuleIsAnIconWithoutWords() {
         let mark = NSHostingView(rootView: RecordingHUDView.statusMark("Press ⌘V", "doc.on.clipboard"))
         #expect(mark.fittingSize.width <= 24, "an icon, no words: \(mark.fittingSize)")
+    }
+
+    /// Every card after a take says what happened in words beside its icon:
+    /// never an icon alone (the owner's screenshot: a tiny logo and a lone icon
+    /// read as broken).
+    @Test func everyAfterTakeCardHeaderHasWords() {
+        let all: [HUDPhase] = [.failed, .pasteUnconfirmed, .copied, .savedToHistory, .listening, .confirmCancel, .transcribing,
+                               .cleaning, .restarting, .liveTextKept, .liveTextKeptTyped, .passwordField, .typingStopped, .typedTextLeft]
+        let working: Set<String> = ["listening", "confirmCancel", "transcribing", "cleaning", "restarting"]
+        for phase in all {
+            let shown = RecordingHUDView.afterTake(phase)
+            guard !working.contains("\(phase)") else {
+                #expect(shown == nil, "\(phase) is not after the take")
+                continue
+            }
+            let words = shown?.words ?? ""
+            #expect(words.split(separator: " ").count >= 1 && words.count >= 6, "\(phase): \(words)")
+            let header = NSHostingView(rootView: RecordingHUDView.afterTakeHeader(phase))
+            #expect(header.fittingSize.width >= 60, "\(phase): words beside the icon, \(header.fittingSize)")
+            #expect(header.fittingSize.height <= 20, "\(phase): one line in the 20 pt header, \(header.fittingSize)")
+        }
     }
 
     /// The capsule draws the Appearance picker's own waveform for the person's
